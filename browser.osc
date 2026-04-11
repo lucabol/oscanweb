@@ -166,6 +166,13 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 links: [LinkInfo], href: str) {
     let words: [str] = str_split(text, " ");
     let max_x: i32 = vp_width - PAD;
+
+    // Track link bounding box (first word position + accumulated width)
+    let mut link_x: i32 = x_ptr[0];
+    let mut link_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+    let mut link_w: i32 = 0;
+    let mut link_recorded: bool = false;
+
     for wi in 0..len(words) {
         let word: str = words[wi];
         if str_len(word) == 0 { continue; };
@@ -174,6 +181,18 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
 
         // Word wrap
         if x_ptr[0] + word_w > max_x and x_ptr[0] > PAD {
+            // If we wrapped to a new line, emit link for the previous line segment
+            if str_len(href) > 0 and link_w > 0 and not link_recorded {
+                let draw_y_check: i32 = link_y;
+                if draw_y_check + FONT_H >= CHROME_TOP and draw_y_check < WIN_H - CHROME_BOT {
+                    let li: LinkInfo = LinkInfo {
+                        x: link_x, y: link_y, w: link_w, h: LINE_H,
+                        href: href, label: "",
+                    };
+                    push(links, li);
+                    link_recorded = true;
+                };
+            };
             x_ptr[0] = PAD;
             y_ptr[0] = y_ptr[0] + LINE_H;
         };
@@ -185,15 +204,25 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
             if underline {
                 gfx_line(x_ptr[0], draw_y + FONT_H + 1, x_ptr[0] + word_w, draw_y + FONT_H + 1, color);
             };
-            if str_len(href) > 0 {
-                let li: LinkInfo = LinkInfo {
-                    x: x_ptr[0], y: draw_y, w: word_w, h: LINE_H,
-                    href: href, label: "",
-                };
-                push(links, li);
-            };
         };
+
+        // Update link bounds
+        if not link_recorded {
+            link_w = (x_ptr[0] + word_w) - link_x;
+        };
+
         x_ptr[0] = x_ptr[0] + word_w + FONT_W;
+    };
+
+    // Emit single LinkInfo for the entire link text
+    if str_len(href) > 0 and not link_recorded {
+        if link_y + FONT_H >= CHROME_TOP and link_y < WIN_H - CHROME_BOT {
+            let li: LinkInfo = LinkInfo {
+                x: link_x, y: link_y, w: link_w, h: LINE_H,
+                href: href, label: "",
+            };
+            push(links, li);
+        };
     };
 }
 
