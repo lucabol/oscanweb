@@ -59,10 +59,12 @@ struct LinkInfo {
 
 // ─── Image Cache ─────────────────────────────────────────
 // img_cache_idx: map from URL -> index string (i32 as str)
-// img_cache_data: array of pixel arrays [w, h, pixel0, pixel1, ...]
+// img_cache_data: array of pixel-only arrays (no w/h header)
+// img_cache_w / img_cache_h: parallel arrays of dimensions
 
 fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: i32, base_path: str,
-                         img_cache_idx: map, img_cache_data: [[i32]]) -> i32 {
+                         img_cache_idx: map, img_cache_data: [[i32]],
+                         img_cache_w: [i32], img_cache_h: [i32]) -> i32 {
     // Check cache
     if map_has(img_cache_idx, src) {
         let idx_str: str = map_get(img_cache_idx, src);
@@ -74,7 +76,6 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
     };
 
     // Resolve URL
-    let mut fetch_url: str = src;
     let mut img_host: str = base_host;
     let mut img_port: i32 = base_port;
     let mut img_path: str = src;
@@ -87,7 +88,6 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
         img_path = u.path;
         img_tls = str_eq(u.scheme, "https");
     } else if str_starts_with(src, "//") {
-        // Protocol-relative URL
         let u: Url = url_parse(str_concat(base_scheme, ":{src}"));
         img_host = u.host;
         img_port = u.port;
@@ -97,7 +97,7 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
         img_path = url_resolve_relative(base_path, src);
     };
 
-    // Skip data: URLs for now
+    // Skip data: URLs
     if str_starts_with(src, "data:") {
         map_set(img_cache_idx, src, "-1");
         return -1;
@@ -113,9 +113,23 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
     // Decode image
     let decode_result: Result<[i32], str> = img_load(resp.body);
     match decode_result {
-        Result::Ok(pixels) => {
+        Result::Ok(raw) => {
+            if len(raw) < 3 {
+                map_set(img_cache_idx, src, "-1");
+                return -1;
+            };
+            let w: i32 = raw[0];
+            let h: i32 = raw[1];
+            // Extract pixel-only data (skip w,h header)
+            let mut px: [i32] = [];
+            let px_count: i32 = w * h;
+            for pi in 0..px_count {
+                push(px, raw[pi + 2]);
+            };
             let cache_idx: i32 = len(img_cache_data);
-            push(img_cache_data, pixels);
+            push(img_cache_data, px);
+            push(img_cache_w, w);
+            push(img_cache_h, h);
             let idx_str: str = i32_to_str(cache_idx);
             map_set(img_cache_idx, src, idx_str);
             cache_idx
@@ -190,6 +204,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 color: i32, is_link: bool, link_href: str,
                 indent: i32, in_pre: bool,
                 img_cache_idx: map, img_cache_data: [[i32]],
+                img_cache_w: [i32], img_cache_h: [i32],
                 base_scheme: str, base_host: str, base_port: i32, base_path: str) {
     let node: HtmlNode = nodes[idx];
 
@@ -257,41 +272,27 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
         if str_len(src) > 0 {
             let cache_idx: i32 = img_fetch_and_decode(src, base_scheme, base_host, base_port, base_path,
-                                                       img_cache_idx, img_cache_data);
+                                                       img_cache_idx, img_cache_data,
+                                                       img_cache_w, img_cache_h);
             if cache_idx >= 0 and cache_idx < len(img_cache_data) {
-                let pixels: [i32] = img_cache_data[cache_idx];
-                if len(pixels) >= 2 {
-                    let img_w: i32 = pixels[0];
-                    let img_h: i32 = pixels[1];
+                let px: [i32] = img_cache_data[cache_idx];
+                let img_w: i32 = img_cache_w[cache_idx];
+                let img_h: i32 = img_cache_h[cache_idx];
 
-                    // Scale down if too wide
-                    let max_w: i32 = vp_width - x_ptr[0] - PAD;
-                    let mut draw_w: i32 = img_w;
-                    let mut draw_h: i32 = img_h;
-                    if draw_w > max_w and max_w > 0 {
-                        draw_h = draw_h * max_w / draw_w;
-                        draw_w = max_w;
-                    };
-                    // Cap height
-                    if draw_h > 600 {
-                        draw_w = draw_w * 600 / draw_h;
-                        draw_h = 600;
-                    };
-
-                    // Start on new line for block images
-                    if x_ptr[0] > indent + PAD {
-                        x_ptr[0] = indent + PAD;
-                        y_ptr[0] = y_ptr[0] + LINE_H;
-                    };
-
-                    let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                    if draw_y + draw_h >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
-                        gfx_blit(x_ptr[0], draw_y, draw_w, draw_h, pixels);
-                    };
-                    y_ptr[0] = y_ptr[0] + draw_h + 4;
+                // Start on new line for block images
+                if x_ptr[0] > indent + PAD {
                     x_ptr[0] = indent + PAD;
-                    return;
+                    y_ptr[0] = y_ptr[0] + LINE_H;
                 };
+
+                let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+                if draw_y + img_h >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                    // gfx_blit draws at native resolution (no scaling)
+                    gfx_blit(x_ptr[0], draw_y, img_w, img_h, px);
+                };
+                y_ptr[0] = y_ptr[0] + img_h + 4;
+                x_ptr[0] = indent + PAD;
+                return;
             };
         };
 
@@ -348,6 +349,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     links, child_color, child_link, child_href,
                     child_indent, child_pre,
                     img_cache_idx, img_cache_data,
+                    img_cache_w, img_cache_h,
                     base_scheme, base_host, base_port, base_path);
         child = nodes[child].next_sibling;
     };
@@ -398,6 +400,8 @@ fn! main() {
     // Image cache
     let mut img_cache_idx: map = map_new();
     let mut img_cache_data: [[i32]] = [];
+    let mut img_cache_w: [i32] = [];
+    let mut img_cache_h: [i32] = [];
 
     // Address bar
     let mut url_buf: [i32] = [];
@@ -515,6 +519,8 @@ fn! main() {
                         // Clear image cache for new page
                         img_cache_idx = map_new();
                         while len(img_cache_data) > 0 { pop(img_cache_data); };
+                        while len(img_cache_w) > 0 { pop(img_cache_w); };
+                        while len(img_cache_h) > 0 { pop(img_cache_h); };
                         dom_root = html_parse(dom_nodes, resp.body);
                         page_loaded = true;
                         scroll_y = 0;
@@ -738,6 +744,7 @@ fn! main() {
                             scroll_y, WIN_W, page_links,
                             FG_COLOR, false, "", 0, false,
                             img_cache_idx, img_cache_data,
+                            img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path);
                 doc_height = y_ptr[0];
             } else if str_len(error_msg) > 0 {
