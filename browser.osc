@@ -1,0 +1,699 @@
+// OscaWeb — A minimal SDI web browser with Vim-like keybindings
+// Written in Oscan. No JavaScript, no tabs. Just the web.
+
+use "url.osc"
+use "html.osc"
+use "http.osc"
+use "libs/ui.osc"
+
+// ─── Constants ───────────────────────────────────────────
+
+let WIN_W: i32 = 1024;
+let WIN_H: i32 = 768;
+let CHROME_TOP: i32 = 30;
+let CHROME_BOT: i32 = 20;
+let FONT_W: i32 = 8;
+let FONT_H: i32 = 8;
+let LINE_H: i32 = 12;
+let PAD: i32 = 10;
+let MAX_REDIRECTS: i32 = 5;
+
+// Colors
+let BG_COLOR: i32 = 30 * 65536 + 30 * 256 + 34;
+let FG_COLOR: i32 = 220 * 65536 + 220 * 256 + 220;
+let LINK_COLOR: i32 = 100 * 65536 + 149 * 256 + 237;
+let H1_COLOR: i32 = 255 * 65536 + 255 * 256 + 255;
+let H2_COLOR: i32 = 200 * 65536 + 200 * 256 + 200;
+let H3_COLOR: i32 = 170 * 65536 + 180 * 256 + 220;
+let BOLD_COLOR: i32 = 255 * 65536 + 255 * 256 + 220;
+let EM_COLOR: i32 = 255 * 65536 + 230 * 256 + 180;
+let CODE_FG: i32 = 180 * 65536 + 220 * 256 + 180;
+let HINT_BG: i32 = 255 * 65536 + 220 * 256 + 0;
+let HINT_FG: i32 = 0;
+let STATUS_BG: i32 = 40 * 65536 + 40 * 256 + 44;
+let HR_COLOR: i32 = 80 * 65536 + 80 * 256 + 85;
+let PRE_BG: i32 = 45 * 65536 + 45 * 256 + 50;
+
+let KEY_ESC: i32 = 27;
+let KEY_ENTER: i32 = 13;
+
+// ─── Browser Mode ────────────────────────────────────────
+
+enum BrowserMode {
+    Normal,
+    Insert,
+    Follow,
+    Search,
+}
+
+// ─── Link Info ───────────────────────────────────────────
+
+struct LinkInfo {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    href: str,
+    label: str,
+}
+
+// ─── Tag classification ─────────────────────────────────
+
+fn html_is_block_tag(tag: str) -> bool {
+    str_eq(tag, "div") or str_eq(tag, "p") or str_eq(tag, "h1") or
+    str_eq(tag, "h2") or str_eq(tag, "h3") or str_eq(tag, "h4") or
+    str_eq(tag, "h5") or str_eq(tag, "h6") or str_eq(tag, "ul") or
+    str_eq(tag, "ol") or str_eq(tag, "li") or str_eq(tag, "pre") or
+    str_eq(tag, "blockquote") or str_eq(tag, "table") or str_eq(tag, "tr") or
+    str_eq(tag, "section") or str_eq(tag, "article") or str_eq(tag, "nav") or
+    str_eq(tag, "header") or str_eq(tag, "footer") or str_eq(tag, "main")
+}
+
+fn html_is_skip_tag(tag: str) -> bool {
+    str_eq(tag, "head") or str_eq(tag, "script") or str_eq(tag, "style") or
+    str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title") or
+    str_eq(tag, "noscript")
+}
+
+// ─── Text rendering with word-wrap ──────────────────────
+
+fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
+                vp_top: i32, vp_width: i32, underline: bool,
+                links: [LinkInfo], href: str) {
+    let words: [str] = str_split(text, " ");
+    let max_x: i32 = vp_width - PAD;
+    for wi in 0..len(words) {
+        let word: str = words[wi];
+        if str_len(word) == 0 { continue; };
+
+        let word_w: i32 = str_len(word) * FONT_W;
+
+        // Word wrap
+        if x_ptr[0] + word_w > max_x and x_ptr[0] > PAD {
+            x_ptr[0] = PAD;
+            y_ptr[0] = y_ptr[0] + LINE_H;
+        };
+
+        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+
+        if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+            gfx_draw_text(x_ptr[0], draw_y, word, color);
+            if underline {
+                gfx_line(x_ptr[0], draw_y + FONT_H + 1, x_ptr[0] + word_w, draw_y + FONT_H + 1, color);
+            };
+            if str_len(href) > 0 {
+                let li: LinkInfo = LinkInfo {
+                    x: x_ptr[0], y: draw_y, w: word_w, h: LINE_H,
+                    href: href, label: "",
+                };
+                push(links, li);
+            };
+        };
+        x_ptr[0] = x_ptr[0] + word_w + FONT_W;
+    };
+}
+
+// ─── Render a DOM node (flat-array tree) ────────────────
+
+fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
+                vp_top: i32, vp_width: i32, links: [LinkInfo],
+                color: i32, is_link: bool, link_href: str,
+                indent: i32, in_pre: bool) {
+    let node: HtmlNode = nodes[idx];
+
+    // ── Text node ──
+    if node.is_text {
+        let text: str = node.text;
+        if str_len(str_trim(text)) == 0 { return; };
+        if in_pre {
+            let lines: [str] = str_split(text, "\n");
+            for li in 0..len(lines) {
+                let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+                if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                    gfx_fill_rect(PAD, draw_y, vp_width - PAD * 2, LINE_H, PRE_BG);
+                    gfx_draw_text(x_ptr[0], draw_y, lines[li], CODE_FG);
+                };
+                y_ptr[0] = y_ptr[0] + LINE_H;
+                x_ptr[0] = indent + PAD;
+            };
+        } else {
+            render_text(text, x_ptr, y_ptr, color, vp_top, vp_width,
+                        is_link, links, link_href);
+        };
+        return;
+    };
+
+    // ── Element node ──
+    let tag: str = node.tag;
+    if html_is_skip_tag(tag) { return; };
+
+    let is_block: bool = html_is_block_tag(tag);
+    if is_block and x_ptr[0] > indent + PAD {
+        x_ptr[0] = indent + PAD;
+        y_ptr[0] = y_ptr[0] + LINE_H;
+    };
+
+    // Heading / paragraph pre-spacing
+    if str_eq(tag, "h1") or str_eq(tag, "h2") or str_eq(tag, "h3") {
+        y_ptr[0] = y_ptr[0] + LINE_H;
+    };
+    if str_eq(tag, "p") { y_ptr[0] = y_ptr[0] + LINE_H / 2; };
+
+    // HR
+    if str_eq(tag, "hr") {
+        y_ptr[0] = y_ptr[0] + LINE_H / 2;
+        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        if draw_y >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+            gfx_line(PAD, draw_y, vp_width - PAD, draw_y, HR_COLOR);
+        };
+        y_ptr[0] = y_ptr[0] + LINE_H / 2;
+        x_ptr[0] = indent + PAD;
+        return;
+    };
+
+    // BR
+    if str_eq(tag, "br") {
+        y_ptr[0] = y_ptr[0] + LINE_H;
+        x_ptr[0] = indent + PAD;
+        return;
+    };
+
+    // IMG placeholder
+    if str_eq(tag, "img") {
+        let alt: str = html_get_attr(node, "alt");
+        let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
+        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+            gfx_draw_text(x_ptr[0], draw_y, display, HR_COLOR);
+        };
+        x_ptr[0] = x_ptr[0] + str_len(display) * FONT_W + FONT_W;
+        return;
+    };
+
+    // Determine child properties
+    let mut child_color: i32 = color;
+    let mut child_link: bool = is_link;
+    let mut child_href: str = link_href;
+    let mut child_indent: i32 = indent;
+    let mut child_pre: bool = in_pre;
+
+    if str_eq(tag, "h1") { child_color = H1_COLOR; }
+    else if str_eq(tag, "h2") { child_color = H2_COLOR; }
+    else if str_eq(tag, "h3") or str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
+        child_color = H3_COLOR;
+    }
+    else if str_eq(tag, "b") or str_eq(tag, "strong") { child_color = BOLD_COLOR; }
+    else if str_eq(tag, "em") or str_eq(tag, "i") { child_color = EM_COLOR; }
+    else if str_eq(tag, "a") {
+        child_color = LINK_COLOR;
+        child_link = true;
+        child_href = html_get_attr(node, "href");
+    }
+    else if str_eq(tag, "pre") or str_eq(tag, "code") {
+        child_color = CODE_FG; child_pre = true;
+    }
+    else if str_eq(tag, "ul") or str_eq(tag, "ol") {
+        child_indent = indent + 20;
+    };
+
+    // List item bullet
+    if str_eq(tag, "li") {
+        x_ptr[0] = indent + PAD;
+        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+            gfx_draw_text(x_ptr[0], draw_y, "* ", child_color);
+        };
+        x_ptr[0] = x_ptr[0] + 2 * FONT_W;
+    };
+
+    // Render children via sibling walk
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        render_node(nodes, child, x_ptr, y_ptr, vp_top, vp_width,
+                    links, child_color, child_link, child_href,
+                    child_indent, child_pre);
+        child = nodes[child].next_sibling;
+    };
+
+    // Block post-spacing
+    if is_block {
+        x_ptr[0] = indent + PAD;
+        y_ptr[0] = y_ptr[0] + LINE_H;
+    };
+    if str_eq(tag, "h1") or str_eq(tag, "h2") { y_ptr[0] = y_ptr[0] + LINE_H / 2; };
+    if str_eq(tag, "p") { y_ptr[0] = y_ptr[0] + LINE_H / 2; };
+}
+
+// ─── Hint label generation ──────────────────────────────
+
+fn! make_hint_labels(count: i32) -> [str] {
+    let hc: [i32] = str_to_chars("asdfghjklqwertyuiopzxcvbnm");
+    let mut labels: [str] = [];
+    for i in 0..count {
+        let ci: i32 = mod_i32(i, len(hc));
+        let lbl: [i32] = [hc[ci]];
+        push(labels, str_from_chars(lbl));
+    };
+    labels
+}
+
+// ─── Main ────────────────────────────────────────────────
+
+fn! main() {
+    let co: Result<str, str> = canvas_open(WIN_W, WIN_H, "OscaWeb Browser");
+    match co {
+        Result::Ok(_s) => {},
+        Result::Err(e) => { println("Failed to open window: {e}"); exit(1); },
+    };
+
+    // State
+    let mut mode: BrowserMode = BrowserMode::Normal;
+    let mut current_url: str = "";
+    let mut dom_nodes: [HtmlNode] = [];
+    let mut dom_root: i32 = -1;
+    let mut page_loaded: bool = false;
+    let mut status_msg: str = "Press 'o' to enter a URL";
+    let mut scroll_y: i32 = 0;
+    let mut doc_height: i32 = 0;
+    let mut page_links: [LinkInfo] = [];
+    let mut error_msg: str = "";
+
+    // Address bar
+    let mut url_buf: [i32] = [];
+    let mut url_focused: bool = false;
+    let mut prev_btn: i32 = 0;
+
+    // History
+    let mut history_back: [str] = [];
+    let mut history_forward: [str] = [];
+
+    // Follow mode
+    let mut follow_links: [LinkInfo] = [];
+    let mut follow_input: [i32] = [];
+
+    // Search
+    let mut search_buf: [i32] = [];
+    let mut search_active: bool = false;
+
+    // Help
+    let mut show_help: bool = false;
+    let mut last_key: i32 = 0;
+
+    // Navigation trigger
+    let mut needs_navigate: bool = false;
+    let mut nav_url: str = "";
+
+    // Navigate to arg if provided
+    if arg_count() >= 2 {
+        nav_url = arg_get(1);
+        let init_chars: [i32] = str_to_chars(nav_url);
+        for ci in 0..len(init_chars) {
+            push(url_buf, init_chars[ci]);
+        };
+        needs_navigate = true;
+    };
+
+    while canvas_alive() {
+        // Poll key OUTSIDE arena so array push/pop stays on parent arena
+        let key: i32 = canvas_key();
+
+        // Handle textbox input outside arena to avoid realloc on child arena
+        let url_is_insert: bool = match mode {
+            BrowserMode::Insert => true,
+            _ => false,
+        };
+        if url_focused and url_is_insert {
+            if key >= 32 and key <= 126 {
+                push(url_buf, key);
+            };
+            if key == 8 and len(url_buf) > 0 {
+                pop(url_buf);
+            };
+        };
+
+        // Handle search input outside arena
+        let is_search: bool = match mode {
+            BrowserMode::Search => true,
+            _ => false,
+        };
+        if is_search {
+            if key >= 32 and key <= 126 {
+                push(search_buf, key);
+            };
+            if key == 8 and len(search_buf) > 0 {
+                pop(search_buf);
+            };
+        };
+
+        // Handle follow input outside arena
+        let is_follow: bool = match mode {
+            BrowserMode::Follow => true,
+            _ => false,
+        };
+        if is_follow and key >= 97 and key <= 122 {
+            push(follow_input, key);
+        };
+
+        // Main frame body (no arena block — avoids array realloc corruption)
+
+            // ── Navigation ──────────────────────────
+            if needs_navigate {
+                needs_navigate = false;
+                status_msg = "Loading...";
+                error_msg = "";
+
+                let u: Url = url_parse(nav_url);
+                let use_tls: bool = str_eq(u.scheme, "https");
+
+                if str_len(current_url) > 0 and not str_eq(current_url, nav_url) {
+                    push(history_back, current_url);
+                    while len(history_forward) > 0 { pop(history_forward); };
+                };
+                current_url = nav_url;
+
+                let mut redir_count: i32 = 0;
+                let mut fetch_host: str = u.host;
+                let mut fetch_port: i32 = u.port;
+                let mut fetch_path: str = u.path;
+                let mut fetch_tls: bool = use_tls;
+                let mut done: bool = false;
+
+                while not done and redir_count < MAX_REDIRECTS {
+                    let resp: HttpResponse = http_get(fetch_host, fetch_port, fetch_path, fetch_tls);
+
+                    if str_len(resp.redirect_url) > 0 and (resp.status_code == 301 or resp.status_code == 302 or resp.status_code == 307) {
+                        let redir_u: Url = url_parse(resp.redirect_url);
+                        fetch_host = redir_u.host;
+                        fetch_port = redir_u.port;
+                        fetch_path = redir_u.path;
+                        fetch_tls = str_eq(redir_u.scheme, "https");
+                        current_url = resp.redirect_url;
+                        redir_count += 1;
+                    } else if resp.ok {
+                        while len(dom_nodes) > 0 { pop(dom_nodes); };
+                        dom_root = html_parse(dom_nodes, resp.body);
+                        page_loaded = true;
+                        scroll_y = 0;
+                        status_msg = current_url;
+                        done = true;
+                    } else {
+                        error_msg = resp.error;
+                        status_msg = "Error: {resp.error}";
+                        page_loaded = false;
+                        done = true;
+                    };
+                };
+
+                if redir_count >= MAX_REDIRECTS {
+                    error_msg = "Too many redirects";
+                    status_msg = "Error: too many redirects";
+                };
+
+                while len(url_buf) > 0 { pop(url_buf); };
+                let uc: [i32] = str_to_chars(current_url);
+                for ci in 0..len(uc) { push(url_buf, uc[ci]); };
+            };
+
+            // ── Input handling ──────────────────────
+            match mode {
+                BrowserMode::Normal => {
+                    if key == KEY_ESC {
+                        show_help = false;
+                        search_active = false;
+                    } else if key == 106 {
+                        scroll_y += LINE_H * 3;
+                        if scroll_y > doc_height { scroll_y = doc_height; };
+                    } else if key == 107 {
+                        scroll_y -= LINE_H * 3;
+                        if scroll_y < 0 { scroll_y = 0; };
+                    } else if key == 100 {
+                        scroll_y += (WIN_H - CHROME_TOP - CHROME_BOT) / 2;
+                        if scroll_y > doc_height { scroll_y = doc_height; };
+                    } else if key == 117 {
+                        scroll_y -= (WIN_H - CHROME_TOP - CHROME_BOT) / 2;
+                        if scroll_y < 0 { scroll_y = 0; };
+                    } else if key == 71 {
+                        scroll_y = doc_height;
+                    } else if key == 103 {
+                        if last_key == 103 { scroll_y = 0; };
+                    } else if key == 102 {
+                        if page_loaded {
+                            mode = BrowserMode::Follow;
+                            while len(follow_input) > 0 { pop(follow_input); };
+                            while len(follow_links) > 0 { pop(follow_links); };
+                            let labels: [str] = make_hint_labels(len(page_links));
+                            for li in 0..len(page_links) {
+                                let lk: LinkInfo = page_links[li];
+                                let labeled: LinkInfo = LinkInfo {
+                                    x: lk.x, y: lk.y, w: lk.w, h: lk.h,
+                                    href: lk.href,
+                                    label: if li < len(labels) { labels[li] } else { "" },
+                                };
+                                push(follow_links, labeled);
+                            };
+                        };
+                    } else if key == 114 {
+                        if str_len(current_url) > 0 {
+                            nav_url = current_url;
+                            needs_navigate = true;
+                        };
+                    } else if key == 111 {
+                        mode = BrowserMode::Insert;
+                        url_focused = true;
+                        // Clear url_buf by popping (don't reassign — arena would free it)
+                        while len(url_buf) > 0 { pop(url_buf); };
+                    } else if key == 79 {
+                        mode = BrowserMode::Insert;
+                        url_focused = true;
+                    } else if key == 47 {
+                        mode = BrowserMode::Search;
+                        while len(search_buf) > 0 { pop(search_buf); };
+                        search_active = true;
+                    } else if key == 105 {
+                        mode = BrowserMode::Insert;
+                    } else if key == 63 {
+                        show_help = not show_help;
+                    } else if key == 72 {
+                        if len(history_back) > 0 {
+                            push(history_forward, current_url);
+                            nav_url = pop(history_back);
+                            needs_navigate = true;
+                        };
+                    } else if key == 76 {
+                        if len(history_forward) > 0 {
+                            push(history_back, current_url);
+                            nav_url = pop(history_forward);
+                            needs_navigate = true;
+                        };
+                    };
+                    if key > 0 { last_key = key; };
+                },
+                BrowserMode::Insert => {
+                    if key == KEY_ESC {
+                        mode = BrowserMode::Normal;
+                        url_focused = false;
+                    } else if key == KEY_ENTER and url_focused {
+                        let typed_url: str = str_from_chars(url_buf);
+                        if str_len(typed_url) > 0 {
+                            if not str_contains(typed_url, "://") {
+                                nav_url = str_concat("http://", typed_url);
+                            } else {
+                                nav_url = typed_url;
+                            };
+                            needs_navigate = true;
+                            mode = BrowserMode::Normal;
+                            url_focused = false;
+                        };
+                    };
+                },
+                BrowserMode::Follow => {
+                    if key == KEY_ESC {
+                        mode = BrowserMode::Normal;
+                    } else if key >= 97 and key <= 122 {
+                        // push already happened outside arena
+                        let typed: str = str_from_chars(follow_input);
+                        let mut matched: bool = false;
+                        let mut partial: bool = false;
+                        for li in 0..len(follow_links) {
+                            if str_eq(follow_links[li].label, typed) {
+                                let href: str = follow_links[li].href;
+                                if str_len(href) > 0 {
+                                    if str_contains(href, "://") {
+                                        nav_url = href;
+                                    } else {
+                                        let cu: Url = url_parse(current_url);
+                                        let rp: str = url_resolve_relative(cu.path, href);
+                                        nav_url = url_to_string(Url {
+                                            scheme: cu.scheme, host: cu.host,
+                                            port: cu.port, path: rp,
+                                        });
+                                    };
+                                    needs_navigate = true;
+                                };
+                                mode = BrowserMode::Normal;
+                                matched = true;
+                                break;
+                            } else if str_starts_with(follow_links[li].label, typed) {
+                                partial = true;
+                            };
+                        };
+                        if not matched and not partial {
+                            mode = BrowserMode::Normal;
+                        };
+                    };
+                },
+                BrowserMode::Search => {
+                    if key == KEY_ESC {
+                        mode = BrowserMode::Normal;
+                    } else if key == KEY_ENTER {
+                        mode = BrowserMode::Normal;
+                    };
+                    // push/pop for search_buf handled outside arena
+                },
+            };
+
+            // ── Mouse click on links ────────────────
+            let mx: i32 = canvas_mouse_x();
+            let my: i32 = canvas_mouse_y();
+            let mbtn: i32 = canvas_mouse_btn();
+            if band(mbtn, 1) == 1 and band(prev_btn, 1) == 0 {
+                for li in 0..len(page_links) {
+                    let lk: LinkInfo = page_links[li];
+                    if mx >= lk.x and mx < lk.x + lk.w and my >= lk.y and my < lk.y + lk.h {
+                        let href: str = lk.href;
+                        if str_len(href) > 0 {
+                            if str_contains(href, "://") {
+                                nav_url = href;
+                            } else {
+                                let cu: Url = url_parse(current_url);
+                                let rp: str = url_resolve_relative(cu.path, href);
+                                nav_url = url_to_string(Url {
+                                    scheme: cu.scheme, host: cu.host,
+                                    port: cu.port, path: rp,
+                                });
+                            };
+                            needs_navigate = true;
+                        };
+                        break;
+                    };
+                };
+            };
+
+            // ── Render ──────────────────────────────
+            canvas_clear(BG_COLOR);
+
+            // Address bar
+            gfx_fill_rect(0, 0, WIN_W, CHROME_TOP, STATUS_BG);
+            // Pass key=0 to ui_textbox — we handle keyboard input outside arena
+            // to avoid array realloc on child arena. Textbox still renders and handles mouse.
+            let render_focused: bool = url_focused and url_is_insert;
+            url_focused = ui_textbox(4, 4, WIN_W - 8, url_buf,
+                                     render_focused, prev_btn, 0);
+
+            // Page content
+            if page_loaded and dom_root >= 0 {
+                while len(page_links) > 0 { pop(page_links); };
+                let x_ptr: [i32] = [PAD];
+                let y_ptr: [i32] = [0];
+                render_node(dom_nodes, dom_root, x_ptr, y_ptr,
+                            scroll_y, WIN_W, page_links,
+                            FG_COLOR, false, "", 0, false);
+                doc_height = y_ptr[0];
+            } else if str_len(error_msg) > 0 {
+                gfx_draw_text(PAD, CHROME_TOP + PAD, "Error loading page:", H1_COLOR);
+                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 2, error_msg, FG_COLOR);
+                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 4, "Press 'o' to enter a new URL", HR_COLOR);
+            } else {
+                gfx_draw_text(PAD + 100, CHROME_TOP + 100, "OscaWeb Browser", H1_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 130, "A minimal browser written in Oscan", FG_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 170, "Press 'o' to open a URL", LINK_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 190, "Press '?' for keyboard shortcuts", LINK_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 230, "Vim-like navigation:", H2_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 250, "j/k     Scroll down/up", FG_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 266, "d/u     Half page down/up", FG_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 282, "gg/G    Top/bottom of page", FG_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 298, "f       Follow link (hint mode)", FG_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 314, "o       Open URL", FG_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 330, "H/L     Back/forward in history", FG_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 346, "/       Search in page", FG_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 362, "r       Reload", FG_COLOR);
+                gfx_draw_text(PAD + 100, CHROME_TOP + 378, "Esc     Return to normal mode", FG_COLOR);
+            };
+
+            // Follow mode hints
+            match mode {
+                BrowserMode::Follow => {
+                    for li in 0..len(follow_links) {
+                        let fl: LinkInfo = follow_links[li];
+                        if str_len(fl.label) > 0 {
+                            let lw: i32 = str_len(fl.label) * FONT_W + 4;
+                            gfx_fill_rect(fl.x - 2, fl.y - 1, lw, FONT_H + 2, HINT_BG);
+                            gfx_draw_text(fl.x, fl.y, fl.label, HINT_FG);
+                        };
+                    };
+                },
+                _ => {},
+            };
+
+            // Search bar
+            match mode {
+                BrowserMode::Search => {
+                    let sy: i32 = WIN_H - CHROME_BOT - 24;
+                    gfx_fill_rect(0, sy, WIN_W, 24, STATUS_BG);
+                    gfx_draw_text(4, sy + 4, "/", FG_COLOR);
+                    let st: str = str_from_chars(search_buf);
+                    gfx_draw_text(12, sy + 4, st, FG_COLOR);
+                    gfx_fill_rect(12 + len(search_buf) * FONT_W, sy + 4, 1, FONT_H, FG_COLOR);
+                },
+                _ => {},
+            };
+
+            // Help overlay
+            if show_help {
+                let hx: i32 = 200;
+                let hy: i32 = 100;
+                gfx_fill_rect(hx, hy, 600, 350, STATUS_BG);
+                gfx_rect(hx, hy, 600, 350, UI_BORDER);
+                gfx_draw_text(hx + 10, hy + 10, "OscaWeb Keyboard Shortcuts", H1_COLOR);
+                let mut ky: i32 = hy + 30;
+                gfx_draw_text(hx + 10, ky, "j / k        Scroll down / up", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "d / u        Half page down / up", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "gg / G       Top / bottom", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "f            Follow link (hints)", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "r            Reload page", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "H / L        Back / forward", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "/            Search in page", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "i            Insert mode", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Esc          Normal mode", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "?            Toggle this help", FG_COLOR); ky += LINE_H;
+                ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Mouse click on links also works!", LINK_COLOR);
+            };
+
+            // Status bar
+            let sty: i32 = WIN_H - CHROME_BOT;
+            gfx_fill_rect(0, sty, WIN_W, CHROME_BOT, STATUS_BG);
+            let mode_str: str = match mode {
+                BrowserMode::Normal => "NORMAL",
+                BrowserMode::Insert => "INSERT",
+                BrowserMode::Follow => "FOLLOW",
+                BrowserMode::Search => "SEARCH",
+            };
+            let scroll_pct: str = if doc_height > 0 {
+                let pct: i32 = scroll_y * 100 / max_i32(doc_height, 1);
+                "{pct}%"
+            } else {
+                "Top"
+            };
+            gfx_draw_text(4, sty + 6,
+                " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}",
+                FG_COLOR);
+
+            prev_btn = canvas_mouse_btn();
+            canvas_flush();
+            sleep_ms(16);
+    };
+
+    canvas_close()
+}

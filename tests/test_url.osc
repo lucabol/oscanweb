@@ -1,0 +1,80 @@
+// Tests for url.osc — URL parsing, serialization, and relative resolution
+
+use "../url.osc"
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! main() {
+    println("=== URL Parser Tests ===");
+
+    // 1. Parse http://example.com
+    let u1: Url = url_parse("http://example.com");
+    assert_eq_str(u1.scheme, "http", "parse http scheme");
+    assert_eq_str(u1.host, "example.com", "parse http host");
+    assert_eq_i32(u1.port, 80, "parse http default port");
+    assert_eq_str(u1.path, "/", "parse http default path");
+
+    // 2. Parse https://example.com
+    let u2: Url = url_parse("https://example.com");
+    assert_eq_str(u2.scheme, "https", "parse https scheme");
+    assert_eq_str(u2.host, "example.com", "parse https host");
+    assert_eq_i32(u2.port, 443, "parse https default port");
+    assert_eq_str(u2.path, "/", "parse https default path");
+
+    // 3. Parse http://example.com:8080
+    let u3: Url = url_parse("http://example.com:8080");
+    assert_eq_str(u3.host, "example.com", "parse custom port host");
+    assert_eq_i32(u3.port, 8080, "parse custom port");
+
+    // 4. Parse http://example.com/path/to/page
+    let u4: Url = url_parse("http://example.com/path/to/page");
+    assert_eq_str(u4.host, "example.com", "parse with path host");
+    assert_eq_str(u4.path, "/path/to/page", "parse with path");
+
+    // 5. Parse http://example.com:3000/api
+    let u5: Url = url_parse("http://example.com:3000/api");
+    assert_eq_str(u5.host, "example.com", "parse port+path host");
+    assert_eq_i32(u5.port, 3000, "parse port+path port");
+    assert_eq_str(u5.path, "/api", "parse port+path path");
+
+    // 6. Parse bare hostname (no scheme)
+    let u6: Url = url_parse("example.com");
+    assert_eq_str(u6.scheme, "http", "no-scheme defaults to http");
+    assert_eq_str(u6.host, "example.com", "no-scheme host");
+
+    // 7. url_to_string round-trip
+    let rt1: str = url_to_string(url_parse("http://example.com"));
+    assert_eq_str(rt1, "http://example.com/", "round-trip http default");
+
+    let rt2: str = url_to_string(url_parse("https://example.com"));
+    assert_eq_str(rt2, "https://example.com/", "round-trip https default");
+
+    let rt3: str = url_to_string(url_parse("http://example.com:8080/page"));
+    assert_eq_str(rt3, "http://example.com:8080/page", "round-trip custom port+path");
+
+    // 8-10. url_resolve_relative
+    let r1: str = url_resolve_relative("/dir/page.html", "other.html");
+    assert_eq_str(r1, "/dir/other.html", "resolve relative sibling");
+
+    let r2: str = url_resolve_relative("/dir/page.html", "/absolute");
+    assert_eq_str(r2, "/absolute", "resolve absolute path");
+
+    let r3: str = url_resolve_relative("/", "page.html");
+    assert_eq_str(r3, "/page.html", "resolve from root");
+
+    println("=== URL Tests Complete ===");
+}

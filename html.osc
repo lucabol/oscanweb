@@ -1,0 +1,353 @@
+// HTML tokenizer and DOM builder for OscaWeb browser
+// Uses a flat array of nodes with integer indices for tree structure
+// (Oscan does not support self-referential struct types).
+//
+// Tree is stored in a global-style [HtmlNode] array.
+// Each node has first_child and next_sibling indices (-1 = none).
+
+struct HtmlNode {
+    tag: str,
+    text: str,
+    attrs: map,
+    first_child: i32,
+    next_sibling: i32,
+    is_text: bool,
+}
+
+// ─── Node construction helpers ───────────────────────────
+
+fn! html_node_text(content: str) -> HtmlNode {
+    HtmlNode {
+        tag: "", text: content, attrs: map_new(),
+        first_child: -1, next_sibling: -1, is_text: true,
+    }
+}
+
+fn! html_node_element(tag_name: str, attributes: map) -> HtmlNode {
+    HtmlNode {
+        tag: tag_name, text: "", attrs: attributes,
+        first_child: -1, next_sibling: -1, is_text: false,
+    }
+}
+
+fn! html_get_attr(node: HtmlNode, name: str) -> str {
+    if map_has(node.attrs, name) {
+        map_get(node.attrs, name)
+    } else {
+        ""
+    }
+}
+
+// Append child_idx as a child of parent_idx in the nodes array
+fn! html_append_child(nodes: [HtmlNode], parent_idx: i32, child_idx: i32) {
+    if nodes[parent_idx].first_child == -1 {
+        nodes[parent_idx].first_child = child_idx;
+    } else {
+        // Walk to last sibling
+        let mut sib: i32 = nodes[parent_idx].first_child;
+        while nodes[sib].next_sibling != -1 {
+            sib = nodes[sib].next_sibling;
+        };
+        nodes[sib].next_sibling = child_idx;
+    };
+}
+
+// Collect all text content under a node (recursive via index walk)
+fn! html_get_text_content(nodes: [HtmlNode], idx: i32) -> str {
+    let node: HtmlNode = nodes[idx];
+    if node.is_text {
+        return node.text;
+    };
+    let mut result: str = "";
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        let ct: str = html_get_text_content(nodes, child);
+        if str_len(ct) > 0 {
+            if str_len(result) > 0 {
+                result = str_concat(result, " ");
+            };
+            result = str_concat(result, ct);
+        };
+        child = nodes[child].next_sibling;
+    };
+    result
+}
+
+// ─── Entity Decoding ─────────────────────────────────────
+
+fn! html_hex_to_i32(s: str) -> i32 {
+    let chars: [i32] = str_to_chars(s);
+    let mut result: i32 = 0;
+    for i in 0..len(chars) {
+        let c: i32 = chars[i];
+        let mut digit: i32 = 0;
+        if c >= 48 and c <= 57 {
+            digit = c - 48;
+        } else if c >= 97 and c <= 102 {
+            digit = c - 97 + 10;
+        } else if c >= 65 and c <= 70 {
+            digit = c - 65 + 10;
+        };
+        result = result * 16 + digit;
+    };
+    result
+}
+
+fn! html_entity_decode(s: str) -> str {
+    let chars: [i32] = str_to_chars(s);
+    let mut out: [i32] = [];
+    let mut i: i32 = 0;
+    let n: i32 = len(chars);
+
+    while i < n {
+        if chars[i] == 38 {
+            let mut end: i32 = i + 1;
+            while end < n and chars[end] != 59 and end - i < 10 {
+                end += 1;
+            };
+            if end < n and chars[end] == 59 {
+                let mut ent_chars: [i32] = [];
+                let mut j: i32 = i + 1;
+                while j < end {
+                    push(ent_chars, chars[j]);
+                    j += 1;
+                };
+                let entity: str = str_from_chars(ent_chars);
+                if str_eq(entity, "amp") {
+                    push(out, 38); i = end + 1;
+                } else if str_eq(entity, "lt") {
+                    push(out, 60); i = end + 1;
+                } else if str_eq(entity, "gt") {
+                    push(out, 62); i = end + 1;
+                } else if str_eq(entity, "quot") {
+                    push(out, 34); i = end + 1;
+                } else if str_eq(entity, "apos") {
+                    push(out, 39); i = end + 1;
+                } else if str_eq(entity, "nbsp") {
+                    push(out, 32); i = end + 1;
+                } else if str_starts_with(entity, "#x") {
+                    let hex: str = str_slice(entity, 2, str_len(entity));
+                    let code: i32 = html_hex_to_i32(hex);
+                    if code > 0 { push(out, code); };
+                    i = end + 1;
+                } else if str_starts_with(entity, "#") {
+                    let num_str: str = str_slice(entity, 1, str_len(entity));
+                    let pr: Result<i32, str> = parse_i32(num_str);
+                    match pr {
+                        Result::Ok(code) => { push(out, code); },
+                        Result::Err(_e) => { push(out, 38); },
+                    };
+                    i = end + 1;
+                } else {
+                    push(out, 38); i += 1;
+                }
+            } else {
+                push(out, 38); i += 1;
+            }
+        } else {
+            push(out, chars[i]); i += 1;
+        };
+    };
+    str_from_chars(out)
+}
+
+// ─── Void element check ─────────────────────────────────
+
+fn html_is_void(tag: str) -> bool {
+    str_eq(tag, "br") or str_eq(tag, "hr") or str_eq(tag, "img") or
+    str_eq(tag, "input") or str_eq(tag, "meta") or str_eq(tag, "link") or
+    str_eq(tag, "col") or str_eq(tag, "area") or str_eq(tag, "base") or
+    str_eq(tag, "embed") or str_eq(tag, "source") or str_eq(tag, "track") or
+    str_eq(tag, "wbr")
+}
+
+// ─── HTML Parser ─────────────────────────────────────────
+// Returns index of root node in the nodes array.
+
+fn! html_parse(nodes: [HtmlNode], source: str) -> i32 {
+    let chars: [i32] = str_to_chars(source);
+    let n: i32 = len(chars);
+    let mut i: i32 = 0;
+
+    // Create root node
+    let root: HtmlNode = html_node_element("root", map_new());
+    push(nodes, root);
+    let root_idx: i32 = len(nodes) - 1;
+
+    // Stack of parent node indices
+    let mut stack: [i32] = [];
+    push(stack, root_idx);
+
+    let mut text_buf: [i32] = [];
+
+    while i < n {
+        let c: i32 = chars[i];
+
+        if c == 60 {
+            // '<' — flush text, start tag
+            if len(text_buf) > 0 {
+                let raw_text: str = str_from_chars(text_buf);
+                let decoded: str = html_entity_decode(raw_text);
+                let trimmed: str = str_trim(decoded);
+                if str_len(trimmed) > 0 {
+                    let tnode: HtmlNode = html_node_text(decoded);
+                    push(nodes, tnode);
+                    let tidx: i32 = len(nodes) - 1;
+                    let parent: i32 = stack[len(stack) - 1];
+                    html_append_child(nodes, parent, tidx);
+                };
+                text_buf = [];
+            };
+
+            i += 1;
+            if i >= n { break; };
+
+            // Comment: <!-- ... -->
+            if i + 2 < n and chars[i] == 33 and chars[i + 1] == 45 and chars[i + 2] == 45 {
+                i += 3;
+                while i + 2 < n {
+                    if chars[i] == 45 and chars[i + 1] == 45 and chars[i + 2] == 62 {
+                        i += 3;
+                        break;
+                    };
+                    i += 1;
+                };
+                continue;
+            };
+
+            // DOCTYPE: <!...>
+            if chars[i] == 33 {
+                while i < n and chars[i] != 62 { i += 1; };
+                if i < n { i += 1; };
+                continue;
+            };
+
+            // End tag: </tag>
+            if chars[i] == 47 {
+                i += 1;
+                let mut end_tag_chars: [i32] = [];
+                while i < n and chars[i] != 62 and not char_is_space(chars[i]) {
+                    push(end_tag_chars, char_to_lower(chars[i]));
+                    i += 1;
+                };
+                while i < n and chars[i] != 62 { i += 1; };
+                if i < n { i += 1; };
+
+                let end_tag: str = str_from_chars(end_tag_chars);
+
+                // Pop matching element from stack
+                let mut found: i32 = -1;
+                let mut si: i32 = len(stack) - 1;
+                while si > 0 {
+                    if str_eq(nodes[stack[si]].tag, end_tag) {
+                        found = si;
+                        break;
+                    };
+                    si -= 1;
+                };
+                if found > 0 {
+                    // Pop stack down to found
+                    while len(stack) > found {
+                        pop(stack);
+                    };
+                };
+                continue;
+            };
+
+            // Start tag: <tag attrs...>
+            let mut tag_chars: [i32] = [];
+            while i < n and chars[i] != 62 and chars[i] != 47 and not char_is_space(chars[i]) {
+                push(tag_chars, char_to_lower(chars[i]));
+                i += 1;
+            };
+            let tag_name: str = str_from_chars(tag_chars);
+
+            // Parse attributes
+            let tag_attrs: map = map_new();
+            let mut is_self_closing: bool = false;
+
+            while i < n and chars[i] != 62 {
+                if chars[i] == 47 {
+                    is_self_closing = true;
+                    i += 1;
+                    continue;
+                };
+                if char_is_space(chars[i]) {
+                    i += 1;
+                    continue;
+                };
+
+                let mut attr_name_chars: [i32] = [];
+                while i < n and chars[i] != 61 and chars[i] != 62 and chars[i] != 47 and not char_is_space(chars[i]) {
+                    push(attr_name_chars, char_to_lower(chars[i]));
+                    i += 1;
+                };
+                let attr_name: str = str_from_chars(attr_name_chars);
+                let mut attr_value: str = "";
+
+                while i < n and char_is_space(chars[i]) { i += 1; };
+
+                if i < n and chars[i] == 61 {
+                    i += 1;
+                    while i < n and char_is_space(chars[i]) { i += 1; };
+
+                    if i < n and (chars[i] == 34 or chars[i] == 39) {
+                        let quote: i32 = chars[i];
+                        i += 1;
+                        let mut val_chars: [i32] = [];
+                        while i < n and chars[i] != quote {
+                            push(val_chars, chars[i]);
+                            i += 1;
+                        };
+                        if i < n { i += 1; };
+                        attr_value = str_from_chars(val_chars);
+                    } else {
+                        let mut val_chars: [i32] = [];
+                        while i < n and chars[i] != 62 and chars[i] != 47 and not char_is_space(chars[i]) {
+                            push(val_chars, chars[i]);
+                            i += 1;
+                        };
+                        attr_value = str_from_chars(val_chars);
+                    };
+                };
+
+                if str_len(attr_name) > 0 {
+                    map_set(tag_attrs, attr_name, attr_value);
+                };
+            };
+
+            if i < n and chars[i] == 62 { i += 1; };
+
+            // Create element node
+            let elem: HtmlNode = html_node_element(tag_name, tag_attrs);
+            push(nodes, elem);
+            let elem_idx: i32 = len(nodes) - 1;
+
+            let parent: i32 = stack[len(stack) - 1];
+            html_append_child(nodes, parent, elem_idx);
+
+            if not html_is_void(tag_name) and not is_self_closing {
+                push(stack, elem_idx);
+            };
+        } else {
+            push(text_buf, c);
+            i += 1;
+        };
+    };
+
+    // Flush remaining text
+    if len(text_buf) > 0 {
+        let raw_text: str = str_from_chars(text_buf);
+        let decoded: str = html_entity_decode(raw_text);
+        let trimmed: str = str_trim(decoded);
+        if str_len(trimmed) > 0 {
+            let tnode: HtmlNode = html_node_text(decoded);
+            push(nodes, tnode);
+            let tidx: i32 = len(nodes) - 1;
+            let parent: i32 = stack[len(stack) - 1];
+            html_append_child(nodes, parent, tidx);
+        };
+    };
+
+    root_idx
+}

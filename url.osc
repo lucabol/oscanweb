@@ -1,0 +1,101 @@
+// URL parsing module for OscaWeb browser
+
+struct Url {
+    scheme: str,
+    host: str,
+    port: i32,
+    path: str,
+}
+
+fn! url_parse(raw: str) -> Url {
+    let mut s: str = raw;
+    let mut scheme: str = "http";
+    let mut host: str = "";
+    let mut port: i32 = 80;
+    let mut path: str = "/";
+
+    // Extract scheme
+    let scheme_pos: i32 = str_find(s, "://");
+    if scheme_pos >= 0 {
+        scheme = str_slice(s, 0, scheme_pos);
+        s = str_slice(s, scheme_pos + 3, str_len(s));
+    };
+
+    // Set default port based on scheme
+    if str_eq(scheme, "https") {
+        port = 443;
+    } else {
+        port = 80;
+    };
+
+    // Find path start
+    let slash_pos: i32 = str_find(s, "/");
+    let mut authority: str = s;
+    if slash_pos >= 0 {
+        authority = str_slice(s, 0, slash_pos);
+        path = str_slice(s, slash_pos, str_len(s));
+    };
+
+    // Find port in authority
+    let colon_pos: i32 = str_find(authority, ":");
+    if colon_pos >= 0 {
+        host = str_slice(authority, 0, colon_pos);
+        let port_str: str = str_slice(authority, colon_pos + 1, str_len(authority));
+        let port_result: Result<i32, str> = parse_i32(port_str);
+        match port_result {
+            Result::Ok(p) => { port = p; },
+            Result::Err(_e) => { port = 80; },
+        };
+    } else {
+        host = authority;
+    };
+
+    // Ensure path is at least "/"
+    if str_len(path) == 0 {
+        path = "/";
+    };
+
+    Url { scheme: scheme, host: host, port: port, path: path }
+}
+
+fn! url_to_string(u: Url) -> str {
+    let mut result: str = "{u.scheme}://{u.host}";
+
+    let mut show_port: bool = true;
+    if str_eq(u.scheme, "http") and u.port == 80 {
+        show_port = false;
+    };
+    if str_eq(u.scheme, "https") and u.port == 443 {
+        show_port = false;
+    };
+
+    if show_port {
+        result = "{result}:{u.port}";
+    };
+
+    result = "{result}{u.path}";
+    result
+}
+
+fn! url_resolve_relative(base_path: str, relative: str) -> str {
+    // If relative starts with "/", return it as-is
+    if str_starts_with(relative, "/") {
+        return relative;
+    };
+
+    // Strip filename from base_path: find last "/"
+    let chars: [i32] = str_to_chars(base_path);
+    let mut last_slash: i32 = -1;
+    for i in 0..len(chars) {
+        if chars[i] == 47 {
+            last_slash = i;
+        };
+    };
+
+    let mut dir: str = "/";
+    if last_slash >= 0 {
+        dir = str_slice(base_path, 0, last_slash + 1);
+    };
+
+    str_concat(dir, relative)
+}

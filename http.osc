@@ -1,0 +1,200 @@
+// HTTP client module for OscaWeb browser
+
+use "url.osc"
+
+struct HttpResponse {
+    status_code: i32,
+    content_type: str,
+    body: str,
+    redirect_url: str,
+    error: str,
+    ok: bool,
+}
+
+extern {
+    fn! tls_init() -> i32;
+    fn! tls_connect_to(host: str, port: i32) -> i32;
+    fn! tls_send_bytes(handle: i32, data: str, data_len: i32) -> i32;
+    fn! tls_recv_byte(handle: i32) -> i32;
+    fn! tls_close_conn(handle: i32);
+    fn! tls_cleanup();
+}
+
+fn! http_make_error(msg: str) -> HttpResponse {
+    HttpResponse {
+        status_code: 0,
+        content_type: "",
+        body: "",
+        redirect_url: "",
+        error: msg,
+        ok: false,
+    }
+}
+
+fn! http_parse_headers(header_block: str) -> map {
+    let m: map = map_new();
+    let lines: [str] = str_split(header_block, "\r\n");
+    for i in 0..len(lines) {
+        let line: str = lines[i];
+        let colon_pos: i32 = str_find(line, ": ");
+        if colon_pos > 0 {
+            let key: str = str_to_lower(str_slice(line, 0, colon_pos));
+            let value: str = str_slice(line, colon_pos + 2, str_len(line));
+            map_set(m, key, value);
+        };
+    };
+    m
+}
+
+fn! tls_recv_all(handle: i32, max_bytes: i32) -> str {
+    let mut chars: [i32] = [];
+    let mut count: i32 = 0;
+    while count < max_bytes {
+        let b: i32 = tls_recv_byte(handle);
+        if b == -1 {
+            break;
+        };
+        push(chars, b);
+        count = count + 1;
+    };
+    str_from_chars(chars)
+}
+
+// Plain TCP fetch in its own function so defer socket_close is at function scope
+fn! http_get_plain(host: str, port: i32, path: str, request: str) -> HttpResponse {
+    let sock_result: Result<i32, str> = socket_tcp();
+    let mut sock: i32 = 0;
+    match sock_result {
+        Result::Ok(s) => { sock = s; },
+        Result::Err(e) => { return http_make_error("Socket creation failed: {e}"); },
+    };
+    defer socket_close(sock);
+
+    let conn_result: Result<str, str> = socket_connect(sock, host, port);
+    match conn_result {
+        Result::Ok(_s) => {},
+        Result::Err(e) => { return http_make_error("Connection failed: {e}"); },
+    };
+
+    let send_result: Result<i32, str> = socket_send(sock, request);
+    match send_result {
+        Result::Ok(_n) => {},
+        Result::Err(e) => { return http_make_error("Send failed: {e}"); },
+    };
+
+    let mut raw_response: str = "";
+    let mut done: bool = false;
+    while not done {
+        let chunk: str = socket_recv(sock, 8192);
+        if str_len(chunk) == 0 {
+            done = true;
+        } else {
+            raw_response = str_concat(raw_response, chunk);
+        };
+    };
+
+    // Return raw response in the body field for http_get to parse
+    HttpResponse {
+        status_code: 200,
+        content_type: "",
+        body: raw_response,
+        redirect_url: "",
+        error: "",
+        ok: true,
+    }
+}
+
+fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
+    let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\n\r\n";
+
+    let mut raw_response: str = "";
+
+    if use_tls {
+        // TLS path
+        let handle: i32 = tls_connect_to(host, port);
+        if handle < 0 {
+            return http_make_error("TLS connection failed");
+        };
+
+        let sent: i32 = tls_send_bytes(handle, request, str_len(request));
+        if sent < 0 {
+            tls_close_conn(handle);
+            return http_make_error("TLS send failed");
+        };
+
+        raw_response = tls_recv_all(handle, 1048576);
+        tls_close_conn(handle);
+    } else {
+        // Plain TCP path — use helper so defer socket_close works
+        let plain_resp: HttpResponse = http_get_plain(host, port, path, request);
+        if str_len(plain_resp.error) > 0 {
+            return plain_resp;
+        };
+        raw_response = plain_resp.body;
+    };
+
+    if str_len(raw_response) == 0 {
+        return http_make_error("Empty response");
+    };
+
+    // Split headers from body at \r\n\r\n
+    let sep_pos: i32 = str_find(raw_response, "\r\n\r\n");
+    let mut header_section: str = raw_response;
+    let mut body: str = "";
+    if sep_pos >= 0 {
+        header_section = str_slice(raw_response, 0, sep_pos);
+        body = str_slice(raw_response, sep_pos + 4, str_len(raw_response));
+    };
+
+    // Parse status line: "HTTP/1.x STATUS_CODE reason"
+    let first_line_end: i32 = str_find(header_section, "\r\n");
+    let mut status_line: str = header_section;
+    let mut rest_headers: str = "";
+    if first_line_end >= 0 {
+        status_line = str_slice(header_section, 0, first_line_end);
+        rest_headers = str_slice(header_section, first_line_end + 2, str_len(header_section));
+    };
+
+    // Extract status code from status line
+    let mut status_code: i32 = 0;
+    let first_space: i32 = str_find(status_line, " ");
+    if first_space >= 0 {
+        let after_version: str = str_slice(status_line, first_space + 1, str_len(status_line));
+        let second_space: i32 = str_find(after_version, " ");
+        let mut code_str: str = after_version;
+        if second_space >= 0 {
+            code_str = str_slice(after_version, 0, second_space);
+        };
+        let code_result: Result<i32, str> = parse_i32(code_str);
+        match code_result {
+            Result::Ok(c) => { status_code = c; },
+            Result::Err(_e) => { status_code = 0; },
+        };
+    };
+
+    // Parse headers
+    let headers: map = http_parse_headers(rest_headers);
+
+    let mut content_type: str = "";
+    if map_has(headers, "content-type") {
+        content_type = map_get(headers, "content-type");
+    };
+
+    let mut redirect_url: str = "";
+    if status_code == 301 or status_code == 302 or status_code == 307 {
+        if map_has(headers, "location") {
+            redirect_url = map_get(headers, "location");
+        };
+    };
+
+    let is_ok: bool = status_code == 200;
+
+    HttpResponse {
+        status_code: status_code,
+        content_type: content_type,
+        body: body,
+        redirect_url: redirect_url,
+        error: "",
+        ok: is_ok,
+    }
+}
