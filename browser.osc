@@ -57,6 +57,76 @@ struct LinkInfo {
     label: str,
 }
 
+// ─── Image Cache ─────────────────────────────────────────
+// img_cache_idx: map from URL -> index string (i32 as str)
+// img_cache_data: array of pixel arrays [w, h, pixel0, pixel1, ...]
+
+fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: i32, base_path: str,
+                         img_cache_idx: map, img_cache_data: [[i32]]) -> i32 {
+    // Check cache
+    if map_has(img_cache_idx, src) {
+        let idx_str: str = map_get(img_cache_idx, src);
+        let pr: Result<i32, str> = parse_i32(idx_str);
+        match pr {
+            Result::Ok(idx) => { return idx; },
+            Result::Err(_e) => { return -1; },
+        };
+    };
+
+    // Resolve URL
+    let mut fetch_url: str = src;
+    let mut img_host: str = base_host;
+    let mut img_port: i32 = base_port;
+    let mut img_path: str = src;
+    let mut img_tls: bool = str_eq(base_scheme, "https");
+
+    if str_contains(src, "://") {
+        let u: Url = url_parse(src);
+        img_host = u.host;
+        img_port = u.port;
+        img_path = u.path;
+        img_tls = str_eq(u.scheme, "https");
+    } else if str_starts_with(src, "//") {
+        // Protocol-relative URL
+        let u: Url = url_parse(str_concat(base_scheme, ":{src}"));
+        img_host = u.host;
+        img_port = u.port;
+        img_path = u.path;
+        img_tls = str_eq(u.scheme, "https");
+    } else {
+        img_path = url_resolve_relative(base_path, src);
+    };
+
+    // Skip data: URLs for now
+    if str_starts_with(src, "data:") {
+        map_set(img_cache_idx, src, "-1");
+        return -1;
+    };
+
+    // Fetch image data
+    let resp: HttpResponse = http_get(img_host, img_port, img_path, img_tls);
+    if not resp.ok or str_len(resp.body) == 0 {
+        map_set(img_cache_idx, src, "-1");
+        return -1;
+    };
+
+    // Decode image
+    let decode_result: Result<[i32], str> = img_load(resp.body);
+    match decode_result {
+        Result::Ok(pixels) => {
+            let cache_idx: i32 = len(img_cache_data);
+            push(img_cache_data, pixels);
+            let idx_str: str = i32_to_str(cache_idx);
+            map_set(img_cache_idx, src, idx_str);
+            cache_idx
+        },
+        Result::Err(_e) => {
+            map_set(img_cache_idx, src, "-1");
+            -1
+        },
+    }
+}
+
 // ─── Tag classification ─────────────────────────────────
 
 fn html_is_block_tag(tag: str) -> bool {
@@ -118,7 +188,9 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
 fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 vp_top: i32, vp_width: i32, links: [LinkInfo],
                 color: i32, is_link: bool, link_href: str,
-                indent: i32, in_pre: bool) {
+                indent: i32, in_pre: bool,
+                img_cache_idx: map, img_cache_data: [[i32]],
+                base_scheme: str, base_host: str, base_port: i32, base_path: str) {
     let node: HtmlNode = nodes[idx];
 
     // ── Text node ──
@@ -178,9 +250,52 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         return;
     };
 
-    // IMG placeholder
+    // IMG — fetch, decode, and blit
     if str_eq(tag, "img") {
+        let src: str = html_get_attr(node, "src");
         let alt: str = html_get_attr(node, "alt");
+
+        if str_len(src) > 0 {
+            let cache_idx: i32 = img_fetch_and_decode(src, base_scheme, base_host, base_port, base_path,
+                                                       img_cache_idx, img_cache_data);
+            if cache_idx >= 0 and cache_idx < len(img_cache_data) {
+                let pixels: [i32] = img_cache_data[cache_idx];
+                if len(pixels) >= 2 {
+                    let img_w: i32 = pixels[0];
+                    let img_h: i32 = pixels[1];
+
+                    // Scale down if too wide
+                    let max_w: i32 = vp_width - x_ptr[0] - PAD;
+                    let mut draw_w: i32 = img_w;
+                    let mut draw_h: i32 = img_h;
+                    if draw_w > max_w and max_w > 0 {
+                        draw_h = draw_h * max_w / draw_w;
+                        draw_w = max_w;
+                    };
+                    // Cap height
+                    if draw_h > 600 {
+                        draw_w = draw_w * 600 / draw_h;
+                        draw_h = 600;
+                    };
+
+                    // Start on new line for block images
+                    if x_ptr[0] > indent + PAD {
+                        x_ptr[0] = indent + PAD;
+                        y_ptr[0] = y_ptr[0] + LINE_H;
+                    };
+
+                    let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+                    if draw_y + draw_h >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                        gfx_blit(x_ptr[0], draw_y, draw_w, draw_h, pixels);
+                    };
+                    y_ptr[0] = y_ptr[0] + draw_h + 4;
+                    x_ptr[0] = indent + PAD;
+                    return;
+                };
+            };
+        };
+
+        // Fallback: show alt text placeholder
         let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
@@ -231,7 +346,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     while child != -1 {
         render_node(nodes, child, x_ptr, y_ptr, vp_top, vp_width,
                     links, child_color, child_link, child_href,
-                    child_indent, child_pre);
+                    child_indent, child_pre,
+                    img_cache_idx, img_cache_data,
+                    base_scheme, base_host, base_port, base_path);
         child = nodes[child].next_sibling;
     };
 
@@ -277,6 +394,10 @@ fn! main() {
     let mut doc_height: i32 = 0;
     let mut page_links: [LinkInfo] = [];
     let mut error_msg: str = "";
+
+    // Image cache
+    let mut img_cache_idx: map = map_new();
+    let mut img_cache_data: [[i32]] = [];
 
     // Address bar
     let mut url_buf: [i32] = [];
@@ -391,6 +512,9 @@ fn! main() {
                         redir_count += 1;
                     } else if resp.ok {
                         while len(dom_nodes) > 0 { pop(dom_nodes); };
+                        // Clear image cache for new page
+                        img_cache_idx = map_new();
+                        while len(img_cache_data) > 0 { pop(img_cache_data); };
                         dom_root = html_parse(dom_nodes, resp.body);
                         page_loaded = true;
                         scroll_y = 0;
@@ -609,9 +733,12 @@ fn! main() {
                 while len(page_links) > 0 { pop(page_links); };
                 let x_ptr: [i32] = [PAD];
                 let y_ptr: [i32] = [0];
+                let pg_u: Url = url_parse(current_url);
                 render_node(dom_nodes, dom_root, x_ptr, y_ptr,
                             scroll_y, WIN_W, page_links,
-                            FG_COLOR, false, "", 0, false);
+                            FG_COLOR, false, "", 0, false,
+                            img_cache_idx, img_cache_data,
+                            pg_u.scheme, pg_u.host, pg_u.port, pg_u.path);
                 doc_height = y_ptr[0];
             } else if str_len(error_msg) > 0 {
                 gfx_draw_text(PAD, CHROME_TOP + PAD, "Error loading page:", H1_COLOR);
