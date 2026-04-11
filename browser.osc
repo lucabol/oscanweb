@@ -612,8 +612,14 @@ fn! main() {
                     } else if key == 107 {
                         scroll_y -= LINE_H * 3;
                         if scroll_y < 0 { scroll_y = 0; };
-                    } else if key == 100 {
-                        scroll_y += (WIN_H - CHROME_TOP - CHROME_BOT) / 2;
+                    } else if key == 100 or key == 32 {
+                        // d or Space — scroll down one page (Space) / half page (d)
+                        let scroll_amount: i32 = if key == 32 {
+                            WIN_H - CHROME_TOP - CHROME_BOT
+                        } else {
+                            (WIN_H - CHROME_TOP - CHROME_BOT) / 2
+                        };
+                        scroll_y += scroll_amount;
                         if scroll_y > doc_height { scroll_y = doc_height; };
                     } else if key == 117 {
                         scroll_y -= (WIN_H - CHROME_TOP - CHROME_BOT) / 2;
