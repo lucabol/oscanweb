@@ -584,11 +584,25 @@ fn! main() {
 
             // Address bar
             gfx_fill_rect(0, 0, WIN_W, CHROME_TOP, STATUS_BG);
-            // Pass key=0 to ui_textbox — we handle keyboard input outside arena
-            // to avoid array realloc on child arena. Textbox still renders and handles mouse.
-            let render_focused: bool = url_focused and url_is_insert;
-            url_focused = ui_textbox(4, 4, WIN_W - 8, url_buf,
-                                     render_focused, prev_btn, 0);
+            // Pass key=0 to ui_textbox — we handle keyboard input outside arena.
+            // Only let ui_textbox control focus via mouse clicks when NOT in Insert mode,
+            // otherwise our mode-driven url_focused takes precedence.
+            let show_focused: bool = match mode {
+                BrowserMode::Insert => url_focused,
+                _ => false,
+            };
+            let mouse_focus: bool = ui_textbox(4, 4, WIN_W - 8, url_buf,
+                                     show_focused, prev_btn, 0);
+            // In Normal mode, clicking the textbox should enter Insert mode
+            match mode {
+                BrowserMode::Normal => {
+                    if mouse_focus {
+                        mode = BrowserMode::Insert;
+                        url_focused = true;
+                    };
+                },
+                _ => {},
+            };
 
             // Page content
             if page_loaded and dom_root >= 0 {
