@@ -62,6 +62,21 @@ struct LinkInfo {
 // img_cache_data: array of pixel-only arrays (no w/h header)
 // img_cache_w / img_cache_h: parallel arrays of dimensions
 
+let IMG_MAX_W: i32 = 1000;
+
+// Nearest-neighbor downscale: src pixels (src_w x src_h) -> dst pixels (dst_w x dst_h)
+fn! img_scale(src_px: [i32], src_w: i32, src_h: i32, dst_w: i32, dst_h: i32) -> [i32] {
+    let mut dst: [i32] = [];
+    for dy in 0..dst_h {
+        let sy: i32 = dy * src_h / dst_h;
+        for dx in 0..dst_w {
+            let sx: i32 = dx * src_w / dst_w;
+            push(dst, src_px[sy * src_w + sx]);
+        };
+    };
+    dst
+}
+
 fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: i32, base_path: str,
                          img_cache_idx: map, img_cache_data: [[i32]],
                          img_cache_w: [i32], img_cache_h: [i32]) -> i32 {
@@ -126,10 +141,22 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
             for pi in 0..px_count {
                 push(px, raw[pi + 2]);
             };
+
+            // Scale down if wider than viewport
+            let mut final_px: [i32] = px;
+            let mut final_w: i32 = w;
+            let mut final_h: i32 = h;
+            if w > IMG_MAX_W {
+                final_h = h * IMG_MAX_W / w;
+                final_w = IMG_MAX_W;
+                if final_h < 1 { final_h = 1; };
+                final_px = img_scale(px, w, h, final_w, final_h);
+            };
+
             let cache_idx: i32 = len(img_cache_data);
-            push(img_cache_data, px);
-            push(img_cache_w, w);
-            push(img_cache_h, h);
+            push(img_cache_data, final_px);
+            push(img_cache_w, final_w);
+            push(img_cache_h, final_h);
             let idx_str: str = i32_to_str(cache_idx);
             map_set(img_cache_idx, src, idx_str);
             cache_idx
