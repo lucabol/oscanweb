@@ -814,20 +814,30 @@ fn! main() {
                 gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 2, error_msg, FG_COLOR);
                 gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 4, "Press 'o' to enter a new URL", HR_COLOR);
             } else {
-                gfx_draw_text(PAD + 100, CHROME_TOP + 100, "OscaWeb Browser", H1_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 130, "A minimal browser written in Oscan", FG_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 170, "Press 'o' to open a URL", LINK_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 190, "Press '?' for keyboard shortcuts", LINK_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 230, "Vim-like navigation:", H2_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 250, "j/k     Scroll down/up", FG_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 266, "d/u     Half page down/up", FG_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 282, "gg/G    Top/bottom of page", FG_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 298, "f       Follow link (hint mode)", FG_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 314, "o       Open URL", FG_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 330, "H/L     Back/forward in history", FG_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 346, "/       Search in page", FG_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 362, "r       Reload", FG_COLOR);
-                gfx_draw_text(PAD + 100, CHROME_TOP + 378, "Esc     Return to normal mode", FG_COLOR);
+                // ASCII art logo
+                let ax: i32 = PAD + 100;
+                let mut ay: i32 = CHROME_TOP + 60;
+                gfx_draw_text(ax, ay, "  ___            __      __   _", H1_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, " / _ \\ ___ ___  \\ \\    / /__| |__", H1_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "| (_) (_-</ __|  \\ \\/\\/ / -_) '_ \\", H1_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, " \\___//__/\\___|   \\_/\\_/\\___|_.__/", H1_COLOR); ay += LINE_H;
+                ay += LINE_H;
+                gfx_draw_text(ax, ay, "A minimal Vim-powered browser written in Oscan", FG_COLOR); ay += LINE_H;
+                ay += LINE_H * 2;
+                gfx_draw_text(ax, ay, "Press 'o' to open a URL", LINK_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Press '?' for keyboard shortcuts", LINK_COLOR); ay += LINE_H;
+                ay += LINE_H * 2;
+                gfx_draw_text(ax, ay, "Keyboard shortcuts:", H2_COLOR); ay += LINE_H + 4;
+                gfx_draw_text(ax, ay, "j/k       Scroll down/up", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "d/u       Half page down/up", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Space     Full page down", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "gg / G    Top / bottom of page", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "f         Follow link (hint mode)", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "o         Open URL", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "H / L     Back / forward", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "/         Search in page", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "r         Reload", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Esc       Normal mode", FG_COLOR);
             };
 
             // Follow mode hints

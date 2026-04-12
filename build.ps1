@@ -161,13 +161,13 @@ $runtimeCopied = $false
 foreach ($td in $tempDirs) {
     $rtH = Join-Path $td.FullName 'osc_runtime.h'
     if (Test-Path $rtH) {
-        # Copy all .h and .c files from the temp dir (runtime files)
+        # Copy all .h files (runtime headers)
         Get-ChildItem $td.FullName -Filter '*.h' | Copy-Item -Destination $BuildDir -Force
-        # Copy osc_runtime.c (but not the generated program.c)
-        $rtcFile = Join-Path $td.FullName 'osc_runtime.c'
-        if (Test-Path $rtcFile) { Copy-Item $rtcFile -Destination $BuildDir -Force }
+        # Copy all .c files except the generated program.c
+        Get-ChildItem $td.FullName -Filter '*.c' | Where-Object { $_.Name -ne 'program.c' } |
+            Copy-Item -Destination $BuildDir -Force
         $runtimeCopied = $true
-        $count = (Get-ChildItem $BuildDir -Filter '*.h').Count + (Get-ChildItem $BuildDir -Filter 'osc_runtime.c').Count
+        $count = (Get-ChildItem $BuildDir -Include '*.h','*.c' -File).Count
         Write-Ok "Runtime files copied to build/ ($count files)"
         break
     }
@@ -197,10 +197,13 @@ if ($CC -eq 'gcc' -or $CC -eq 'clang') {
     $cFlags += @('-lm')
 }
 
-# Step 4: Compile
+# Step 4: Patch generated C
 # The Oscan compiler doesn't generate C forward-declarations for extern FFI
-# functions. We insert them after the preprocessor header block.
-$tlsDecls = @"
+# functions, and may not include l_tls.h. We fix both after the preprocessor block.
+$patchCode = @"
+
+/* Include TLS header (needed by osc_runtime.c TLS builtins) */
+#include "l_tls.h"
 
 /* Forward declarations for TLS FFI functions */
 extern int32_t tls_init(void);
@@ -211,20 +214,33 @@ extern void    tls_close_conn(int32_t handle);
 extern void    tls_cleanup(void);
 
 "@
-$genLines = Get-Content $GenC
-# Find the last #endif line (closes the preprocessor header block)
+$genContent = Get-Content $GenC -Raw
+# Insert l_tls.h include right before osc_runtime.c include
+$genContent = $genContent -replace '(#include "osc_runtime\.c")', "#include `"l_tls.h`"`n`$1"
+# Insert extern declarations after the last #endif before code
+$genLines = $genContent -split "`n"
 $lastEndif = -1
 for ($li = 0; $li -lt $genLines.Count; $li++) {
     if ($genLines[$li] -match '^\s*#endif') { $lastEndif = $li }
-    # Stop searching after we hit actual code (typedef, struct, etc.)
     if ($genLines[$li] -match '^\s*typedef\s') { break }
 }
 if ($lastEndif -ge 0) {
+    $fwdDecls = @"
+
+/* Forward declarations for TLS FFI functions */
+extern int32_t tls_init(void);
+extern int32_t tls_connect_to(osc_str host, int32_t port);
+extern int32_t tls_send_bytes(int32_t handle, osc_str data, int32_t data_len);
+extern int32_t tls_recv_byte(int32_t handle);
+extern void    tls_close_conn(int32_t handle);
+extern void    tls_cleanup(void);
+
+"@
     $before = $genLines[0..$lastEndif]
     $after  = $genLines[($lastEndif+1)..($genLines.Count-1)]
-    $newContent = ($before -join "`n") + "`n" + $tlsDecls + "`n" + ($after -join "`n")
-    Set-Content -Path $GenC -Value $newContent -NoNewline -Encoding UTF8
+    $genContent = ($before -join "`n") + "`n" + $fwdDecls + "`n" + ($after -join "`n")
 }
+Set-Content -Path $GenC -Value $genContent -NoNewline -Encoding UTF8
 
 Write-Step "Compiling with $CC"
 $compileArgs = $cSources + $cFlags
