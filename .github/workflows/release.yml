@@ -123,27 +123,24 @@ jobs:
 
       - name: Package release
         id: package
-        shell: bash
+        shell: pwsh
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          NAME="oscanweb-v${VERSION}-${{ matrix.name }}"
-          STAGING="/tmp/$NAME"
-          mkdir -p "$STAGING"
-          cp "build/${{ matrix.browser_bin }}" "$STAGING/"
-          cp README.md "$STAGING/"
+          $Version = "${{ steps.version.outputs.version }}"
+          $Name = "oscanweb-v${Version}-${{ matrix.name }}"
+          $Staging = Join-Path $env:RUNNER_TEMP $Name
+          New-Item -ItemType Directory -Path $Staging -Force | Out-Null
+          Copy-Item "build/${{ matrix.browser_bin }}" $Staging/
+          Copy-Item README.md $Staging/
 
-          case "${{ matrix.archive_ext }}" in
-            zip)
-              cd /tmp
-              zip -r "$GITHUB_WORKSPACE/$NAME.zip" "$NAME"
-              echo "archive=$NAME.zip" >> "$GITHUB_OUTPUT"
-              ;;
-            tar.gz)
-              cd /tmp
-              tar czf "$GITHUB_WORKSPACE/$NAME.tar.gz" "$NAME"
-              echo "archive=$NAME.tar.gz" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
+          $Ext = "${{ matrix.archive_ext }}"
+          if ($Ext -eq "zip") {
+            $Archive = "$Name.zip"
+            Compress-Archive -Path $Staging -DestinationPath $Archive
+          } else {
+            $Archive = "$Name.tar.gz"
+            tar czf $Archive -C $env:RUNNER_TEMP $Name
+          }
+          "archive=$Archive" >> $env:GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
