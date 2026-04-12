@@ -24,20 +24,17 @@ jobs:
             name: windows-x86_64
             oscan_archive: oscan-v{OSCAN_VER}-windows-x86_64-full.zip
             oscan_bin: oscan.exe
-            browser_bin: browser.exe
-            archive_ext: zip
+            output: oscanweb-windows-x86_64.exe
           - os: ubuntu-latest
             name: linux-x86_64
             oscan_archive: oscan-v{OSCAN_VER}-linux-x86_64-full.tar.xz
             oscan_bin: oscan
-            browser_bin: browser
-            archive_ext: tar.gz
+            output: oscanweb-linux-x86_64
           - os: macos-15
             name: macos-x86_64
             oscan_archive: oscan-v{OSCAN_VER}-macos-x86_64.tar.gz
             oscan_bin: oscan
-            browser_bin: browser
-            archive_ext: tar.gz
+            output: oscanweb-macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -52,23 +49,18 @@ jobs:
             V="${{ github.ref_name }}"
           fi
           echo "tag=$V" >> "$GITHUB_OUTPUT"
-          echo "version=${V#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install Oscan
         shell: bash
         run: |
           set -euo pipefail
-
-          # Find the latest Oscan release tag
           OSCAN_TAG=$(gh release view --repo lucabol/Oscan --json tagName --jq .tagName)
           OSCAN_VER="${OSCAN_TAG#v}"
           echo "Installing Oscan $OSCAN_TAG"
 
-          # Construct the archive name for this platform
           ARCHIVE_TEMPLATE="${{ matrix.oscan_archive }}"
           ARCHIVE_NAME="${ARCHIVE_TEMPLATE//\{OSCAN_VER\}/$OSCAN_VER}"
 
-          # Download and extract
           gh release download "$OSCAN_TAG" \
             --repo lucabol/Oscan \
             --pattern "$ARCHIVE_NAME" \
@@ -81,39 +73,26 @@ jobs:
             *.tar.gz)  tar xf "$ARCHIVE_NAME" ;;
           esac
 
-          # Find the oscan binary in the extracted directory
           OSCAN_BIN=$(find . -name "${{ matrix.oscan_bin }}" -type f | head -1)
           if [ -z "$OSCAN_BIN" ]; then
-            echo "ERROR: Could not find ${{ matrix.oscan_bin }} in extracted archive"
-            ls -la .
+            echo "ERROR: Could not find ${{ matrix.oscan_bin }}"
+            find . -type f
             exit 1
           fi
 
-          # Get the directory containing oscan (it has a sibling toolchain/ dir)
           OSCAN_DIR=$(dirname "$(realpath "$OSCAN_BIN")")
-          echo "Oscan installed at: $OSCAN_DIR"
-
-          # Add to PATH
-          echo "$OSCAN_DIR" >> "$GITHUB_PATH"
-
-          # Verify
           chmod +x "$OSCAN_DIR/${{ matrix.oscan_bin }}" 2>/dev/null || true
-          "$OSCAN_DIR/${{ matrix.oscan_bin }}" --version || "$OSCAN_DIR/${{ matrix.oscan_bin }}" 2>&1 | head -1
+          echo "$OSCAN_DIR" >> "$GITHUB_PATH"
+          echo "Oscan installed from $OSCAN_DIR"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Xcode Command Line Tools (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # macOS runners already have CLT installed
-          xcode-select -p || xcode-select --install
 
       - name: Build browser
         shell: bash
         run: |
           mkdir -p build
-          oscan browser.osc -o "build/${{ matrix.browser_bin }}"
-          ls -la "build/${{ matrix.browser_bin }}"
+          oscan browser.osc -o "build/${{ matrix.output }}"
+          ls -la "build/${{ matrix.output }}"
 
       - name: Run tests
         shell: bash
@@ -121,32 +100,11 @@ jobs:
           oscan tests/test_url.osc --run
           oscan tests/test_html.osc --run
 
-      - name: Package release
-        id: package
-        shell: pwsh
-        run: |
-          $Version = "${{ steps.version.outputs.version }}"
-          $Name = "oscanweb-v${Version}-${{ matrix.name }}"
-          $Staging = Join-Path $env:RUNNER_TEMP $Name
-          New-Item -ItemType Directory -Path $Staging -Force | Out-Null
-          Copy-Item "build/${{ matrix.browser_bin }}" $Staging/
-          Copy-Item README.md $Staging/
-
-          $Ext = "${{ matrix.archive_ext }}"
-          if ($Ext -eq "zip") {
-            $Archive = "$Name.zip"
-            Compress-Archive -Path $Staging -DestinationPath $Archive
-          } else {
-            $Archive = "$Name.tar.gz"
-            tar czf $Archive -C $env:RUNNER_TEMP $Name
-          }
-          "archive=$Archive" >> $env:GITHUB_OUTPUT
-
-      - name: Upload artifact
+      - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: ${{ steps.package.outputs.archive }}
+          path: build/${{ matrix.output }}
 
   release:
     name: Publish Release
@@ -167,13 +125,14 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect release files
+      - name: Collect binaries and checksums
         run: |
           mkdir -p upload
-          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} upload/ \;
+          find artifacts -type f -exec cp {} upload/ \;
           cd upload
           sha256sum * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          echo "Release files:"
+          ls -la
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
