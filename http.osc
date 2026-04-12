@@ -1,4 +1,5 @@
 // HTTP client module for OscaWeb browser
+// Uses Oscan's built-in TLS builtins (no C-FFI needed).
 
 use "url.osc"
 
@@ -9,15 +10,6 @@ struct HttpResponse {
     redirect_url: str,
     error: str,
     ok: bool,
-}
-
-extern {
-    fn! tls_init() -> i32;
-    fn! tls_connect_to(host: str, port: i32) -> i32;
-    fn! tls_send_bytes(handle: i32, data: str, data_len: i32) -> i32;
-    fn! tls_recv_byte(handle: i32) -> i32;
-    fn! tls_close_conn(handle: i32);
-    fn! tls_cleanup();
 }
 
 fn! http_make_error(msg: str) -> HttpResponse {
@@ -46,22 +38,46 @@ fn! http_parse_headers(header_block: str) -> map {
     m
 }
 
-fn! tls_recv_all(handle: i32, max_bytes: i32) -> str {
-    let mut chars: [i32] = [];
-    let mut count: i32 = 0;
-    while count < max_bytes {
-        let b: i32 = tls_recv_byte(handle);
-        if b == -1 {
-            break;
-        };
-        push(chars, b);
-        count = count + 1;
+// TLS fetch in its own function so defer tls_close is at function scope
+fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
+    let conn_result: Result<i32, str> = tls_connect(host, port);
+    let mut handle: i32 = 0;
+    match conn_result {
+        Result::Ok(h) => { handle = h; },
+        Result::Err(e) => { return http_make_error("TLS connection failed: {e}"); },
     };
-    str_from_chars(chars)
+    defer tls_close(handle);
+
+    let send_result: Result<i32, str> = tls_send(handle, request);
+    match send_result {
+        Result::Ok(_n) => {},
+        Result::Err(e) => { return http_make_error("TLS send failed: {e}"); },
+    };
+
+    // Receive response using tls_recv (bulk reads)
+    let mut raw_response: str = "";
+    let mut done: bool = false;
+    while not done {
+        let chunk: str = tls_recv(handle, 8192);
+        if str_len(chunk) == 0 {
+            done = true;
+        } else {
+            raw_response = str_concat(raw_response, chunk);
+        };
+    };
+
+    HttpResponse {
+        status_code: 200,
+        content_type: "",
+        body: raw_response,
+        redirect_url: "",
+        error: "",
+        ok: true,
+    }
 }
 
 // Plain TCP fetch in its own function so defer socket_close is at function scope
-fn! http_get_plain(host: str, port: i32, path: str, request: str) -> HttpResponse {
+fn! http_get_plain(host: str, port: i32, request: str) -> HttpResponse {
     let sock_result: Result<i32, str> = socket_tcp();
     let mut sock: i32 = 0;
     match sock_result {
@@ -93,7 +109,6 @@ fn! http_get_plain(host: str, port: i32, path: str, request: str) -> HttpRespons
         };
     };
 
-    // Return raw response in the body field for http_get to parse
     HttpResponse {
         status_code: 200,
         content_type: "",
@@ -110,23 +125,13 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
     let mut raw_response: str = "";
 
     if use_tls {
-        // TLS path
-        let handle: i32 = tls_connect_to(host, port);
-        if handle < 0 {
-            return http_make_error("TLS connection failed");
+        let tls_resp: HttpResponse = http_get_tls(host, port, request);
+        if str_len(tls_resp.error) > 0 {
+            return tls_resp;
         };
-
-        let sent: i32 = tls_send_bytes(handle, request, str_len(request));
-        if sent < 0 {
-            tls_close_conn(handle);
-            return http_make_error("TLS send failed");
-        };
-
-        raw_response = tls_recv_all(handle, 1048576);
-        tls_close_conn(handle);
+        raw_response = tls_resp.body;
     } else {
-        // Plain TCP path — use helper so defer socket_close works
-        let plain_resp: HttpResponse = http_get_plain(host, port, path, request);
+        let plain_resp: HttpResponse = http_get_plain(host, port, request);
         if str_len(plain_resp.error) > 0 {
             return plain_resp;
         };
@@ -155,7 +160,7 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
         rest_headers = str_slice(header_section, first_line_end + 2, str_len(header_section));
     };
 
-    // Extract status code from status line
+    // Extract status code
     let mut status_code: i32 = 0;
     let first_space: i32 = str_find(status_line, " ");
     if first_space >= 0 {
@@ -172,7 +177,6 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
         };
     };
 
-    // Parse headers
     let headers: map = http_parse_headers(rest_headers);
 
     let mut content_type: str = "";
