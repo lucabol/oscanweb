@@ -663,6 +663,23 @@ fn! main() {
                             nav_url = current_url;
                             needs_navigate = true;
                         };
+                    } else if key == 112 {
+                        // p — paste URL from clipboard and navigate
+                        let paste_result: Result<str, str> = clipboard_get();
+                        match paste_result {
+                            Result::Ok(clip_text) => {
+                                let trimmed: str = str_trim(clip_text);
+                                if str_len(trimmed) > 0 {
+                                    if not str_contains(trimmed, "://") {
+                                        nav_url = str_concat("http://", trimmed);
+                                    } else {
+                                        nav_url = trimmed;
+                                    };
+                                    needs_navigate = true;
+                                };
+                            },
+                            Result::Err(_e) => {},
+                        };
                     } else if key == 111 {
                         mode = BrowserMode::Insert;
                         url_focused = true;
@@ -677,6 +694,13 @@ fn! main() {
                         search_active = true;
                     } else if key == 63 {
                         show_help = not show_help;
+                    } else if key == 121 {
+                        // y — if last key was also y (yy), copy URL to clipboard
+                        if last_key == 121 {
+                            if str_len(current_url) > 0 {
+                                clipboard_set(current_url);
+                            };
+                        };
                     } else if key == 72 {
                         if len(history_back) > 0 {
                             push(history_forward, current_url);
@@ -958,6 +982,8 @@ fn! main() {
                 gfx_draw_text(hx + 10, ky, "f            Follow link (hints)", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "r            Reload page", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "p            Paste URL and go", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "yy           Copy URL to clipboard", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "H / L        Back / forward", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "/            Search in page", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "Esc          Normal mode", FG_COLOR); ky += LINE_H;
