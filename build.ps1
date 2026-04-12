@@ -11,11 +11,13 @@
     .\build.ps1 -Run         # Build and run
     .\build.ps1 -Clean       # Remove build artifacts
     .\build.ps1 -Test        # Compile and run tests
+    .\build.ps1 -V           # Verbose build (show oscan/compiler output)
 #>
 param(
     [switch]$Run,
     [switch]$Clean,
-    [switch]$Test
+    [switch]$Test,
+    [Alias('V')][switch]$Verbose
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,7 +83,14 @@ if (-not (Test-Path $BuildDir)) {
 }
 
 Write-Step "Compiling $MainSource"
-& oscan $MainSource -o $OutputBin
+$oscanArgs = @($MainSource, '-o', $OutputBin)
+if ($Verbose) { $oscanArgs += '--warnings' }
+if ($Verbose) {
+    Write-Host "   oscan $($oscanArgs -join ' ')" -ForegroundColor DarkGray
+    & oscan @oscanArgs 2>&1 | ForEach-Object { Write-Host "   $_" -ForegroundColor DarkGray }
+} else {
+    & oscan @oscanArgs 2>&1 | Out-Null
+}
 if ($LASTEXITCODE -ne 0) { Write-Fail 'Compilation failed' }
 Write-Ok "Built $OutputBin"
 
