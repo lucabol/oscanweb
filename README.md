@@ -12,24 +12,9 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Minimal dependencies** — only the Oscan compiler is required
 - **Written entirely in Oscan** — no C code needed
 
-## Demo
+## Screenshot
 
-```
-┌─────────────────────────────────────────────────┐
-│ [http://example.com                            ]│
-├─────────────────────────────────────────────────┤
-│                                                 │
-│  Example Domain                                 │
-│                                                 │
-│  This domain is for use in illustrative         │
-│  examples in documents.                         │
-│                                                 │
-│  More information...                            │
-│                                                 │
-├─────────────────────────────────────────────────┤
-│ NORMAL | http://example.com | 42% | Links: 1   │
-└─────────────────────────────────────────────────┘
-```
+![OscaWeb Browser](Home.jpg)
 
 ## Prerequisites
 
