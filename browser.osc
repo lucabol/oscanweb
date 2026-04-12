@@ -675,8 +675,6 @@ fn! main() {
                         mode = BrowserMode::Search;
                         while len(search_buf) > 0 { pop(search_buf); };
                         search_active = true;
-                    } else if key == 105 {
-                        mode = BrowserMode::Insert;
                     } else if key == 63 {
                         show_help = not show_help;
                     } else if key == 72 {
@@ -962,7 +960,6 @@ fn! main() {
                 gfx_draw_text(hx + 10, ky, "r            Reload page", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "H / L        Back / forward", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "/            Search in page", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "i            Insert mode", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "Esc          Normal mode", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "?            Toggle this help", FG_COLOR); ky += LINE_H;
                 ky += LINE_H;
