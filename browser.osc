@@ -33,6 +33,7 @@ let HINT_FG: i32 = 0;
 let STATUS_BG: i32 = 40 * 65536 + 40 * 256 + 44;
 let HR_COLOR: i32 = 80 * 65536 + 80 * 256 + 85;
 let PRE_BG: i32 = 45 * 65536 + 45 * 256 + 50;
+let SEARCH_HL: i32 = 255 * 65536 + 255 * 256 + 100;
 
 let KEY_ESC: i32 = 27;
 let KEY_ENTER: i32 = 13;
@@ -190,7 +191,7 @@ fn html_is_skip_tag(tag: str) -> bool {
 
 fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 vp_top: i32, vp_width: i32, underline: bool,
-                links: [LinkInfo], href: str) {
+                links: [LinkInfo], href: str, search_q: str) {
     let words: [str] = str_split(text, " ");
     let max_x: i32 = vp_width - PAD;
 
@@ -227,7 +228,13 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
 
         if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
-            gfx_draw_text(x_ptr[0], draw_y, word, color);
+            // Highlight search matches in this word
+            if str_len(search_q) > 0 and str_contains(str_to_lower(word), search_q) {
+                gfx_fill_rect(x_ptr[0], draw_y, word_w, LINE_H, SEARCH_HL);
+                gfx_draw_text(x_ptr[0], draw_y, word, HINT_FG);
+            } else {
+                gfx_draw_text(x_ptr[0], draw_y, word, color);
+            };
             if underline {
                 gfx_line(x_ptr[0], draw_y + FONT_H + 1, x_ptr[0] + word_w, draw_y + FONT_H + 1, color);
             };
@@ -261,7 +268,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 indent: i32, in_pre: bool,
                 img_cache_idx: map, img_cache_data: [[i32]],
                 img_cache_w: [i32], img_cache_h: [i32],
-                base_scheme: str, base_host: str, base_port: i32, base_path: str) {
+                base_scheme: str, base_host: str, base_port: i32, base_path: str,
+                search_q: str) {
     let node: HtmlNode = nodes[idx];
 
     // ── Text node ──
@@ -281,7 +289,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             };
         } else {
             render_text(text, x_ptr, y_ptr, color, vp_top, vp_width,
-                        is_link, links, link_href);
+                        is_link, links, link_href, search_q);
         };
         return;
     };
@@ -406,7 +414,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     child_indent, child_pre,
                     img_cache_idx, img_cache_data,
                     img_cache_w, img_cache_h,
-                    base_scheme, base_host, base_port, base_path);
+                    base_scheme, base_host, base_port, base_path,
+                    search_q);
         child = nodes[child].next_sibling;
     };
 
@@ -475,6 +484,9 @@ fn! main() {
     // Search
     let mut search_buf: [i32] = [];
     let mut search_active: bool = false;
+    let mut search_query: str = "";
+    let mut search_match_y: [i32] = [];
+    let mut search_match_idx: i32 = 0;
 
     // Help
     let mut show_help: bool = false;
@@ -606,6 +618,8 @@ fn! main() {
                     if key == KEY_ESC {
                         show_help = false;
                         search_active = false;
+                        search_query = "";
+                        while len(search_match_y) > 0 { pop(search_match_y); };
                     } else if key == 106 {
                         scroll_y += LINE_H * 3;
                         if scroll_y > doc_height { scroll_y = doc_height; };
@@ -677,6 +691,26 @@ fn! main() {
                             nav_url = pop(history_forward);
                             needs_navigate = true;
                         };
+                    } else if key == 110 and search_active {
+                        // n — next search match
+                        if len(search_match_y) > 0 {
+                            search_match_idx += 1;
+                            if search_match_idx >= len(search_match_y) {
+                                search_match_idx = 0;
+                            };
+                            scroll_y = search_match_y[search_match_idx];
+                            if scroll_y < 0 { scroll_y = 0; };
+                        };
+                    } else if key == 78 and search_active {
+                        // N — previous search match
+                        if len(search_match_y) > 0 {
+                            search_match_idx -= 1;
+                            if search_match_idx < 0 {
+                                search_match_idx = len(search_match_y) - 1;
+                            };
+                            scroll_y = search_match_y[search_match_idx];
+                            if scroll_y < 0 { scroll_y = 0; };
+                        };
                     };
                     if key > 0 { last_key = key; };
                 },
@@ -737,8 +771,37 @@ fn! main() {
                 BrowserMode::Search => {
                     if key == KEY_ESC {
                         mode = BrowserMode::Normal;
+                        search_active = false;
+                        search_query = "";
+                        while len(search_match_y) > 0 { pop(search_match_y); };
                     } else if key == KEY_ENTER {
+                        search_query = str_to_lower(str_from_chars(search_buf));
+                        // Build match positions by scanning DOM text
+                        while len(search_match_y) > 0 { pop(search_match_y); };
+                        search_match_idx = 0;
+                        if str_len(search_query) > 0 and dom_root >= 0 {
+                            // Collect all text content and find matches by line
+                            let full_text: str = str_to_lower(html_get_text_content(dom_nodes, dom_root));
+                            let mut search_pos: i32 = 0;
+                            let mut match_line: i32 = 0;
+                            while search_pos < str_len(full_text) {
+                                let found: i32 = str_find(str_slice(full_text, search_pos, str_len(full_text)), search_query);
+                                if found < 0 { break; };
+                                // Estimate y position: count chars up to match, divide by chars_per_line
+                                let chars_per_line: i32 = (WIN_W - PAD * 2) / FONT_W;
+                                let char_pos: i32 = search_pos + found;
+                                let line_num: i32 = char_pos / max_i32(chars_per_line, 1);
+                                let match_y: i32 = line_num * LINE_H;
+                                push(search_match_y, match_y);
+                                search_pos = search_pos + found + str_len(search_query);
+                            };
+                        };
                         mode = BrowserMode::Normal;
+                        // Jump to first match
+                        if len(search_match_y) > 0 {
+                            scroll_y = search_match_y[0];
+                            if scroll_y < 0 { scroll_y = 0; };
+                        };
                     };
                     // push/pop for search_buf handled outside arena
                 },
@@ -807,7 +870,8 @@ fn! main() {
                             FG_COLOR, false, "", 0, false,
                             img_cache_idx, img_cache_data,
                             img_cache_w, img_cache_h,
-                            pg_u.scheme, pg_u.host, pg_u.port, pg_u.path);
+                            pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
+                            search_query);
                 doc_height = y_ptr[0];
             } else if str_len(error_msg) > 0 {
                 gfx_draw_text(PAD, CHROME_TOP + PAD, "Error loading page:", H1_COLOR);
@@ -855,17 +919,31 @@ fn! main() {
                 _ => {},
             };
 
-            // Search bar
-            match mode {
-                BrowserMode::Search => {
-                    let sy: i32 = WIN_H - CHROME_BOT - 24;
-                    gfx_fill_rect(0, sy, WIN_W, 24, STATUS_BG);
-                    gfx_draw_text(4, sy + 4, "/", FG_COLOR);
-                    let st: str = str_from_chars(search_buf);
-                    gfx_draw_text(12, sy + 4, st, FG_COLOR);
-                    gfx_fill_rect(12 + len(search_buf) * FONT_W, sy + 4, 1, FONT_H, FG_COLOR);
-                },
-                _ => {},
+            // Search bar (shown in Search mode and when search is active in Normal mode)
+            let show_search_bar: bool = match mode {
+                BrowserMode::Search => true,
+                _ => false,
+            };
+            if show_search_bar {
+                let sy: i32 = WIN_H - CHROME_BOT - 24;
+                gfx_fill_rect(0, sy, WIN_W, 24, STATUS_BG);
+                gfx_rect(0, sy, WIN_W, 1, UI_BORDER);
+                gfx_draw_text(4, sy + 8, "/", FG_COLOR);
+                let st: str = str_from_chars(search_buf);
+                gfx_draw_text(12, sy + 8, st, FG_COLOR);
+                // Cursor
+                gfx_fill_rect(12 + len(search_buf) * FONT_W, sy + 8, 1, FONT_H, FG_COLOR);
+            } else if search_active and str_len(search_query) > 0 {
+                // Show match count in status area
+                let sy: i32 = WIN_H - CHROME_BOT - 16;
+                let match_info: str = if len(search_match_y) > 0 {
+                    let idx_display: i32 = search_match_idx + 1;
+                    "/{search_query}  [{idx_display}/{len(search_match_y)}]  (n/N to navigate, Esc to clear)"
+                } else {
+                    "/{search_query}  [no matches]"
+                };
+                gfx_fill_rect(0, sy, WIN_W, 16, STATUS_BG);
+                gfx_draw_text(4, sy + 4, match_info, SEARCH_HL);
             };
 
             // Help overlay
