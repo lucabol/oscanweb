@@ -84,10 +84,10 @@ if (-not (Test-Path $BuildDir)) {
 
 Write-Step "Compiling $MainSource"
 $oscanArgs = @($MainSource, '-o', $OutputBin)
-if ($Verbose) { $oscanArgs += '--warnings' }
+if ($Verbose) { $oscanArgs += @('--warnings', '--verbose') }
 if ($Verbose) {
     Write-Host "   oscan $($oscanArgs -join ' ')" -ForegroundColor DarkGray
-    & oscan @oscanArgs 2>&1 | ForEach-Object { Write-Host "   $_" -ForegroundColor DarkGray }
+    & oscan @oscanArgs
 } else {
     & oscan @oscanArgs 2>&1 | Out-Null
 }
