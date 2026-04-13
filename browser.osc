@@ -34,6 +34,7 @@ let STATUS_BG: i32 = 40 * 65536 + 40 * 256 + 44;
 let HR_COLOR: i32 = 80 * 65536 + 80 * 256 + 85;
 let PRE_BG: i32 = 45 * 65536 + 45 * 256 + 50;
 let SEARCH_HL: i32 = 255 * 65536 + 255 * 256 + 100;
+let SEL_COLOR: i32 = 80 * 65536 + 140 * 256 + 220;
 
 let KEY_ESC: i32 = 27;
 let KEY_ENTER: i32 = 13;
@@ -56,6 +57,15 @@ struct LinkInfo {
     h: i32,
     href: str,
     label: str,
+}
+
+// ─── Word position map (for text selection) ─────────────
+
+struct WordInfo {
+    x: i32,
+    y: i32,
+    w: i32,
+    text: str,
 }
 
 // ─── Image Cache ─────────────────────────────────────────
@@ -191,7 +201,8 @@ fn html_is_skip_tag(tag: str) -> bool {
 
 fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 vp_top: i32, vp_width: i32, underline: bool,
-                links: [LinkInfo], href: str, search_q: str) {
+                links: [LinkInfo], href: str, search_q: str,
+                word_map: [WordInfo]) {
     let words: [str] = str_split(text, " ");
     let max_x: i32 = vp_width - PAD;
 
@@ -201,8 +212,8 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
     let mut link_w: i32 = 0;
     let mut link_recorded: bool = false;
 
-    for wi in 0..len(words) {
-        let word: str = words[wi];
+    for word_idx in 0..len(words) {
+        let word: str = words[word_idx];
         if str_len(word) == 0 { continue; };
 
         let word_w: i32 = str_len(word) * FONT_W;
@@ -238,6 +249,9 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
             if underline {
                 gfx_line(x_ptr[0], draw_y + FONT_H + 1, x_ptr[0] + word_w, draw_y + FONT_H + 1, color);
             };
+            // Record word position for text selection
+            let wi: WordInfo = WordInfo { x: x_ptr[0], y: draw_y, w: word_w, text: word };
+            push(word_map, wi);
         };
 
         // Update link bounds
@@ -269,7 +283,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 img_cache_idx: map, img_cache_data: [[i32]],
                 img_cache_w: [i32], img_cache_h: [i32],
                 base_scheme: str, base_host: str, base_port: i32, base_path: str,
-                search_q: str) {
+                search_q: str, word_map: [WordInfo]) {
     let node: HtmlNode = nodes[idx];
 
     // ── Text node ──
@@ -289,7 +303,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             };
         } else {
             render_text(text, x_ptr, y_ptr, color, vp_top, vp_width,
-                        is_link, links, link_href, search_q);
+                        is_link, links, link_href, search_q, word_map);
         };
         return;
     };
@@ -415,7 +429,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     img_cache_idx, img_cache_data,
                     img_cache_w, img_cache_h,
                     base_scheme, base_host, base_port, base_path,
-                    search_q);
+                    search_q, word_map);
         child = nodes[child].next_sibling;
     };
 
@@ -491,6 +505,14 @@ fn! main() {
     // Help
     let mut show_help: bool = false;
     let mut last_key: i32 = 0;
+
+    // Text selection
+    let mut word_map: [WordInfo] = [];
+    let mut sel_active: bool = false;
+    let mut sel_start_x: i32 = 0;
+    let mut sel_start_y: i32 = 0;
+    let mut sel_end_x: i32 = 0;
+    let mut sel_end_y: i32 = 0;
 
     // Navigation trigger
     let mut needs_navigate: bool = false;
@@ -847,29 +869,73 @@ fn! main() {
                 },
             };
 
-            // ── Mouse click on links ────────────────
+            // ── Mouse: selection and link clicks ──────
             let mx: i32 = canvas_mouse_x();
             let my: i32 = canvas_mouse_y();
             let mbtn: i32 = canvas_mouse_btn();
-            if band(mbtn, 1) == 1 and band(prev_btn, 1) == 0 {
-                for li in 0..len(page_links) {
-                    let lk: LinkInfo = page_links[li];
-                    if mx >= lk.x and mx < lk.x + lk.w and my >= lk.y and my < lk.y + lk.h {
-                        let href: str = lk.href;
-                        if str_len(href) > 0 {
-                            if str_contains(href, "://") {
-                                nav_url = href;
-                            } else {
-                                let cu: Url = url_parse(current_url);
-                                let rp: str = url_resolve_relative(cu.path, href);
-                                nav_url = url_to_string(Url {
-                                    scheme: cu.scheme, host: cu.host,
-                                    port: cu.port, path: rp,
-                                });
+            let btn_down: bool = band(mbtn, 1) == 1;
+            let was_down: bool = band(prev_btn, 1) == 1;
+
+            if btn_down and not was_down {
+                // Mouse down — start selection
+                sel_active = true;
+                sel_start_x = mx;
+                sel_start_y = my;
+                sel_end_x = mx;
+                sel_end_y = my;
+            } else if btn_down and was_down and sel_active {
+                // Mouse drag — update selection end
+                sel_end_x = mx;
+                sel_end_y = my;
+            } else if not btn_down and was_down and sel_active {
+                // Mouse up — finalize selection
+                sel_end_x = mx;
+                sel_end_y = my;
+
+                // If it was a click (not a drag), handle as link click
+                let dx: i32 = abs_i32(sel_end_x - sel_start_x);
+                let dy: i32 = abs_i32(sel_end_y - sel_start_y);
+                if dx < 4 and dy < 4 {
+                    // Click — check links
+                    sel_active = false;
+                    for li in 0..len(page_links) {
+                        let lk: LinkInfo = page_links[li];
+                        if mx >= lk.x and mx < lk.x + lk.w and my >= lk.y and my < lk.y + lk.h {
+                            let href: str = lk.href;
+                            if str_len(href) > 0 {
+                                if str_contains(href, "://") {
+                                    nav_url = href;
+                                } else {
+                                    let cu: Url = url_parse(current_url);
+                                    let rp: str = url_resolve_relative(cu.path, href);
+                                    nav_url = url_to_string(Url {
+                                        scheme: cu.scheme, host: cu.host,
+                                        port: cu.port, path: rp,
+                                    });
+                                };
+                                needs_navigate = true;
                             };
-                            needs_navigate = true;
+                            break;
                         };
-                        break;
+                    };
+                } else {
+                    // Drag completed — copy selected text to clipboard
+                    let sx0: i32 = min_i32(sel_start_x, sel_end_x);
+                    let sy0: i32 = min_i32(sel_start_y, sel_end_y);
+                    let sx1: i32 = max_i32(sel_start_x, sel_end_x);
+                    let sy1: i32 = max_i32(sel_start_y, sel_end_y);
+                    let mut sel_words: [str] = [];
+                    for si in 0..len(word_map) {
+                        let sw: WordInfo = word_map[si];
+                        let wcx: i32 = sw.x + sw.w / 2;
+                        let wcy: i32 = sw.y + LINE_H / 2;
+                        if wcx >= sx0 and wcx <= sx1 and wcy >= sy0 and wcy <= sy1 {
+                            push(sel_words, sw.text);
+                        };
+                    };
+                    if len(sel_words) > 0 {
+                        let sel_text: str = str_join(sel_words, " ");
+                        clipboard_set(sel_text);
                     };
                 };
             };
@@ -905,14 +971,33 @@ fn! main() {
                 let x_ptr: [i32] = [PAD];
                 let y_ptr: [i32] = [0];
                 let pg_u: Url = url_parse(current_url);
+                while len(word_map) > 0 { pop(word_map); };
                 render_node(dom_nodes, dom_root, x_ptr, y_ptr,
                             scroll_y, WIN_W, page_links,
                             FG_COLOR, false, "", 0, false,
                             img_cache_idx, img_cache_data,
                             img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
-                            search_query);
+                            search_query, word_map);
                 doc_height = y_ptr[0];
+
+                // Draw text selection highlight
+                if sel_active and (sel_start_x != sel_end_x or sel_start_y != sel_end_y) {
+                    let sx0: i32 = min_i32(sel_start_x, sel_end_x);
+                    let sy0: i32 = min_i32(sel_start_y, sel_end_y);
+                    let sx1: i32 = max_i32(sel_start_x, sel_end_x);
+                    let sy1: i32 = max_i32(sel_start_y, sel_end_y);
+                    for hi in 0..len(word_map) {
+                        let hw: WordInfo = word_map[hi];
+                        let wcx: i32 = hw.x + hw.w / 2;
+                        let wcy: i32 = hw.y + LINE_H / 2;
+                        // Check if word center is inside selection rectangle
+                        if wcx >= sx0 and wcx <= sx1 and wcy >= sy0 and wcy <= sy1 {
+                            gfx_fill_rect(hw.x, hw.y, hw.w, LINE_H, SEL_COLOR);
+                            gfx_draw_text(hw.x, hw.y, hw.text, HINT_FG);
+                        };
+                    };
+                };
             } else if str_len(error_msg) > 0 {
                 gfx_draw_text(PAD, CHROME_TOP + PAD, "Error loading page:", H1_COLOR);
                 gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 2, error_msg, FG_COLOR);
