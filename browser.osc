@@ -522,6 +522,19 @@ fn! main() {
             if key == 8 and len(url_buf) > 0 {
                 pop(url_buf);
             };
+            // Ctrl+V (key 22) — paste from clipboard
+            if key == 22 {
+                let paste_r: Result<str, str> = clipboard_get();
+                match paste_r {
+                    Result::Ok(clip) => {
+                        let clip_chars: [i32] = str_to_chars(str_trim(clip));
+                        for ci in 0..len(clip_chars) {
+                            push(url_buf, clip_chars[ci]);
+                        };
+                    },
+                    Result::Err(_e) => {},
+                };
+            };
         };
 
         // Handle search input outside arena
@@ -700,6 +713,11 @@ fn! main() {
                             if str_len(current_url) > 0 {
                                 clipboard_set(current_url);
                             };
+                        };
+                    } else if key == 3 {
+                        // Ctrl+C — copy current URL to clipboard
+                        if str_len(current_url) > 0 {
+                            clipboard_set(current_url);
                         };
                     } else if key == 72 {
                         if len(history_back) > 0 {
