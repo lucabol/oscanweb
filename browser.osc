@@ -938,6 +938,10 @@ fn! main() {
                 gfx_draw_text(ax, ay, "gg / G    Top / bottom of page", FG_COLOR); ay += LINE_H;
                 gfx_draw_text(ax, ay, "f         Follow link (hint mode)", FG_COLOR); ay += LINE_H;
                 gfx_draw_text(ax, ay, "o         Open URL", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "p         Paste URL and go", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "yy        Copy URL to clipboard", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Ctrl+V    Paste in URL bar", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Ctrl+C    Copy URL", FG_COLOR); ay += LINE_H;
                 gfx_draw_text(ax, ay, "H / L     Back / forward", FG_COLOR); ay += LINE_H;
                 gfx_draw_text(ax, ay, "/         Search in page", FG_COLOR); ay += LINE_H;
                 gfx_draw_text(ax, ay, "r         Reload", FG_COLOR); ay += LINE_H;
@@ -1002,6 +1006,8 @@ fn! main() {
                 gfx_draw_text(hx + 10, ky, "r            Reload page", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "p            Paste URL and go", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "yy           Copy URL to clipboard", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Ctrl+V       Paste in URL bar", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Ctrl+C       Copy URL", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "H / L        Back / forward", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "/            Search in page", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "Esc          Normal mode", FG_COLOR); ky += LINE_H;
