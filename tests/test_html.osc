@@ -136,5 +136,101 @@ fn! main() {
     let p7: i32 = nodes7[root7].first_child;
     assert_eq_str(html_get_attr(nodes7[p7], "class"), "", "get_attr missing returns empty");
 
+    // ── New entity decode tests ──
+    println("=== New Entity Decode Tests ===");
+
+    // mdash → — (U+2014 = 8212)
+    let mdash: str = html_entity_decode("hello&mdash;world");
+    let mdash_chars: [i32] = str_to_chars(mdash);
+    assert_eq_i32(mdash_chars[5], 8212, "entity decode mdash codepoint");
+
+    // ndash → – (U+2013 = 8211)
+    let ndash: str = html_entity_decode("1&ndash;10");
+    let ndash_chars: [i32] = str_to_chars(ndash);
+    assert_eq_i32(ndash_chars[1], 8211, "entity decode ndash codepoint");
+
+    // copy → © (U+00A9 = 169)
+    let copy_str: str = html_entity_decode("&copy;");
+    let copy_chars: [i32] = str_to_chars(copy_str);
+    assert_eq_i32(copy_chars[0], 169, "entity decode copy codepoint");
+
+    // bull → • (U+2022 = 8226)
+    let bull_str: str = html_entity_decode("&bull;");
+    let bull_chars: [i32] = str_to_chars(bull_str);
+    assert_eq_i32(bull_chars[0], 8226, "entity decode bull codepoint");
+
+    // euro → € (U+20AC = 8364)
+    let euro_str: str = html_entity_decode("&euro;");
+    let euro_chars: [i32] = str_to_chars(euro_str);
+    assert_eq_i32(euro_chars[0], 8364, "entity decode euro codepoint");
+
+    // hellip → … (U+2026 = 8230)
+    let hellip_str: str = html_entity_decode("&hellip;");
+    let hellip_chars: [i32] = str_to_chars(hellip_str);
+    assert_eq_i32(hellip_chars[0], 8230, "entity decode hellip codepoint");
+
+    // ── New DOM structure tests ──
+    println("=== New DOM Structure Tests ===");
+
+    // 16. Definition list
+    let mut nodes_dl: [HtmlNode] = [];
+    let root_dl: i32 = html_parse(nodes_dl, "<dl><dt>Term</dt><dd>Definition</dd></dl>");
+    let dl_idx: i32 = nodes_dl[root_dl].first_child;
+    assert_eq_str(nodes_dl[dl_idx].tag, "dl", "parse dl: tag is dl");
+    let dt_idx: i32 = nodes_dl[dl_idx].first_child;
+    assert_eq_str(nodes_dl[dt_idx].tag, "dt", "parse dl: first child is dt");
+    let dd_idx: i32 = nodes_dl[dt_idx].next_sibling;
+    assert_eq_str(nodes_dl[dd_idx].tag, "dd", "parse dl: second child is dd");
+    assert_eq_str(html_get_text_content(nodes_dl, dt_idx), "Term", "parse dl: dt text");
+    assert_eq_str(html_get_text_content(nodes_dl, dd_idx), "Definition", "parse dl: dd text");
+
+    // 17. Table structure
+    let mut nodes_tbl: [HtmlNode] = [];
+    let root_tbl: i32 = html_parse(nodes_tbl, "<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>");
+    let tbl_idx: i32 = nodes_tbl[root_tbl].first_child;
+    assert_eq_str(nodes_tbl[tbl_idx].tag, "table", "parse table: tag is table");
+    let tr1_idx: i32 = nodes_tbl[tbl_idx].first_child;
+    assert_eq_str(nodes_tbl[tr1_idx].tag, "tr", "parse table: first child is tr");
+    let th1_idx: i32 = nodes_tbl[tr1_idx].first_child;
+    assert_eq_str(nodes_tbl[th1_idx].tag, "th", "parse table: first cell is th");
+    assert_eq_str(html_get_text_content(nodes_tbl, th1_idx), "Name", "parse table: th text");
+    let tr2_idx: i32 = nodes_tbl[tr1_idx].next_sibling;
+    assert_eq_str(nodes_tbl[tr2_idx].tag, "tr", "parse table: second row is tr");
+    let td1_idx: i32 = nodes_tbl[tr2_idx].first_child;
+    assert_eq_str(nodes_tbl[td1_idx].tag, "td", "parse table: data cell is td");
+    assert_eq_str(html_get_text_content(nodes_tbl, td1_idx), "Alice", "parse table: td text");
+
+    // 18. Blockquote
+    let mut nodes_bq: [HtmlNode] = [];
+    let root_bq: i32 = html_parse(nodes_bq, "<blockquote>Quoted text</blockquote>");
+    let bq_idx: i32 = nodes_bq[root_bq].first_child;
+    assert_eq_str(nodes_bq[bq_idx].tag, "blockquote", "parse blockquote: tag");
+    assert_eq_str(html_get_text_content(nodes_bq, bq_idx), "Quoted text", "parse blockquote: text");
+
+    // 19. Figure/figcaption
+    let mut nodes_fig: [HtmlNode] = [];
+    let root_fig: i32 = html_parse(nodes_fig, "<figure><figcaption>Caption</figcaption></figure>");
+    let fig_idx: i32 = nodes_fig[root_fig].first_child;
+    assert_eq_str(nodes_fig[fig_idx].tag, "figure", "parse figure: tag");
+    let fc_idx: i32 = nodes_fig[fig_idx].first_child;
+    assert_eq_str(nodes_fig[fc_idx].tag, "figcaption", "parse figure: figcaption tag");
+    assert_eq_str(html_get_text_content(nodes_fig, fc_idx), "Caption", "parse figure: figcaption text");
+
+    // 20. Ordered list
+    let mut nodes_ol: [HtmlNode] = [];
+    let root_ol: i32 = html_parse(nodes_ol, "<ol><li>First</li><li>Second</li></ol>");
+    let ol_idx: i32 = nodes_ol[root_ol].first_child;
+    assert_eq_str(nodes_ol[ol_idx].tag, "ol", "parse ol: tag");
+    assert_eq_i32(count_children(nodes_ol, ol_idx), 2, "parse ol: 2 li children");
+
+    // 21. Mark tag
+    let mut nodes_mk: [HtmlNode] = [];
+    let root_mk: i32 = html_parse(nodes_mk, "<p>Some <mark>highlighted</mark> text</p>");
+    let p_mk: i32 = nodes_mk[root_mk].first_child;
+    assert_eq_str(nodes_mk[p_mk].tag, "p", "parse mark: p tag");
+    let mark_idx: i32 = nth_child(nodes_mk, p_mk, 1);
+    assert_eq_str(nodes_mk[mark_idx].tag, "mark", "parse mark: mark tag");
+    assert_eq_str(html_get_text_content(nodes_mk, mark_idx), "highlighted", "parse mark: text");
+
     println("=== HTML Tests Complete ===");
 }

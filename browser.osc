@@ -35,6 +35,12 @@ let HR_COLOR: i32 = 80 * 65536 + 80 * 256 + 85;
 let PRE_BG: i32 = 45 * 65536 + 45 * 256 + 50;
 let SEARCH_HL: i32 = 255 * 65536 + 255 * 256 + 100;
 let SEL_COLOR: i32 = 80 * 65536 + 140 * 256 + 220;
+let QUOTE_COLOR: i32 = 160 * 65536 + 170 * 256 + 190;
+let QUOTE_BAR: i32 = 80 * 65536 + 120 * 256 + 200;
+let MARK_BG: i32 = 200 * 65536 + 180 * 256 + 50;
+let DT_COLOR: i32 = 240 * 65536 + 240 * 256 + 255;
+let FIGCAP_COLOR: i32 = 140 * 65536 + 140 * 256 + 150;
+let TABLE_BORDER: i32 = 90 * 65536 + 90 * 256 + 100;
 
 let KEY_ESC: i32 = 27;
 let KEY_ENTER: i32 = 13;
@@ -188,7 +194,9 @@ fn html_is_block_tag(tag: str) -> bool {
     str_eq(tag, "ol") or str_eq(tag, "li") or str_eq(tag, "pre") or
     str_eq(tag, "blockquote") or str_eq(tag, "table") or str_eq(tag, "tr") or
     str_eq(tag, "section") or str_eq(tag, "article") or str_eq(tag, "nav") or
-    str_eq(tag, "header") or str_eq(tag, "footer") or str_eq(tag, "main")
+    str_eq(tag, "header") or str_eq(tag, "footer") or str_eq(tag, "main") or
+    str_eq(tag, "dl") or str_eq(tag, "dt") or str_eq(tag, "dd") or
+    str_eq(tag, "figure") or str_eq(tag, "figcaption")
 }
 
 fn html_is_skip_tag(tag: str) -> bool {
@@ -202,7 +210,7 @@ fn html_is_skip_tag(tag: str) -> bool {
 fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 vp_top: i32, vp_width: i32, underline: bool,
                 links: [LinkInfo], href: str, search_q: str,
-                word_map: [WordInfo]) {
+                word_map: [WordInfo], strikethrough: bool, mark_bg: i32) {
     let words: [str] = str_split(text, " ");
     let max_x: i32 = vp_width - PAD;
 
@@ -239,6 +247,10 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
 
         if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+            // Mark background highlight
+            if mark_bg >= 0 {
+                gfx_fill_rect(x_ptr[0], draw_y, word_w, LINE_H, mark_bg);
+            };
             // Highlight search matches in this word
             if str_len(search_q) > 0 and str_contains(str_to_lower(word), search_q) {
                 gfx_fill_rect(x_ptr[0], draw_y, word_w, LINE_H, SEARCH_HL);
@@ -248,6 +260,9 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
             };
             if underline {
                 gfx_line(x_ptr[0], draw_y + FONT_H + 1, x_ptr[0] + word_w, draw_y + FONT_H + 1, color);
+            };
+            if strikethrough {
+                gfx_line(x_ptr[0], draw_y + FONT_H / 2, x_ptr[0] + word_w, draw_y + FONT_H / 2, color);
             };
             // Record word position for text selection
             let wi: WordInfo = WordInfo { x: x_ptr[0], y: draw_y, w: word_w, text: word };
@@ -283,7 +298,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 img_cache_idx: map, img_cache_data: [[i32]],
                 img_cache_w: [i32], img_cache_h: [i32],
                 base_scheme: str, base_host: str, base_port: i32, base_path: str,
-                search_q: str, word_map: [WordInfo]) {
+                search_q: str, word_map: [WordInfo],
+                strikethrough: bool, force_underline: bool, mark_bg: i32,
+                ol_counter: [i32]) {
     let node: HtmlNode = nodes[idx];
 
     // ── Text node ──
@@ -303,7 +320,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             };
         } else {
             render_text(text, x_ptr, y_ptr, color, vp_top, vp_width,
-                        is_link, links, link_href, search_q, word_map);
+                        is_link or force_underline, links, link_href, search_q, word_map,
+                        strikethrough, mark_bg);
         };
         return;
     };
@@ -384,12 +402,158 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         return;
     };
 
+    // TABLE — column-aligned rendering
+    if str_eq(tag, "table") {
+        // Measure pass: count max columns across all rows
+        let mut max_cols: i32 = 0;
+        let mut tr_node: i32 = node.first_child;
+        while tr_node != -1 {
+            let tr_tag: str = nodes[tr_node].tag;
+            // Handle tbody/thead/tfoot wrappers
+            if str_eq(tr_tag, "tbody") or str_eq(tr_tag, "thead") or str_eq(tr_tag, "tfoot") {
+                let mut inner_tr: i32 = nodes[tr_node].first_child;
+                while inner_tr != -1 {
+                    if str_eq(nodes[inner_tr].tag, "tr") {
+                        let mut col_count: i32 = 0;
+                        let mut td_node: i32 = nodes[inner_tr].first_child;
+                        while td_node != -1 {
+                            let td_tag: str = nodes[td_node].tag;
+                            if str_eq(td_tag, "td") or str_eq(td_tag, "th") {
+                                col_count = col_count + 1;
+                            };
+                            td_node = nodes[td_node].next_sibling;
+                        };
+                        if col_count > max_cols { max_cols = col_count; };
+                    };
+                    inner_tr = nodes[inner_tr].next_sibling;
+                };
+            } else if str_eq(tr_tag, "tr") {
+                let mut col_count2: i32 = 0;
+                let mut td_node2: i32 = nodes[tr_node].first_child;
+                while td_node2 != -1 {
+                    let td_tag2: str = nodes[td_node2].tag;
+                    if str_eq(td_tag2, "td") or str_eq(td_tag2, "th") {
+                        col_count2 = col_count2 + 1;
+                    };
+                    td_node2 = nodes[td_node2].next_sibling;
+                };
+                if col_count2 > max_cols { max_cols = col_count2; };
+            };
+            tr_node = nodes[tr_node].next_sibling;
+        };
+
+        if max_cols == 0 { max_cols = 1; };
+        let avail_w: i32 = vp_width - indent - PAD * 2;
+        let col_w: i32 = avail_w / max_cols;
+
+        // Draw top border
+        let tbl_top_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        if tbl_top_y >= CHROME_TOP and tbl_top_y < WIN_H - CHROME_BOT {
+            gfx_line(indent + PAD, tbl_top_y, indent + PAD + avail_w, tbl_top_y, TABLE_BORDER);
+        };
+        y_ptr[0] = y_ptr[0] + 2;
+
+        let mut is_first_row: bool = true;
+
+        // Render pass: iterate rows and cells
+        let mut tr_walk: i32 = node.first_child;
+        while tr_walk != -1 {
+            let trw_tag: str = nodes[tr_walk].tag;
+            // Handle tbody/thead/tfoot wrappers
+            if str_eq(trw_tag, "tbody") or str_eq(trw_tag, "thead") or str_eq(trw_tag, "tfoot") {
+                let mut inner_row: i32 = nodes[tr_walk].first_child;
+                while inner_row != -1 {
+                    if str_eq(nodes[inner_row].tag, "tr") {
+                        let mut ci: i32 = 0;
+                        let mut cell_node: i32 = nodes[inner_row].first_child;
+                        while cell_node != -1 {
+                            let cell_tag: str = nodes[cell_node].tag;
+                            if str_eq(cell_tag, "td") or str_eq(cell_tag, "th") {
+                                let cell_x: i32 = indent + PAD + ci * col_w + 4;
+                                let cell_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+                                if cell_y + FONT_H >= CHROME_TOP and cell_y < WIN_H - CHROME_BOT {
+                                    let cell_text: str = html_get_text_content(nodes, cell_node);
+                                    // Truncate to fit column
+                                    let max_chars: i32 = (col_w - 8) / FONT_W;
+                                    let mut disp_text: str = cell_text;
+                                    if str_len(cell_text) > max_chars and max_chars > 3 {
+                                        disp_text = str_concat(str_slice(cell_text, 0, max_chars - 2), "..");
+                                    };
+                                    let cell_color: i32 = if str_eq(cell_tag, "th") { BOLD_COLOR } else { color };
+                                    gfx_draw_text(cell_x, cell_y, disp_text, cell_color);
+                                };
+                                ci = ci + 1;
+                            };
+                            cell_node = nodes[cell_node].next_sibling;
+                        };
+                        y_ptr[0] = y_ptr[0] + LINE_H;
+                        // Draw separator after first row (header)
+                        if is_first_row {
+                            let sep_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+                            if sep_y >= CHROME_TOP and sep_y < WIN_H - CHROME_BOT {
+                                gfx_line(indent + PAD, sep_y, indent + PAD + avail_w, sep_y, TABLE_BORDER);
+                            };
+                            y_ptr[0] = y_ptr[0] + 2;
+                            is_first_row = false;
+                        };
+                    };
+                    inner_row = nodes[inner_row].next_sibling;
+                };
+            } else if str_eq(trw_tag, "tr") {
+                let mut ci2: i32 = 0;
+                let mut cell_walk: i32 = nodes[tr_walk].first_child;
+                while cell_walk != -1 {
+                    let cw_tag: str = nodes[cell_walk].tag;
+                    if str_eq(cw_tag, "td") or str_eq(cw_tag, "th") {
+                        let cx: i32 = indent + PAD + ci2 * col_w + 4;
+                        let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+                        if cy + FONT_H >= CHROME_TOP and cy < WIN_H - CHROME_BOT {
+                            let ct: str = html_get_text_content(nodes, cell_walk);
+                            let mc: i32 = (col_w - 8) / FONT_W;
+                            let mut dt: str = ct;
+                            if str_len(ct) > mc and mc > 3 {
+                                dt = str_concat(str_slice(ct, 0, mc - 2), "..");
+                            };
+                            let cc: i32 = if str_eq(cw_tag, "th") { BOLD_COLOR } else { color };
+                            gfx_draw_text(cx, cy, dt, cc);
+                        };
+                        ci2 = ci2 + 1;
+                    };
+                    cell_walk = nodes[cell_walk].next_sibling;
+                };
+                y_ptr[0] = y_ptr[0] + LINE_H;
+                if is_first_row {
+                    let sep_y2: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+                    if sep_y2 >= CHROME_TOP and sep_y2 < WIN_H - CHROME_BOT {
+                        gfx_line(indent + PAD, sep_y2, indent + PAD + avail_w, sep_y2, TABLE_BORDER);
+                    };
+                    y_ptr[0] = y_ptr[0] + 2;
+                    is_first_row = false;
+                };
+            };
+            tr_walk = nodes[tr_walk].next_sibling;
+        };
+
+        // Draw bottom border
+        let tbl_bot_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        if tbl_bot_y >= CHROME_TOP and tbl_bot_y < WIN_H - CHROME_BOT {
+            gfx_line(indent + PAD, tbl_bot_y, indent + PAD + avail_w, tbl_bot_y, TABLE_BORDER);
+        };
+        y_ptr[0] = y_ptr[0] + LINE_H;
+        x_ptr[0] = indent + PAD;
+        return;
+    };
+
     // Determine child properties
     let mut child_color: i32 = color;
     let mut child_link: bool = is_link;
     let mut child_href: str = link_href;
     let mut child_indent: i32 = indent;
     let mut child_pre: bool = in_pre;
+    let mut child_strike: bool = strikethrough;
+    let mut child_uline: bool = force_underline;
+    let mut child_markbg: i32 = mark_bg;
+    let mut child_ol: [i32] = ol_counter;
 
     if str_eq(tag, "h1") { child_color = H1_COLOR; }
     else if str_eq(tag, "h2") { child_color = H2_COLOR; }
@@ -397,7 +561,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         child_color = H3_COLOR;
     }
     else if str_eq(tag, "b") or str_eq(tag, "strong") { child_color = BOLD_COLOR; }
-    else if str_eq(tag, "em") or str_eq(tag, "i") { child_color = EM_COLOR; }
+    else if str_eq(tag, "em") or str_eq(tag, "i") or str_eq(tag, "cite") { child_color = EM_COLOR; }
     else if str_eq(tag, "a") {
         child_color = LINK_COLOR;
         child_link = true;
@@ -406,18 +570,50 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     else if str_eq(tag, "pre") or str_eq(tag, "code") {
         child_color = CODE_FG; child_pre = true;
     }
-    else if str_eq(tag, "ul") or str_eq(tag, "ol") {
+    else if str_eq(tag, "ul") {
         child_indent = indent + 20;
-    };
+        child_ol = [0];
+    }
+    else if str_eq(tag, "ol") {
+        child_indent = indent + 20;
+        child_ol = [1];
+    }
+    else if str_eq(tag, "blockquote") {
+        child_indent = indent + 30;
+        child_color = QUOTE_COLOR;
+        // Draw left accent bar
+        let bar_x: i32 = indent + PAD + 10;
+        let bar_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        if bar_y >= CHROME_TOP and bar_y < WIN_H - CHROME_BOT {
+            gfx_line(bar_x, bar_y, bar_x, bar_y + LINE_H * 2, QUOTE_BAR);
+        };
+    }
+    else if str_eq(tag, "del") or str_eq(tag, "s") { child_strike = true; }
+    else if str_eq(tag, "u") or str_eq(tag, "ins") { child_uline = true; }
+    else if str_eq(tag, "mark") { child_markbg = MARK_BG; }
+    else if str_eq(tag, "dt") { child_color = DT_COLOR; }
+    else if str_eq(tag, "dd") { child_indent = indent + 30; }
+    else if str_eq(tag, "figure") { child_indent = indent + 20; }
+    else if str_eq(tag, "figcaption") { child_color = FIGCAP_COLOR; };
 
-    // List item bullet
+    // List item: numbered or bulleted
     if str_eq(tag, "li") {
         x_ptr[0] = indent + PAD;
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
-            gfx_draw_text(x_ptr[0], draw_y, "* ", child_color);
+        if ol_counter[0] > 0 {
+            let num_str: str = i32_to_str(ol_counter[0]);
+            let li_label: str = str_concat(num_str, ". ");
+            if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                gfx_draw_text(x_ptr[0], draw_y, li_label, child_color);
+            };
+            x_ptr[0] = x_ptr[0] + str_len(li_label) * FONT_W;
+            ol_counter[0] = ol_counter[0] + 1;
+        } else {
+            if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                gfx_draw_text(x_ptr[0], draw_y, "* ", child_color);
+            };
+            x_ptr[0] = x_ptr[0] + 2 * FONT_W;
         };
-        x_ptr[0] = x_ptr[0] + 2 * FONT_W;
     };
 
     // Render children via sibling walk
@@ -429,7 +625,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     img_cache_idx, img_cache_data,
                     img_cache_w, img_cache_h,
                     base_scheme, base_host, base_port, base_path,
-                    search_q, word_map);
+                    search_q, word_map,
+                    child_strike, child_uline, child_markbg, child_ol);
         child = nodes[child].next_sibling;
     };
 
@@ -978,7 +1175,8 @@ fn! main() {
                             img_cache_idx, img_cache_data,
                             img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
-                            search_query, word_map);
+                            search_query, word_map,
+                            false, false, -1, [0]);
                 doc_height = y_ptr[0];
 
                 // Draw text selection highlight

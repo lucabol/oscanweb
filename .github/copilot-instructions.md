@@ -56,6 +56,17 @@ struct HtmlNode {
 
 The renderer walks the flat DOM tree recursively via `render_node()`. It uses `[i32]` single-element arrays as mutable position pointers (`x_ptr`, `y_ptr`) since Oscan has value semantics for structs.
 
+`render_node` takes additional style parameters (`strikethrough`, `force_underline`, `mark_bg`, `ol_counter`) that propagate through the tree. When adding new tag support, extend the if/else chain in the "Determine child properties" section and pass new values to children.
+
+**Supported tags with specific rendering:**
+- **Text styling:** `b`/`strong`, `em`/`i`/`cite`, `del`/`s` (strikethrough), `u`/`ins` (underline), `mark` (yellow background), `code`/`pre`
+- **Structure:** `h1`–`h6`, `p`, `div`, `blockquote` (indented with accent bar), `hr`, `br`
+- **Lists:** `ul` (bullets), `ol` (numbered), `li`, `dl`/`dt`/`dd`
+- **Links & images:** `a` (clickable + underlined), `img` (fetched, decoded, cached, scaled)
+- **Tables:** `table`/`tr`/`td`/`th` (column-aligned with borders; handles `thead`/`tbody`/`tfoot` wrappers)
+- **Semantic blocks:** `section`, `article`, `nav`, `header`, `footer`, `main`, `figure`/`figcaption`
+- **Skipped:** `head`, `script`, `style`, `meta`, `link`, `title`, `noscript`
+
 Key data collected during rendering:
 - `page_links: [LinkInfo]` — clickable link hit areas (one per `<a>` element, not per word)
 - `word_map: [WordInfo]` — position of every rendered word (for text selection)
