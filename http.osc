@@ -40,17 +40,19 @@ fn! http_parse_headers(header_block: str) -> map {
 
 // TLS fetch in its own function so defer tls_close is at function scope
 fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
+    println("[http] TLS connecting to {host}:{port}");
     let conn_result: Result<i32, str> = tls_connect(host, port);
     let mut handle: i32 = 0;
     match conn_result {
-        Result::Ok(h) => { handle = h; },
+        Result::Ok(h) => { handle = h; println("[http] TLS connected, handle={h}"); },
         Result::Err(e) => { return http_make_error("TLS connection failed: {e}"); },
     };
     defer tls_close(handle);
 
+    println("[http] Sending request...");
     let send_result: Result<i32, str> = tls_send(handle, request);
     match send_result {
-        Result::Ok(_n) => {},
+        Result::Ok(_n) => { println("[http] Request sent"); },
         Result::Err(e) => { return http_make_error("TLS send failed: {e}"); },
     };
 
@@ -61,10 +63,17 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     let mut content_length: i32 = -1;
     let mut body_start: i32 = 0;
     let mut done: bool = false;
+    let mut recv_count: i32 = 0;
 
     while not done {
+        println("[http] tls_recv #{recv_count} (total={str_len(raw_response)} bytes)...");
         let chunk: str = tls_recv(handle, 8192);
-        if str_len(chunk) == 0 {
+        let chunk_len: i32 = str_len(chunk);
+        println("[http] tls_recv #{recv_count} returned {chunk_len} bytes");
+        recv_count = recv_count + 1;
+
+        if chunk_len == 0 {
+            println("[http] EOF from tls_recv");
             done = true;
         } else {
             raw_response = str_concat(raw_response, chunk);
@@ -90,19 +99,23 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
                             Result::Err(_e) => {},
                         };
                     };
+                    println("[http] Headers found. content_length={content_length}, body_start={body_start}");
                 };
             };
 
             // If we know Content-Length, stop once we have enough body bytes
             if headers_done and content_length >= 0 {
                 let body_received: i32 = str_len(raw_response) - body_start;
+                println("[http] Body progress: {body_received}/{content_length}");
                 if body_received >= content_length {
+                    println("[http] Body complete, stopping recv");
                     done = true;
                 };
             };
         };
     };
 
+    println("[http] TLS fetch done, total={str_len(raw_response)} bytes");
     HttpResponse {
         status_code: 200,
         content_type: "",
@@ -157,6 +170,7 @@ fn! http_get_plain(host: str, port: i32, request: str) -> HttpResponse {
 }
 
 fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
+    println("[http] GET {host}:{port}{path} tls={use_tls}");
     let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\n\r\n";
 
     let mut raw_response: str = "";
