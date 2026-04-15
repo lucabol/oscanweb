@@ -738,7 +738,7 @@ fn! main() {
         };
         if url_focused and url_is_insert {
             // If select-all is active, first printable key or backspace replaces all
-            if url_select_all and key > 0 and key != 1001 and key != 1002 and key != 1003 and key != 1004 {
+            if url_select_all and key > 0 and key != 1001 and key != 1002 and key != 1003 and key != 1004 and key != KEY_ENTER and key != KEY_ESC {
                 if key >= 32 and key <= 126 {
                     while len(url_buf) > 0 { pop(url_buf); };
                     push(url_buf, key);
