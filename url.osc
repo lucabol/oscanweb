@@ -55,6 +55,24 @@ fn! url_parse(raw: str) -> Url {
         path = "/";
     };
 
+    // Strip fragment (#...) — it's client-side only, never sent to server
+    let hash_pos: i32 = str_find(path, "#");
+    if hash_pos >= 0 {
+        path = str_slice(path, 0, hash_pos);
+        if str_len(path) == 0 {
+            path = "/";
+        };
+    };
+
+    // Strip query string (?...) for now — we don't support forms
+    let qmark_pos: i32 = str_find(path, "?");
+    if qmark_pos >= 0 {
+        path = str_slice(path, 0, qmark_pos);
+        if str_len(path) == 0 {
+            path = "/";
+        };
+    };
+
     Url { scheme: scheme, host: host, port: port, path: path }
 }
 

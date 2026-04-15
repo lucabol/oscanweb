@@ -76,5 +76,19 @@ fn! main() {
     let r3: str = url_resolve_relative("/", "page.html");
     assert_eq_str(r3, "/page.html", "resolve from root");
 
+    // Fragment stripping
+    let uf1: Url = url_parse("https://example.com/page#section");
+    assert_eq_str(uf1.path, "/page", "fragment stripped from path");
+
+    let uf2: Url = url_parse("https://example.com/page#");
+    assert_eq_str(uf2.path, "/page", "empty fragment stripped");
+
+    let uf3: Url = url_parse("https://example.com/#top");
+    assert_eq_str(uf3.path, "/", "fragment at root gives /");
+
+    // Query string stripping
+    let uq1: Url = url_parse("https://example.com/search?q=test");
+    assert_eq_str(uq1.path, "/search", "query string stripped");
+
     println("=== URL Tests Complete ===");
 }
