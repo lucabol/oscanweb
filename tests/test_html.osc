@@ -232,5 +232,27 @@ fn! main() {
     assert_eq_str(nodes_mk[mark_idx].tag, "mark", "parse mark: mark tag");
     assert_eq_str(html_get_text_content(nodes_mk, mark_idx), "highlighted", "parse mark: text");
 
+    // 22. Auto-close: unclosed dt/dd (CERN-style HTML)
+    let mut nodes_ac: [HtmlNode] = [];
+    let root_ac: i32 = html_parse(nodes_ac, "<dl><dt>A<dd>B<dt>C<dd>D</dl>");
+    let dl_ac: i32 = nodes_ac[root_ac].first_child;
+    assert_eq_str(nodes_ac[dl_ac].tag, "dl", "autoclose dl: tag is dl");
+    // dt/dd should be siblings under dl, not nested
+    assert_eq_i32(count_children(nodes_ac, dl_ac), 4, "autoclose dl: 4 children (dt dd dt dd)");
+    let ac_dt1: i32 = nth_child(nodes_ac, dl_ac, 0);
+    let ac_dd1: i32 = nth_child(nodes_ac, dl_ac, 1);
+    let ac_dt2: i32 = nth_child(nodes_ac, dl_ac, 2);
+    let ac_dd2: i32 = nth_child(nodes_ac, dl_ac, 3);
+    assert_eq_str(nodes_ac[ac_dt1].tag, "dt", "autoclose: child 0 is dt");
+    assert_eq_str(nodes_ac[ac_dd1].tag, "dd", "autoclose: child 1 is dd");
+    assert_eq_str(nodes_ac[ac_dt2].tag, "dt", "autoclose: child 2 is dt");
+    assert_eq_str(nodes_ac[ac_dd2].tag, "dd", "autoclose: child 3 is dd");
+
+    // 23. Auto-close: unclosed li
+    let mut nodes_ali: [HtmlNode] = [];
+    let root_ali: i32 = html_parse(nodes_ali, "<ul><li>one<li>two<li>three</ul>");
+    let ul_ali: i32 = nodes_ali[root_ali].first_child;
+    assert_eq_i32(count_children(nodes_ali, ul_ali), 3, "autoclose li: 3 children");
+
     println("=== HTML Tests Complete ===");
 }

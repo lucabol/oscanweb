@@ -356,6 +356,39 @@ fn! html_parse(nodes: [HtmlNode], source: str) -> i32 {
 
             if i < n and chars[i] == 62 { i += 1; };
 
+            // Auto-close implicit-close elements before pushing
+            // <dt>/<dd> auto-close a previous <dt>/<dd> back to the parent <dl>
+            // <li> auto-closes a previous <li> back to the parent <ul>/<ol>
+            // <p> auto-closes a previous <p>
+            if str_eq(tag_name, "dt") or str_eq(tag_name, "dd") {
+                let mut ac: i32 = len(stack) - 1;
+                while ac > 0 {
+                    let ac_tag: str = nodes[stack[ac]].tag;
+                    if str_eq(ac_tag, "dl") { break; };
+                    if str_eq(ac_tag, "dt") or str_eq(ac_tag, "dd") {
+                        while len(stack) > ac { pop(stack); };
+                        break;
+                    };
+                    ac = ac - 1;
+                };
+            } else if str_eq(tag_name, "li") {
+                let mut ac2: i32 = len(stack) - 1;
+                while ac2 > 0 {
+                    let ac2_tag: str = nodes[stack[ac2]].tag;
+                    if str_eq(ac2_tag, "ul") or str_eq(ac2_tag, "ol") { break; };
+                    if str_eq(ac2_tag, "li") {
+                        while len(stack) > ac2 { pop(stack); };
+                        break;
+                    };
+                    ac2 = ac2 - 1;
+                };
+            } else if str_eq(tag_name, "p") {
+                let top_tag: str = nodes[stack[len(stack) - 1]].tag;
+                if str_eq(top_tag, "p") {
+                    pop(stack);
+                };
+            };
+
             // Create element node
             let elem: HtmlNode = html_node_element(tag_name, tag_attrs);
             push(nodes, elem);
