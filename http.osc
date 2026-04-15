@@ -54,15 +54,52 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
         Result::Err(e) => { return http_make_error("TLS send failed: {e}"); },
     };
 
-    // Receive response using tls_recv (bulk reads)
+    // Receive response — parse headers to find Content-Length so we know
+    // when the body is complete (some TLS servers never signal EOF).
     let mut raw_response: str = "";
+    let mut headers_done: bool = false;
+    let mut content_length: i32 = -1;
+    let mut body_start: i32 = 0;
     let mut done: bool = false;
+
     while not done {
         let chunk: str = tls_recv(handle, 8192);
         if str_len(chunk) == 0 {
             done = true;
         } else {
             raw_response = str_concat(raw_response, chunk);
+
+            // Once we find the header/body separator, parse Content-Length
+            if not headers_done {
+                let sep: i32 = str_find(raw_response, "\r\n\r\n");
+                if sep >= 0 {
+                    headers_done = true;
+                    body_start = sep + 4;
+                    let header_block: str = str_to_lower(str_slice(raw_response, 0, sep));
+                    let cl_pos: i32 = str_find(header_block, "content-length: ");
+                    if cl_pos >= 0 {
+                        let after_cl: str = str_slice(header_block, cl_pos + 16, str_len(header_block));
+                        let cl_end: i32 = str_find(after_cl, "\r\n");
+                        let mut cl_str: str = after_cl;
+                        if cl_end >= 0 {
+                            cl_str = str_slice(after_cl, 0, cl_end);
+                        };
+                        let cl_result: Result<i32, str> = parse_i32(str_trim(cl_str));
+                        match cl_result {
+                            Result::Ok(cl) => { content_length = cl; },
+                            Result::Err(_e) => {},
+                        };
+                    };
+                };
+            };
+
+            // If we know Content-Length, stop once we have enough body bytes
+            if headers_done and content_length >= 0 {
+                let body_received: i32 = str_len(raw_response) - body_start;
+                if body_received >= content_length {
+                    done = true;
+                };
+            };
         };
     };
 

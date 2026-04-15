@@ -1,0 +1,170 @@
+// Headless rendering test — exercises parse + DOM walk
+// without needing a canvas window. Catches crashes in the pipeline.
+
+use "../html.osc"
+
+fn! assert_true(cond: bool, test_name: str) {
+    if cond {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name}");
+    };
+}
+
+// Simulate render_node's recursive DOM walk (no gfx calls)
+fn! walk_node(nodes: [HtmlNode], idx: i32, depth: i32, indent: i32, ol_ctr: [i32]) {
+    if idx < 0 or idx >= len(nodes) {
+        println("ERROR: invalid node index {idx}");
+        return;
+    };
+    let node: HtmlNode = nodes[idx];
+
+    if node.is_text {
+        return;
+    };
+
+    let tag: str = node.tag;
+
+    // Skip tags (same as browser)
+    if str_eq(tag, "head") or str_eq(tag, "script") or str_eq(tag, "style") or
+       str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title") or
+       str_eq(tag, "noscript") {
+        return;
+    };
+
+    // Simulate child property computation (same as render_node)
+    let mut child_indent: i32 = indent;
+    let mut child_ol: [i32] = ol_ctr;
+
+    if str_eq(tag, "ul") {
+        child_indent = indent + 20;
+        child_ol = [0];
+    } else if str_eq(tag, "ol") {
+        child_indent = indent + 20;
+        child_ol = [1];
+    } else if str_eq(tag, "blockquote") {
+        child_indent = indent + 30;
+    } else if str_eq(tag, "dd") {
+        child_indent = indent + 30;
+    } else if str_eq(tag, "figure") {
+        child_indent = indent + 20;
+    };
+
+    // Simulate li handling
+    if str_eq(tag, "li") {
+        if ol_ctr[0] > 0 {
+            let num_s: str = i32_to_str(ol_ctr[0]);
+            let li_lbl: str = str_concat(num_s, ". ");
+            // Just access the label to test i32_to_str
+            let lbl_len: i32 = str_len(li_lbl);
+            if lbl_len <= 0 {
+                println("ERROR: empty li label");
+            };
+            ol_ctr[0] = ol_ctr[0] + 1;
+        };
+    };
+
+    // Table handling (same pattern as render_node)
+    if str_eq(tag, "table") {
+        let mut max_cols: i32 = 0;
+        let mut tr_n: i32 = node.first_child;
+        while tr_n != -1 {
+            let tr_t: str = nodes[tr_n].tag;
+            if str_eq(tr_t, "tbody") or str_eq(tr_t, "thead") or str_eq(tr_t, "tfoot") {
+                let mut ir: i32 = nodes[tr_n].first_child;
+                while ir != -1 {
+                    if str_eq(nodes[ir].tag, "tr") {
+                        let mut cc: i32 = 0;
+                        let mut td_n: i32 = nodes[ir].first_child;
+                        while td_n != -1 {
+                            let tdt: str = nodes[td_n].tag;
+                            if str_eq(tdt, "td") or str_eq(tdt, "th") {
+                                cc = cc + 1;
+                            };
+                            td_n = nodes[td_n].next_sibling;
+                        };
+                        if cc > max_cols { max_cols = cc; };
+                    };
+                    ir = nodes[ir].next_sibling;
+                };
+            } else if str_eq(tr_t, "tr") {
+                let mut cc2: i32 = 0;
+                let mut td_n2: i32 = nodes[tr_n].first_child;
+                while td_n2 != -1 {
+                    let tdt2: str = nodes[td_n2].tag;
+                    if str_eq(tdt2, "td") or str_eq(tdt2, "th") {
+                        cc2 = cc2 + 1;
+                    };
+                    td_n2 = nodes[td_n2].next_sibling;
+                };
+                if cc2 > max_cols { max_cols = cc2; };
+            };
+            tr_n = nodes[tr_n].next_sibling;
+        };
+        if max_cols == 0 { max_cols = 1; };
+        let avail: i32 = 1024 - indent - 20;
+        let cw: i32 = avail / max_cols;
+
+        // Walk cells to test text extraction
+        let mut trw: i32 = node.first_child;
+        while trw != -1 {
+            let trwt: str = nodes[trw].tag;
+            if str_eq(trwt, "tr") {
+                let mut cln: i32 = nodes[trw].first_child;
+                while cln != -1 {
+                    let clnt: str = nodes[cln].tag;
+                    if str_eq(clnt, "td") or str_eq(clnt, "th") {
+                        let ct_str: str = html_get_text_content(nodes, cln);
+                        let mc_val: i32 = (cw - 8) / 8;
+                        if str_len(ct_str) > mc_val and mc_val > 3 {
+                            let _trunc: str = str_concat(str_slice(ct_str, 0, mc_val - 2), "..");
+                        };
+                    };
+                    cln = nodes[cln].next_sibling;
+                };
+            };
+            trw = nodes[trw].next_sibling;
+        };
+        return;
+    };
+
+    // Recurse into children
+    let mut ch: i32 = node.first_child;
+    while ch != -1 {
+        walk_node(nodes, ch, depth + 1, child_indent, child_ol);
+        ch = nodes[ch].next_sibling;
+    };
+}
+
+fn! test_page(label: str, html: str) {
+    println("--- Testing: {label} ---");
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, html);
+    println("  Parsed {label}: {len(nodes)} nodes");
+    assert_true(root >= 0, str_concat(label, " root >= 0"));
+    assert_true(len(nodes) > 0, str_concat(label, " has nodes"));
+    walk_node(nodes, root, 0, 0, [0]);
+    println("  Walk complete for {label}");
+}
+
+fn! main() {
+    println("=== Headless Render Tests ===");
+
+    // Test 1: CERN page HTML (hardcoded — the exact HTML that crashes)
+    let cern_html: str = "<HEADER><TITLE>The World Wide Web project</TITLE><NEXTID N=\"55\"></HEADER><BODY><H1>World Wide Web</H1>The WorldWideWeb (W3) is a wide-area<A NAME=0 HREF=\"WhatIs.html\">hypermedia</A> information retrieval initiative aiming to give universal access to a large universe of documents.<P>Everything there is online about W3 is linked directly or indirectly to this document, including an <A NAME=24 HREF=\"Summary.html\">executive summary</A> of the project, <A NAME=29 HREF=\"Administration/Mailing/Overview.html\">Mailing lists</A>, <A NAME=30 HREF=\"Policy.html\">Policy</A>, November's <A NAME=34 HREF=\"News/9211.html\">W3 news</A>, <A NAME=41 HREF=\"FAQ/List.html\">Frequently Asked Questions</A>.<DL><DT><A NAME=44 HREF=\"../DataSources/Top.html\">What's out there?</A><DD> Pointers to the world's online information,<A NAME=45 HREF=\"../DataSources/bySubject/Overview.html\"> subjects</A>, <A NAME=z54 HREF=\"../DataSources/WWW/Servers.html\">W3 servers</A>, etc.<DT><A NAME=46 HREF=\"Help.html\">Help</A><DD> on the browser you are using<DT><A NAME=13 HREF=\"Status.html\">Software Products</A><DD> A list of W3 project components and their current state. (e.g. <A NAME=27 HREF=\"LineMode/Browser.html\">Line Mode</A>, X11 <A NAME=35 HREF=\"Status.html#35\">Viola</A>, <A NAME=26 HREF=\"NeXT/WorldWideWeb.html\">NeXTStep</A>, <A NAME=25 HREF=\"Daemon/Overview.html\">Servers</A>, <A NAME=51 HREF=\"Tools/Overview.html\">Tools</A>,<A NAME=53 HREF=\"MailRobot/Overview.html\"> Mail robot</A>,<A NAME=52 HREF=\"Status.html#57\">Library</A>)<DT><A NAME=47 HREF=\"Technical.html\">Technical</A><DD> Details of protocols, formats, program internals etc<DT><A NAME=40 HREF=\"Bibliography.html\">Bibliography</A><DD> Paper documentation on W3 and references.<DT><A NAME=14 HREF=\"People.html\">People</A><DD> A list of some people involved in the project.<DT><A NAME=15 HREF=\"History.html\">History</A><DD> A summary of the history of the project.<DT><A NAME=37 HREF=\"Helping.html\">How can I help</A> ?<DD> If you would like to support the web..<DT><A NAME=48 HREF=\"../README.html\">Getting code</A><DD> Getting the code by<A NAME=49 HREF=\"LineMode/Defaults/Distribution.html\">anonymous FTP</A>, etc.</A></DL></BODY>";
+    test_page("CERN", cern_html);
+
+    // Test 2: Definition list with unclosed tags
+    test_page("DL unclosed", "<dl><dt>Term1<dd>Def1<dt>Term2<dd>Def2<dt>Term3<dd>Def3</dl>");
+
+    // Test 3: Nested lists
+    test_page("Nested lists", "<ul><li>A<ul><li>A1<li>A2</ul><li>B<ol><li>B1<li>B2<li>B3</ol><li>C</ul>");
+
+    // Test 4: Table
+    test_page("Table", "<table><tr><th>Name</th><th>Value</th></tr><tr><td>Alpha</td><td>1</td></tr><tr><td>Beta</td><td>2</td></tr></table>");
+
+    // Test 5: Mixed content with all new tags
+    test_page("Mixed", "<body><h1>Title</h1><p>Normal <b>bold</b> <em>italic</em> <mark>highlighted</mark> <del>deleted</del> <u>underlined</u> <cite>cited</cite>.</p><blockquote>A quote</blockquote><figure><figcaption>Caption</figcaption></figure><dl><dt>T<dd>D</dl></body>");
+
+    println("=== Headless Tests Complete ===");
+}
