@@ -166,12 +166,26 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
     if use_tls {
         // Try plain HTTP first — tls_connect hangs on some servers and
         // there is no timeout mechanism in the runtime.  If the server
-        // answers on port 80 we avoid the TLS handshake entirely; if it
-        // redirects us to HTTPS we fall through to the TLS path below.
+        // answers on port 80 with actual content we use it; if it
+        // redirects to HTTPS (301/302/307) we fall through to TLS.
         let probe: HttpResponse = http_get_plain(host, 80, request);
+        let mut probe_ok: bool = false;
         if str_len(probe.error) == 0 and str_len(probe.body) > 0 {
-            raw_response = probe.body;
-        } else {
+            // Check the status line — skip if it's a redirect
+            let probe_line_end: i32 = str_find(probe.body, "\r\n");
+            let mut probe_status: str = probe.body;
+            if probe_line_end > 0 {
+                probe_status = str_slice(probe.body, 0, probe_line_end);
+            };
+            if not str_contains(probe_status, " 301") and
+               not str_contains(probe_status, " 302") and
+               not str_contains(probe_status, " 307") and
+               not str_contains(probe_status, " 308") {
+                raw_response = probe.body;
+                probe_ok = true;
+            };
+        };
+        if not probe_ok {
             let tls_resp: HttpResponse = http_get_tls(host, port, request);
             if str_len(tls_resp.error) > 0 {
                 return tls_resp;
