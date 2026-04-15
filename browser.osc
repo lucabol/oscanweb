@@ -1246,10 +1246,16 @@ fn! main() {
             let mouse_focus: bool = ui_textbox(4, 4, WIN_W - 8, url_buf,
                                      show_focused, prev_btn, 0,
                                      url_cursor, url_select_all);
-            // In Normal mode, clicking the textbox should enter Insert mode (select all)
+            // Detect actual click (button-down transition) inside the URL bar
+            let url_bar_btn: i32 = canvas_mouse_btn();
+            let url_bar_mx: i32 = canvas_mouse_x();
+            let url_bar_my: i32 = canvas_mouse_y();
+            let url_bar_hover: bool = url_bar_mx >= 4 and url_bar_mx < WIN_W - 4 and url_bar_my >= 4 and url_bar_my < 24;
+            let url_bar_clicked: bool = url_bar_hover and band(url_bar_btn, 1) == 1 and band(prev_btn, 1) == 0;
+
             match mode {
                 BrowserMode::Normal => {
-                    if mouse_focus {
+                    if url_bar_clicked {
                         mode = BrowserMode::Insert;
                         url_focused = true;
                         url_cursor = len(url_buf);
@@ -1257,13 +1263,17 @@ fn! main() {
                     };
                 },
                 BrowserMode::Insert => {
-                    // Click inside textbox while already in Insert mode: position cursor
-                    if mouse_focus and not url_select_all {
-                        let click_mx: i32 = canvas_mouse_x();
-                        let click_pos: i32 = (click_mx - 4 - 4) / 8;
+                    // Only reposition cursor on actual click, not every frame
+                    if url_bar_clicked and not url_select_all {
+                        let click_pos: i32 = (url_bar_mx - 4 - 4) / 8;
                         if click_pos < 0 { url_cursor = 0; }
                         else if click_pos > len(url_buf) { url_cursor = len(url_buf); }
                         else { url_cursor = click_pos; };
+                    };
+                    // Click clears select-all (but keeps focus)
+                    if url_bar_clicked and url_select_all {
+                        url_select_all = false;
+                        url_cursor = len(url_buf);
                     };
                 },
                 _ => {},
