@@ -683,6 +683,8 @@ fn! main() {
     let mut url_buf: [i32] = [];
     let mut url_focused: bool = false;
     let mut prev_btn: i32 = 0;
+    let mut url_cursor: i32 = 0;
+    let mut url_select_all: bool = false;
 
     // History
     let mut history_back: [str] = [];
@@ -735,23 +737,109 @@ fn! main() {
             _ => false,
         };
         if url_focused and url_is_insert {
-            if key >= 32 and key <= 126 {
-                push(url_buf, key);
-            };
-            if key == 8 and len(url_buf) > 0 {
-                pop(url_buf);
-            };
-            // Ctrl+V (key 22) — paste from clipboard
-            if key == 22 {
-                let paste_r: Result<str, str> = clipboard_get();
-                match paste_r {
-                    Result::Ok(clip) => {
-                        let clip_chars: [i32] = str_to_chars(str_trim(clip));
-                        for ci in 0..len(clip_chars) {
-                            push(url_buf, clip_chars[ci]);
-                        };
-                    },
-                    Result::Err(_e) => {},
+            // If select-all is active, first printable key or backspace replaces all
+            if url_select_all and key > 0 and key != 1001 and key != 1002 and key != 1003 and key != 1004 {
+                if key >= 32 and key <= 126 {
+                    while len(url_buf) > 0 { pop(url_buf); };
+                    push(url_buf, key);
+                    url_cursor = 1;
+                    url_select_all = false;
+                } else if key == 8 or key == 127 {
+                    while len(url_buf) > 0 { pop(url_buf); };
+                    url_cursor = 0;
+                    url_select_all = false;
+                } else if key == 22 {
+                    // Ctrl+V replaces selection
+                    while len(url_buf) > 0 { pop(url_buf); };
+                    url_cursor = 0;
+                    url_select_all = false;
+                    let paste_sel: Result<str, str> = clipboard_get();
+                    match paste_sel {
+                        Result::Ok(clip_s) => {
+                            let cs_chars: [i32] = str_to_chars(str_trim(clip_s));
+                            for csi in 0..len(cs_chars) {
+                                push(url_buf, cs_chars[csi]);
+                            };
+                            url_cursor = len(url_buf);
+                        },
+                        Result::Err(_e2) => {},
+                    };
+                } else if key == 1001 {
+                    // Left arrow clears selection, cursor to start
+                    url_select_all = false;
+                    url_cursor = 0;
+                } else if key == 1002 {
+                    // Right arrow clears selection, cursor to end
+                    url_select_all = false;
+                    url_cursor = len(url_buf);
+                };
+            } else {
+                // Normal cursor editing
+                if key >= 32 and key <= 126 {
+                    // Insert character at cursor position
+                    push(url_buf, 0);
+                    let mut si: i32 = len(url_buf) - 1;
+                    while si > url_cursor {
+                        url_buf[si] = url_buf[si - 1];
+                        si = si - 1;
+                    };
+                    url_buf[url_cursor] = key;
+                    url_cursor = url_cursor + 1;
+                };
+                if key == 8 and url_cursor > 0 {
+                    // Backspace: remove char before cursor
+                    let mut ri: i32 = url_cursor - 1;
+                    while ri < len(url_buf) - 1 {
+                        url_buf[ri] = url_buf[ri + 1];
+                        ri = ri + 1;
+                    };
+                    pop(url_buf);
+                    url_cursor = url_cursor - 1;
+                };
+                if key == 127 and url_cursor < len(url_buf) {
+                    // Delete: remove char at cursor
+                    let mut di: i32 = url_cursor;
+                    while di < len(url_buf) - 1 {
+                        url_buf[di] = url_buf[di + 1];
+                        di = di + 1;
+                    };
+                    pop(url_buf);
+                };
+                // Arrow keys
+                if key == 1001 and url_cursor > 0 {
+                    url_cursor = url_cursor - 1;
+                };
+                if key == 1002 and url_cursor < len(url_buf) {
+                    url_cursor = url_cursor + 1;
+                };
+                // Ctrl+A (key 1) = Home
+                if key == 1 {
+                    url_cursor = 0;
+                };
+                // Ctrl+E (key 5) = End
+                if key == 5 {
+                    url_cursor = len(url_buf);
+                };
+                // Ctrl+V (key 22) — paste at cursor
+                if key == 22 {
+                    let paste_r: Result<str, str> = clipboard_get();
+                    match paste_r {
+                        Result::Ok(clip) => {
+                            let clip_chars: [i32] = str_to_chars(str_trim(clip));
+                            for ci in 0..len(clip_chars) {
+                                // Insert each char at cursor
+                                push(url_buf, 0);
+                                let mut pi: i32 = len(url_buf) - 1;
+                                while pi > url_cursor {
+                                    url_buf[pi] = url_buf[pi - 1];
+                                    pi = pi - 1;
+                                };
+                                url_buf[url_cursor] = clip_chars[ci];
+                                url_cursor = url_cursor + 1;
+                            };
+                        },
+                        Result::Err(_e) => {},
+                    };
                 };
             };
         };
@@ -842,6 +930,7 @@ fn! main() {
                 while len(url_buf) > 0 { pop(url_buf); };
                 let uc: [i32] = str_to_chars(current_url);
                 for ci in 0..len(uc) { push(url_buf, uc[ci]); };
+                url_cursor = len(url_buf);
             };
 
             // ── Input handling ──────────────────────
@@ -913,13 +1002,18 @@ fn! main() {
                             Result::Err(_e) => {},
                         };
                     } else if key == 111 {
+                        // 'o' — open URL (clear bar)
                         mode = BrowserMode::Insert;
                         url_focused = true;
-                        // Clear url_buf by popping (don't reassign — arena would free it)
                         while len(url_buf) > 0 { pop(url_buf); };
+                        url_cursor = 0;
+                        url_select_all = false;
                     } else if key == 79 {
+                        // 'O' — edit current URL (select all)
                         mode = BrowserMode::Insert;
                         url_focused = true;
+                        url_cursor = len(url_buf);
+                        url_select_all = true;
                     } else if key == 47 {
                         mode = BrowserMode::Search;
                         while len(search_buf) > 0 { pop(search_buf); };
@@ -977,6 +1071,7 @@ fn! main() {
                     if key == KEY_ESC {
                         mode = BrowserMode::Normal;
                         url_focused = false;
+                        url_select_all = false;
                     } else if key == KEY_ENTER and url_focused {
                         let typed_url: str = str_from_chars(url_buf);
                         if str_len(typed_url) > 0 {
@@ -988,6 +1083,7 @@ fn! main() {
                             needs_navigate = true;
                             mode = BrowserMode::Normal;
                             url_focused = false;
+                            url_select_all = false;
                         };
                     };
                 },
@@ -1143,20 +1239,31 @@ fn! main() {
             // Address bar
             gfx_fill_rect(0, 0, WIN_W, CHROME_TOP, STATUS_BG);
             // Pass key=0 to ui_textbox — we handle keyboard input outside arena.
-            // Only let ui_textbox control focus via mouse clicks when NOT in Insert mode,
-            // otherwise our mode-driven url_focused takes precedence.
             let show_focused: bool = match mode {
                 BrowserMode::Insert => url_focused,
                 _ => false,
             };
             let mouse_focus: bool = ui_textbox(4, 4, WIN_W - 8, url_buf,
-                                     show_focused, prev_btn, 0);
-            // In Normal mode, clicking the textbox should enter Insert mode
+                                     show_focused, prev_btn, 0,
+                                     url_cursor, url_select_all);
+            // In Normal mode, clicking the textbox should enter Insert mode (select all)
             match mode {
                 BrowserMode::Normal => {
                     if mouse_focus {
                         mode = BrowserMode::Insert;
                         url_focused = true;
+                        url_cursor = len(url_buf);
+                        url_select_all = true;
+                    };
+                },
+                BrowserMode::Insert => {
+                    // Click inside textbox while already in Insert mode: position cursor
+                    if mouse_focus and not url_select_all {
+                        let click_mx: i32 = canvas_mouse_x();
+                        let click_pos: i32 = (click_mx - 4 - 4) / 8;
+                        if click_pos < 0 { url_cursor = 0; }
+                        else if click_pos > len(url_buf) { url_cursor = len(url_buf); }
+                        else { url_cursor = click_pos; };
                     };
                 },
                 _ => {},

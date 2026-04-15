@@ -150,8 +150,11 @@ fn! ui_slider(x: i32, y: i32, w: i32, value: i32, min_val: i32, max_val: i32) ->
 // Textbox: single-line text input with keyboard handling.
 // buf is a mutable [i32] array of character codes.
 // key is the current frame's key from canvas_key() (caller must poll).
+// cursor_pos is the insertion point index (0..len(buf)).
+// select_all: if true, draw selection highlight over all text.
 // Returns new focused state (true if clicked on this textbox).
-fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32, key: i32) -> bool {
+fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32, key: i32,
+               cursor_pos: i32, select_all: bool) -> bool {
     let h: i32 = 20;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
@@ -167,8 +170,8 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32,
     // Draw border (accent when focused)
     gfx_rect(x, y, w, h, if focused { UI_ACCENT } else { UI_BORDER });
 
-    // Handle keyboard input when focused
-    if focused {
+    // Handle keyboard input when focused (only if caller passes key != 0)
+    if focused and key != 0 {
         if key >= 32 and key <= 126 {
             push(buf, key);
         };
@@ -177,16 +180,36 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32,
         };
     };
 
-    // Convert buffer to string and draw text
-    let text: str = str_from_chars(buf);
+    // Compute horizontal scroll offset so cursor stays visible
     let pad: i32 = 4;
-    let text_y: i32 = y + (h - 8) / 2;
-    gfx_draw_text(x + pad, text_y, text, UI_FG);
+    let text_area_w: i32 = w - pad * 2;
+    let cursor_px: i32 = cursor_pos * 8;
+    let mut scroll_off: i32 = 0;
+    if cursor_px > text_area_w {
+        scroll_off = cursor_px - text_area_w + 8;
+    };
 
-    // Draw cursor when focused (thin rect after last character, 8px font)
-    if focused {
-        let cursor_x: i32 = x + pad + len(buf) * 8;
-        gfx_fill_rect(cursor_x, text_y, 1, 8, UI_FG);
+    // Convert buffer to string and draw text (clipped to textbox)
+    let text: str = str_from_chars(buf);
+    let text_y: i32 = y + (h - 8) / 2;
+
+    // Draw select-all highlight
+    if focused and select_all and len(buf) > 0 {
+        let sel_w: i32 = len(buf) * 8;
+        let sel_draw_w: i32 = if sel_w - scroll_off > text_area_w { text_area_w } else { sel_w - scroll_off };
+        if sel_draw_w > 0 {
+            gfx_fill_rect(x + pad, text_y, sel_draw_w, 8, UI_ACCENT);
+        };
+    };
+
+    gfx_draw_text(x + pad - scroll_off, text_y, text, UI_FG);
+
+    // Draw cursor when focused (thin rect at cursor position)
+    if focused and not select_all {
+        let cx: i32 = x + pad + cursor_px - scroll_off;
+        if cx >= x + pad and cx < x + w - pad {
+            gfx_fill_rect(cx, text_y, 1, 8, UI_FG);
+        };
     };
 
     // Return new focus state
