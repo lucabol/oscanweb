@@ -412,13 +412,26 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         let attr_h_str: str = html_get_attr(node, "height");
         let mut attr_w: i32 = 0;
         let mut attr_h: i32 = 0;
+        let avail_img_w: i32 = vp_width - indent - PAD * 2;
         if str_len(attr_w_str) > 0 {
-            let pw: Result<i32, str> = parse_i32(attr_w_str);
-            match pw { Result::Ok(wv) => { attr_w = wv; }, Result::Err(_ew) => {}, };
+            if str_ends_with(attr_w_str, "%") {
+                let pct_str: str = str_slice(attr_w_str, 0, str_len(attr_w_str) - 1);
+                let ppw: Result<i32, str> = parse_i32(pct_str);
+                match ppw { Result::Ok(pv) => { attr_w = avail_img_w * pv / 100; }, Result::Err(_epw) => {}, };
+            } else {
+                let pw: Result<i32, str> = parse_i32(attr_w_str);
+                match pw { Result::Ok(wv) => { attr_w = wv; }, Result::Err(_ew) => {}, };
+            };
         };
         if str_len(attr_h_str) > 0 {
-            let ph: Result<i32, str> = parse_i32(attr_h_str);
-            match ph { Result::Ok(hv) => { attr_h = hv; }, Result::Err(_eh) => {}, };
+            if str_ends_with(attr_h_str, "%") {
+                let pct_h_str: str = str_slice(attr_h_str, 0, str_len(attr_h_str) - 1);
+                let pph: Result<i32, str> = parse_i32(pct_h_str);
+                match pph { Result::Ok(phv) => { attr_h = (WIN_H - CHROME_TOP - CHROME_BOT) * phv / 100; }, Result::Err(_eph) => {}, };
+            } else {
+                let ph: Result<i32, str> = parse_i32(attr_h_str);
+                match ph { Result::Ok(hv) => { attr_h = hv; }, Result::Err(_eh) => {}, };
+            };
         };
 
         if str_len(src) > 0 {
@@ -435,14 +448,14 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     draw_px = img_scale(img_cache_data[cache_idx], draw_w, draw_h, attr_w, attr_h);
                     draw_w = attr_w;
                     draw_h = attr_h;
-                } else if attr_w > 0 and attr_w < draw_w {
+                } else if attr_w > 0 and attr_w != draw_w {
                     let scaled_h: i32 = draw_h * attr_w / draw_w;
                     if scaled_h > 0 {
                         draw_px = img_scale(img_cache_data[cache_idx], draw_w, draw_h, attr_w, scaled_h);
                         draw_w = attr_w;
                         draw_h = scaled_h;
                     };
-                } else if attr_h > 0 and attr_h < draw_h {
+                } else if attr_h > 0 and attr_h != draw_h {
                     let scaled_w: i32 = draw_w * attr_h / draw_h;
                     if scaled_w > 0 {
                         draw_px = img_scale(img_cache_data[cache_idx], draw_w, draw_h, scaled_w, attr_h);
