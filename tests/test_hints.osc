@@ -1,0 +1,110 @@
+// Tests for make_hint_labels — hint label generation for follow mode
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! assert_true(cond: bool, test_name: str) {
+    if cond {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name}");
+    };
+}
+
+// Copy of make_hint_labels from browser.osc for testing
+fn! make_hint_labels(count: i32) -> [str] {
+    let hc: [i32] = str_to_chars("asdfghjklqwertyuiopzxcvbnm");
+    let n: i32 = len(hc);
+    let mut labels: [str] = [];
+    if count <= n {
+        // Single-letter labels
+        for i in 0..count {
+            let lbl: [i32] = [hc[i]];
+            push(labels, str_from_chars(lbl));
+        };
+    } else {
+        // Two-letter labels (up to n*n)
+        let cap: i32 = if count < n * n { count } else { n * n };
+        for j in 0..cap {
+            let c1: i32 = hc[j / n];
+            let c2: i32 = hc[mod_i32(j, n)];
+            let lbl2: [i32] = [c1, c2];
+            push(labels, str_from_chars(lbl2));
+        };
+    };
+    labels
+}
+
+fn! has_duplicates(arr: [str]) -> bool {
+    for i in 0..len(arr) {
+        for k in (i + 1)..len(arr) {
+            if str_eq(arr[i], arr[k]) {
+                return true;
+            };
+        };
+    };
+    false
+}
+
+fn! main() {
+    // Zero links
+    let l0: [str] = make_hint_labels(0);
+    assert_eq_i32(len(l0), 0, "zero: count");
+
+    // Single link
+    let l1: [str] = make_hint_labels(1);
+    assert_eq_i32(len(l1), 1, "one: count");
+    assert_eq_str(l1[0], "a", "one: first label is 'a'");
+    assert_eq_i32(str_len(l1[0]), 1, "one: label length");
+
+    // 5 links — single letter, no duplicates
+    let l5: [str] = make_hint_labels(5);
+    assert_eq_i32(len(l5), 5, "five: count");
+    assert_true(not has_duplicates(l5), "five: no duplicates");
+    assert_eq_i32(str_len(l5[0]), 1, "five: single-char labels");
+
+    // Exactly 26 links — use all single letters, no duplicates
+    let l26: [str] = make_hint_labels(26);
+    assert_eq_i32(len(l26), 26, "26: count");
+    assert_true(not has_duplicates(l26), "26: no duplicates");
+    assert_eq_i32(str_len(l26[0]), 1, "26: single-char labels");
+    assert_eq_i32(str_len(l26[25]), 1, "26: last is single-char");
+
+    // 27 links — switch to two-letter, no duplicates
+    let l27: [str] = make_hint_labels(27);
+    assert_eq_i32(len(l27), 27, "27: count");
+    assert_true(not has_duplicates(l27), "27: no duplicates");
+    assert_eq_i32(str_len(l27[0]), 2, "27: two-char labels");
+    assert_eq_i32(str_len(l27[26]), 2, "27: last is two-char");
+    assert_eq_str(l27[0], "aa", "27: first label is 'aa'");
+
+    // 50 links — two-letter, no duplicates
+    let l50: [str] = make_hint_labels(50);
+    assert_eq_i32(len(l50), 50, "50: count");
+    assert_true(not has_duplicates(l50), "50: no duplicates");
+    assert_eq_i32(str_len(l50[0]), 2, "50: two-char labels");
+
+    // 676 links — max two-letter capacity, no duplicates
+    let l676: [str] = make_hint_labels(676);
+    assert_eq_i32(len(l676), 676, "676: count");
+    assert_true(not has_duplicates(l676), "676: no duplicates");
+
+    // Beyond 676 — capped at 676 labels
+    let l700: [str] = make_hint_labels(700);
+    assert_eq_i32(len(l700), 676, "700: capped at 676");
+
+    println("All hint label tests completed.");
+}

@@ -731,11 +731,23 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
 fn! make_hint_labels(count: i32) -> [str] {
     let hc: [i32] = str_to_chars("asdfghjklqwertyuiopzxcvbnm");
+    let n: i32 = len(hc);
     let mut labels: [str] = [];
-    for i in 0..count {
-        let ci: i32 = mod_i32(i, len(hc));
-        let lbl: [i32] = [hc[ci]];
-        push(labels, str_from_chars(lbl));
+    if count <= n {
+        // Single-letter labels
+        for i in 0..count {
+            let lbl: [i32] = [hc[i]];
+            push(labels, str_from_chars(lbl));
+        };
+    } else {
+        // Two-letter labels (up to n*n)
+        let cap: i32 = if count < n * n { count } else { n * n };
+        for j in 0..cap {
+            let c1: i32 = hc[j / n];
+            let c2: i32 = hc[mod_i32(j, n)];
+            let lbl2: [i32] = [c1, c2];
+            push(labels, str_from_chars(lbl2));
+        };
     };
     labels
 }
