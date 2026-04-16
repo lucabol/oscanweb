@@ -142,47 +142,75 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
         return -1;
     };
 
-    // Decode image
-    let decode_result: Result<[i32], str> = img_load(resp.body);
-    match decode_result {
-        Result::Ok(raw) => {
-            if len(raw) < 3 {
-                map_set(img_cache_idx, src, "-1");
-                return -1;
-            };
-            let w: i32 = raw[0];
-            let h: i32 = raw[1];
-            // Extract pixel-only data (skip w,h header)
-            let mut px: [i32] = [];
-            let px_count: i32 = w * h;
-            for pi in 0..px_count {
-                push(px, raw[pi + 2]);
-            };
+    // Detect SVG by file extension or content type
+    let is_svg: bool = str_ends_with(str_to_lower(img_path), ".svg") or
+                       str_contains(str_to_lower(resp.content_type), "svg");
 
-            // Scale down if wider than viewport
-            let mut final_px: [i32] = px;
-            let mut final_w: i32 = w;
-            let mut final_h: i32 = h;
-            if w > IMG_MAX_W {
-                final_h = h * IMG_MAX_W / w;
-                final_w = IMG_MAX_W;
-                if final_h < 1 { final_h = 1; };
-                final_px = img_scale(px, w, h, final_w, final_h);
-            };
+    // Decode image (SVG or raster)
+    let mut decode_ok: bool = false;
+    let mut dec_w: i32 = 0;
+    let mut dec_h: i32 = 0;
+    let mut dec_px: [i32] = [];
 
-            let cache_idx: i32 = len(img_cache_data);
-            push(img_cache_data, final_px);
-            push(img_cache_w, final_w);
-            push(img_cache_h, final_h);
-            let idx_str: str = i32_to_str(cache_idx);
-            map_set(img_cache_idx, src, idx_str);
-            cache_idx
-        },
-        Result::Err(_e) => {
-            map_set(img_cache_idx, src, "-1");
-            -1
-        },
-    }
+    if is_svg {
+        // SVG: rasterize at viewport-fitting size
+        let svg_w: i32 = if IMG_MAX_W < 800 { IMG_MAX_W } else { 800 };
+        let svg_result: Result<[i32], str> = svg_load(resp.body, svg_w, 0);
+        match svg_result {
+            Result::Ok(svg_raw) => {
+                if len(svg_raw) >= 3 {
+                    dec_w = svg_raw[0];
+                    dec_h = svg_raw[1];
+                    let svg_px_count: i32 = dec_w * dec_h;
+                    for spi in 0..svg_px_count {
+                        push(dec_px, svg_raw[spi + 2]);
+                    };
+                    decode_ok = true;
+                };
+            },
+            Result::Err(_se) => {},
+        };
+    } else {
+        let decode_result: Result<[i32], str> = img_load(resp.body);
+        match decode_result {
+            Result::Ok(raw) => {
+                if len(raw) >= 3 {
+                    dec_w = raw[0];
+                    dec_h = raw[1];
+                    let raster_px_count: i32 = dec_w * dec_h;
+                    for rpi in 0..raster_px_count {
+                        push(dec_px, raw[rpi + 2]);
+                    };
+                    decode_ok = true;
+                };
+            },
+            Result::Err(_re) => {},
+        };
+    };
+
+    if not decode_ok {
+        map_set(img_cache_idx, src, "-1");
+        return -1;
+    };
+
+    // Scale down if wider than viewport
+    let mut final_px: [i32] = dec_px;
+    let mut final_w: i32 = dec_w;
+    let mut final_h: i32 = dec_h;
+    if dec_w > IMG_MAX_W {
+        final_h = dec_h * IMG_MAX_W / dec_w;
+        final_w = IMG_MAX_W;
+        if final_h < 1 { final_h = 1; };
+        final_px = img_scale(dec_px, dec_w, dec_h, final_w, final_h);
+    };
+
+    let cache_idx: i32 = len(img_cache_data);
+    push(img_cache_data, final_px);
+    push(img_cache_w, final_w);
+    push(img_cache_h, final_h);
+    let idx_str: str = i32_to_str(cache_idx);
+    map_set(img_cache_idx, src, idx_str);
+    cache_idx
 }
 
 // ─── Tag classification ─────────────────────────────────

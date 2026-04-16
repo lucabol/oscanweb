@@ -62,7 +62,7 @@ The renderer walks the flat DOM tree recursively via `render_node()`. It uses `[
 - **Text styling:** `b`/`strong`, `em`/`i`/`cite`, `del`/`s` (strikethrough), `u`/`ins` (underline), `mark` (yellow background), `code`/`pre`
 - **Structure:** `h1`–`h6`, `p`, `div`, `blockquote` (indented with accent bar), `hr`, `br`
 - **Lists:** `ul` (bullets), `ol` (numbered), `li`, `dl`/`dt`/`dd`
-- **Links & images:** `a` (clickable + underlined), `img` (fetched, decoded, cached, scaled)
+- **Links & images:** `a` (clickable + underlined), `img` (fetched, decoded, cached, scaled; SVG via `svg_load`, raster via `img_load`)
 - **Tables:** `table`/`tr`/`td`/`th` (column-aligned with borders; handles `thead`/`tbody`/`tfoot` wrappers)
 - **Semantic blocks:** `section`, `article`, `nav`, `header`, `footer`, `main`, `figure`/`figcaption`
 - **Skipped:** `head`, `script`, `style`, `meta`, `link`, `title`, `noscript`
@@ -73,7 +73,7 @@ Key data collected during rendering:
 
 ### Image pipeline
 
-Images are fetched via HTTP, decoded with `img_load()` (Oscan builtin, returns `[width, height, pixels...]`), and the pixel header is stripped before caching. Cached pixel arrays are drawn with `gfx_blit()` at native resolution. Images wider than 1000px are downscaled via nearest-neighbor at cache time.
+Images are fetched via HTTP, decoded with `img_load()` for raster formats or `svg_load()` for SVG, and the pixel header is stripped before caching. SVG is detected by `.svg` file extension or `image/svg+xml` content type and rasterized at up to 800px wide. Cached pixel arrays are drawn with `gfx_blit()` at native resolution. Images wider than 1000px are downscaled via nearest-neighbor at cache time.
 
 ## Key Conventions
 
