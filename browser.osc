@@ -162,10 +162,12 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
                     dec_w = svg_raw[0];
                     dec_h = svg_raw[1];
                     let svg_px_count: i32 = dec_w * dec_h;
-                    // Composite SVG over page background (gfx_blit has no alpha blending)
-                    let bg_r: i32 = 30;
-                    let bg_g: i32 = 30;
-                    let bg_b: i32 = 34;
+                    // Composite SVG over white background for icons, since most
+                    // SVG icons are dark shapes on transparent background. Using
+                    // the dark page BG makes them invisible.
+                    let bg_r: i32 = 240;
+                    let bg_g: i32 = 240;
+                    let bg_b: i32 = 240;
                     for spi in 0..svg_px_count {
                         let argb: i32 = svg_raw[spi + 2];
                         let alpha: i32 = band(bshr(argb, 24), 255);
