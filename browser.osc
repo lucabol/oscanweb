@@ -1142,6 +1142,10 @@ fn! main() {
                             scroll_y = search_match_y[search_match_idx];
                             if scroll_y < 0 { scroll_y = 0; };
                         };
+                    } else if key == 81 {
+                        // Q — quit the browser
+                        canvas_close();
+                        exit(0);
                     } else if key == 78 and search_active {
                         // N — previous search match
                         if len(search_match_y) > 0 {
