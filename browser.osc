@@ -1437,6 +1437,7 @@ fn! main() {
                 gfx_draw_text(ax, ay, "H / L     Back / forward", FG_COLOR); ay += LINE_H;
                 gfx_draw_text(ax, ay, "/         Search in page", FG_COLOR); ay += LINE_H;
                 gfx_draw_text(ax, ay, "r         Reload", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Q         Quit browser", FG_COLOR); ay += LINE_H;
                 gfx_draw_text(ax, ay, "Esc       Normal mode", FG_COLOR);
             };
 
@@ -1503,6 +1504,7 @@ fn! main() {
                 gfx_draw_text(hx + 10, ky, "H / L        Back / forward", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "/            Search in page", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "Esc          Normal mode", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Q            Quit browser", FG_COLOR); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "?            Toggle this help", FG_COLOR); ky += LINE_H;
                 ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "Mouse click on links also works!", LINK_COLOR);
