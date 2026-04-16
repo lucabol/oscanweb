@@ -406,15 +406,48 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     if str_eq(tag, "img") {
         let src: str = html_get_attr(node, "src");
         let alt: str = html_get_attr(node, "alt");
+        let attr_w_str: str = html_get_attr(node, "width");
+        let attr_h_str: str = html_get_attr(node, "height");
+        let mut attr_w: i32 = 0;
+        let mut attr_h: i32 = 0;
+        if str_len(attr_w_str) > 0 {
+            let pw: Result<i32, str> = parse_i32(attr_w_str);
+            match pw { Result::Ok(wv) => { attr_w = wv; }, Result::Err(_ew) => {}, };
+        };
+        if str_len(attr_h_str) > 0 {
+            let ph: Result<i32, str> = parse_i32(attr_h_str);
+            match ph { Result::Ok(hv) => { attr_h = hv; }, Result::Err(_eh) => {}, };
+        };
 
         if str_len(src) > 0 {
             let cache_idx: i32 = img_fetch_and_decode(src, base_scheme, base_host, base_port, base_path,
                                                        img_cache_idx, img_cache_data,
                                                        img_cache_w, img_cache_h);
             if cache_idx >= 0 and cache_idx < len(img_cache_data) {
-                let px: [i32] = img_cache_data[cache_idx];
-                let img_w: i32 = img_cache_w[cache_idx];
-                let img_h: i32 = img_cache_h[cache_idx];
+                let mut draw_px: [i32] = img_cache_data[cache_idx];
+                let mut draw_w: i32 = img_cache_w[cache_idx];
+                let mut draw_h: i32 = img_cache_h[cache_idx];
+
+                // Scale to HTML-specified dimensions if present
+                if attr_w > 0 and attr_h > 0 and (attr_w != draw_w or attr_h != draw_h) {
+                    draw_px = img_scale(img_cache_data[cache_idx], draw_w, draw_h, attr_w, attr_h);
+                    draw_w = attr_w;
+                    draw_h = attr_h;
+                } else if attr_w > 0 and attr_w < draw_w {
+                    let scaled_h: i32 = draw_h * attr_w / draw_w;
+                    if scaled_h > 0 {
+                        draw_px = img_scale(img_cache_data[cache_idx], draw_w, draw_h, attr_w, scaled_h);
+                        draw_w = attr_w;
+                        draw_h = scaled_h;
+                    };
+                } else if attr_h > 0 and attr_h < draw_h {
+                    let scaled_w: i32 = draw_w * attr_h / draw_h;
+                    if scaled_w > 0 {
+                        draw_px = img_scale(img_cache_data[cache_idx], draw_w, draw_h, scaled_w, attr_h);
+                        draw_w = scaled_w;
+                        draw_h = attr_h;
+                    };
+                };
 
                 // Start on new line for block images
                 if x_ptr[0] > indent + PAD {
@@ -423,11 +456,10 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 };
 
                 let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                if draw_y + img_h >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
-                    // gfx_blit draws at native resolution (no scaling)
-                    gfx_blit(x_ptr[0], draw_y, img_w, img_h, px);
+                if draw_y + draw_h >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                    gfx_blit(x_ptr[0], draw_y, draw_w, draw_h, draw_px);
                 };
-                y_ptr[0] = y_ptr[0] + img_h + 4;
+                y_ptr[0] = y_ptr[0] + draw_h + 4;
                 x_ptr[0] = indent + PAD;
                 return;
             };
