@@ -95,6 +95,11 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then
             EXTRA+=(--extra-cflags -lwinhttp)
           fi
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            # Oscan's freestanding Linux toolchain (musl) doesn't auto-link
+            # libc, but js_bridge.c and libs/quickjs/quickjs.c need it.
+            EXTRA+=(--extra-cflags -lc)
+          fi
           oscan browser.osc -o "build/${{ matrix.output }}" "${EXTRA[@]}"
           ls -la "build/${{ matrix.output }}"
 
