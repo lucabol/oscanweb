@@ -802,6 +802,7 @@ fn! main() {
     let mut status_msg: str = "Press 'o' to enter a URL";
     let mut scroll_y: i32 = 0;
     let mut doc_height: i32 = 0;
+    let mut max_scroll: i32 = 0;
     let mut page_links: [LinkInfo] = [];
     let mut error_msg: str = "";
 
@@ -1089,7 +1090,7 @@ fn! main() {
                         while len(search_match_y) > 0 { pop(search_match_y); };
                     } else if key == 106 {
                         scroll_y += LINE_H * 3;
-                        if scroll_y > doc_height { scroll_y = doc_height; };
+                        if scroll_y > max_scroll { scroll_y = max_scroll; };
                     } else if key == 107 {
                         scroll_y -= LINE_H * 3;
                         if scroll_y < 0 { scroll_y = 0; };
@@ -1101,12 +1102,12 @@ fn! main() {
                             (WIN_H - CHROME_TOP - CHROME_BOT) / 2
                         };
                         scroll_y += scroll_amount;
-                        if scroll_y > doc_height { scroll_y = doc_height; };
+                        if scroll_y > max_scroll { scroll_y = max_scroll; };
                     } else if key == 117 {
                         scroll_y -= (WIN_H - CHROME_TOP - CHROME_BOT) / 2;
                         if scroll_y < 0 { scroll_y = 0; };
                     } else if key == 71 {
-                        scroll_y = doc_height;
+                        scroll_y = max_scroll;
                     } else if key == 103 {
                         if last_key == 103 { scroll_y = 0; };
                     } else if key == 102 {
@@ -1199,6 +1200,7 @@ fn! main() {
                             };
                             scroll_y = search_match_y[search_match_idx];
                             if scroll_y < 0 { scroll_y = 0; };
+                            if scroll_y > max_scroll { scroll_y = max_scroll; };
                         };
                     } else if key == 81 {
                         // Q — quit the browser
@@ -1213,6 +1215,7 @@ fn! main() {
                             };
                             scroll_y = search_match_y[search_match_idx];
                             if scroll_y < 0 { scroll_y = 0; };
+                            if scroll_y > max_scroll { scroll_y = max_scroll; };
                         };
                     };
                     if key > 0 { last_key = key; };
@@ -1306,6 +1309,7 @@ fn! main() {
                         if len(search_match_y) > 0 {
                             scroll_y = search_match_y[0];
                             if scroll_y < 0 { scroll_y = 0; };
+                            if scroll_y > max_scroll { scroll_y = max_scroll; };
                         };
                     };
                     // push/pop for search_buf handled outside arena
@@ -1463,6 +1467,8 @@ fn! main() {
                             search_query, word_map,
                             false, false, -1, [0], page_clickables);
                 doc_height = y_ptr[0];
+                max_scroll = max_i32(doc_height - (WIN_H - CHROME_TOP - CHROME_BOT), 0);
+                if scroll_y > max_scroll { scroll_y = max_scroll; };
 
                 // Draw text selection highlight
                 if sel_active and (sel_start_x != sel_end_x or sel_start_y != sel_end_y) {
@@ -1595,8 +1601,8 @@ fn! main() {
                 BrowserMode::Follow => "FOLLOW",
                 BrowserMode::Search => "SEARCH",
             };
-            let scroll_pct: str = if doc_height > 0 {
-                let pct: i32 = scroll_y * 100 / max_i32(doc_height, 1);
+            let scroll_pct: str = if max_scroll > 0 {
+                let pct: i32 = scroll_y * 100 / max_scroll;
                 "{pct}%"
             } else {
                 "Top"
