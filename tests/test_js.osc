@@ -1,0 +1,191 @@
+// Tests for js.osc — JavaScript engine integration
+// Tests basic eval, console.log, and script tag parsing with < chars.
+
+use "../html.osc"
+use "../js.osc"
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! assert_true(cond: bool, test_name: str) {
+    if cond {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name}");
+    };
+}
+
+fn! main() {
+    println("=== JS Engine Tests ===");
+
+    let ctx: handle = js_engine_init();
+
+    // ── Basic eval ──
+    let r1: str = js_engine_eval(ctx, "1 + 2 + 3");
+    assert_eq_str(r1, "6", "eval arithmetic");
+
+    let r2: str = js_engine_eval(ctx, "'hello' + ' ' + 'world'");
+    assert_eq_str(r2, "hello world", "eval string concat");
+
+    let r3: str = js_engine_eval(ctx, "var x = 10; x * 2");
+    assert_eq_str(r3, "20", "eval variable");
+
+    // ES6+ features
+    let r4: str = js_engine_eval(ctx, "const arr = [1,2,3]; arr.map(x => x * 2).join(',')");
+    assert_eq_str(r4, "2,4,6", "eval arrow function + map");
+
+    let r5: str = js_engine_eval(ctx, "[1,2].length");
+    assert_eq_str(r5, "2", "eval array length");
+
+    // Undefined/null returns empty string
+    let r6: str = js_engine_eval(ctx, "undefined");
+    assert_eq_str(r6, "", "eval undefined returns empty");
+
+    let r7: str = js_engine_eval(ctx, "null");
+    assert_eq_str(r7, "", "eval null returns empty");
+
+    // Error handling
+    let r8: str = js_engine_eval(ctx, "throw new Error('test error')");
+    assert_true(str_len(r8) > 0, "eval error returns message");
+
+    // console.log works (output goes to stdout, we just verify no crash)
+    let r9: str = js_engine_eval(ctx, "console.log('hello from JS'); 'ok'");
+    assert_eq_str(r9, "ok", "console.log no crash");
+
+    // ── Script tag parsing with < chars ──
+    println("");
+    println("=== Script Tag Raw Text Tests ===");
+
+    // Test that <script> content with < is not mangled
+    let mut nodes1: [HtmlNode] = [];
+    let html1: str = "<html><body><script>var x = 1 < 2;</script></body></html>";
+    let root1: i32 = html_parse(nodes1, html1);
+
+    // Find the script element
+    let mut script_idx1: i32 = -1;
+    for ni in 0..len(nodes1) {
+        if str_eq(nodes1[ni].tag, "script") {
+            script_idx1 = ni;
+            break;
+        };
+    };
+    assert_true(script_idx1 >= 0, "script tag found in DOM");
+
+    if script_idx1 >= 0 {
+        let script_text: str = html_get_text_content(nodes1, script_idx1);
+        assert_true(str_contains(script_text, "1 < 2"), "script content preserves < operator");
+    };
+
+    // Test multiple scripts
+    let mut nodes2: [HtmlNode] = [];
+    let html2: str = "<div><script>var a = 1;</script><p>text</p><script>var b = 2;</script></div>";
+    let root2: i32 = html_parse(nodes2, html2);
+    let mut script_count: i32 = 0;
+    for nj in 0..len(nodes2) {
+        if str_eq(nodes2[nj].tag, "script") {
+            script_count += 1;
+        };
+    };
+    assert_eq_i32(script_count, 2, "two script tags found");
+
+    // Test js_run_scripts actually executes (sets a global var)
+    let mut nodes3: [HtmlNode] = [];
+    let html3: str = "<html><body><script>var testGlobal = 42;</script></body></html>";
+    let root3: i32 = html_parse(nodes3, html3);
+    js_run_scripts(ctx, nodes3, root3);
+    let r10: str = js_engine_eval(ctx, "testGlobal");
+    assert_eq_str(r10, "42", "script tag executed sets global");
+
+    // Test script with complex JS containing < and >
+    let mut nodes4: [HtmlNode] = [];
+    let html4: str = "<script>var filtered = [1,2,3].filter(function(x) {{ return x > 1 && x < 3; }});</script>";
+    let root4: i32 = html_parse(nodes4, html4);
+    js_run_scripts(ctx, nodes4, root4);
+    let r11: str = js_engine_eval(ctx, "filtered.length");
+    assert_eq_str(r11, "1", "script with < and > operators");
+
+    // ── DOM Binding Tests ──
+    println("");
+    println("=== DOM Binding Tests ===");
+
+    // Test document.getElementById
+    let mut dom1: [HtmlNode] = [];
+    let dhtml1: str = "<html><body><div id=\"myDiv\">Hello World</div><p id=\"myP\">Paragraph</p></body></html>";
+    let droot1: i32 = html_parse(dom1, dhtml1);
+    js_bridge_set_dom(dom1);
+
+    let d1: str = js_engine_eval(ctx, "document.getElementById('myDiv').tagName");
+    assert_eq_str(d1, "div", "getElementById returns correct element");
+
+    let d2: str = js_engine_eval(ctx, "document.getElementById('myDiv').textContent");
+    assert_eq_str(d2, "Hello World", "element.textContent getter");
+
+    let d3: str = js_engine_eval(ctx, "document.getElementById('myDiv').id");
+    assert_eq_str(d3, "myDiv", "element.id getter");
+
+    let d4: str = js_engine_eval(ctx, "document.getElementById('nonexistent')");
+    assert_eq_str(d4, "", "getElementById nonexistent returns null");
+
+    // Test getAttribute
+    let d5: str = js_engine_eval(ctx, "document.getElementById('myDiv').getAttribute('id')");
+    assert_eq_str(d5, "myDiv", "getAttribute works");
+
+    // Test getElementsByTagName
+    let d6: str = js_engine_eval(ctx, "document.getElementsByTagName('div').length");
+    assert_eq_str(d6, "1", "getElementsByTagName finds elements");
+
+    // Test textContent setter + dirty flag
+    let _d7: str = js_engine_eval(ctx, "document.getElementById('myDiv').textContent = 'Changed'");
+    assert_true(js_bridge_is_dom_dirty() > 0, "DOM dirty after textContent set");
+    js_bridge_clear_dom_dirty();
+    assert_true(js_bridge_is_dom_dirty() == 0, "DOM dirty cleared");
+
+    let d8: str = js_engine_eval(ctx, "document.getElementById('myDiv').textContent");
+    assert_eq_str(d8, "Changed", "textContent setter works");
+
+    // Test setAttribute + dirty flag
+    let _d9: str = js_engine_eval(ctx, "document.getElementById('myP').setAttribute('class', 'highlight')");
+    assert_true(js_bridge_is_dom_dirty() > 0, "DOM dirty after setAttribute");
+    js_bridge_clear_dom_dirty();
+
+    let d10: str = js_engine_eval(ctx, "document.getElementById('myP').getAttribute('class')");
+    assert_eq_str(d10, "highlight", "setAttribute + getAttribute round-trip");
+
+    // Test children
+    let mut dom2: [HtmlNode] = [];
+    let dhtml2: str = "<ul id=\"list\"><li>A</li><li>B</li><li>C</li></ul>";
+    let droot2: i32 = html_parse(dom2, dhtml2);
+    js_bridge_set_dom(dom2);
+
+    let d11: str = js_engine_eval(ctx, "document.getElementById('list').children.length");
+    assert_eq_str(d11, "3", "children returns correct count");
+
+    // Test script modifying DOM
+    let mut dom3: [HtmlNode] = [];
+    let dhtml3: str = "<div id=\"target\">old</div><script>document.getElementById('target').textContent = 'new';</script>";
+    let droot3: i32 = html_parse(dom3, dhtml3);
+    js_bridge_set_dom(dom3);
+    js_run_scripts(ctx, dom3, droot3);
+
+    let d12: str = js_engine_eval(ctx, "document.getElementById('target').textContent");
+    assert_eq_str(d12, "new", "script modifies DOM via getElementById");
+
+    // ── Cleanup ──
+    js_engine_destroy(ctx);
+
+    println("");
+    println("=== All JS tests complete ===");
+}

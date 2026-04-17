@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head><title>OscaWeb JS Test Suite</title></head>
+<body>
+
+<h1>OscaWeb JavaScript Engine Test Suite</h1>
+<p id="summary">Running tests...</p>
+<hr>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>1. Basic DOM: textContent</h2>
+<p id="t1-set">BEFORE</p>
+<p id="t1-get">Waiting...</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>2. Arithmetic and Loops</h2>
+<p id="t2-sum">Waiting...</p>
+<p id="t2-fib">Waiting...</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>3. ES6+ Language Features</h2>
+<p id="t3-arrow">Waiting...</p>
+<p id="t3-const">Waiting...</p>
+<p id="t3-destruct">Waiting...</p>
+<p id="t3-spread">Waiting...</p>
+<p id="t3-ternary">Waiting...</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>4. String Operations</h2>
+<p id="t4-concat">Waiting...</p>
+<p id="t4-methods">Waiting...</p>
+<p id="t4-search">Waiting...</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>5. setAttribute / getAttribute</h2>
+<p id="t5-target">Original paragraph</p>
+<p id="t5-result">Waiting...</p>
+<p id="t5-multi">Waiting...</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>6. getElementsByTagName</h2>
+<p id="t6-p-count">Waiting...</p>
+<p id="t6-h2-count">Waiting...</p>
+<div>
+  <ul id="t6-list"><li>A</li><li>B</li><li>C</li></ul>
+</div>
+<p id="t6-li-count">Waiting...</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>7. Children Traversal</h2>
+<div id="t7-parent">
+  <p>Child 1</p>
+  <p>Child 2</p>
+  <p>Child 3</p>
+</div>
+<p id="t7-count">Waiting...</p>
+<p id="t7-tags">Waiting...</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>8. Chained DOM Operations</h2>
+<div id="t8-chain">Initial</div>
+<p id="t8-result">Waiting...</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>9. Multiple Scripts</h2>
+<p id="t9-first">Waiting for first script...</p>
+<script>
+document.getElementById('t9-first').textContent = 'First script ran!';
+</script>
+<p id="t9-second">Waiting for second script...</p>
+<script>
+document.getElementById('t9-second').textContent = 'Second script ran!';
+</script>
+<p id="t9-shared">Waiting...</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>10. Error Resilience</h2>
+<p id="t10-before">Before error script</p>
+<script>
+try {
+  var noSuchThing = undefined;
+  noSuchThing.property;
+} catch(e) {
+  console.log('Caught expected error: ' + e.message);
+}
+document.getElementById('t10-before').textContent = 'Error was caught gracefully';
+</script>
+<p id="t10-after">This should still update.</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>11. Onclick: Counter</h2>
+<p id="t11-count">Count: 0</p>
+<p id="t11-btn" onclick="clickCount++; document.getElementById('t11-count').textContent = 'Count: ' + clickCount;">[ CLICK HERE to increment ]</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>12. Onclick: Text Toggle</h2>
+<p id="t12-text">Original text</p>
+<p id="t12-btn" onclick="var e = document.getElementById('t12-text'); e.textContent = (e.textContent === 'TOGGLED') ? 'Original text' : 'TOGGLED';">[ CLICK HERE to toggle ]</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>13. Onclick: setAttribute on Click</h2>
+<p id="t13-target">Watch my attribute</p>
+<p id="t13-result">No clicks yet</p>
+<p id="t13-btn" onclick="document.getElementById('t13-target').setAttribute('data-clicked', 'yes'); document.getElementById('t13-result').textContent = 'data-clicked = ' + document.getElementById('t13-target').getAttribute('data-clicked');">[ CLICK HERE to set attribute ]</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>14. Onclick: Multi-element Update</h2>
+<p id="t14-a">Box A</p>
+<p id="t14-b">Box B</p>
+<p id="t14-c">Box C</p>
+<p id="t14-btn" onclick="document.getElementById('t14-a').textContent = 'Updated A'; document.getElementById('t14-b').textContent = 'Updated B'; document.getElementById('t14-c').textContent = 'Updated C';">[ CLICK HERE to update all three ]</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>15. Onclick: Accumulator</h2>
+<p id="t15-log">Log: </p>
+<p id="t15-btn" onclick="accLog += clicks15 + ' '; clicks15++; document.getElementById('t15-log').textContent = 'Log: ' + accLog;">[ CLICK multiple times, see log grow ]</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+
+<script>
+// ── Main test script ──
+
+var passed = 0;
+var failed = 0;
+
+function check(id, expected) {
+  var el = document.getElementById(id);
+  if (!el) { failed++; return; }
+  var actual = el.textContent;
+  if (actual === expected) { passed++; }
+  else {
+    failed++;
+    console.error('FAIL ' + id + ': expected "' + expected + '", got "' + actual + '"');
+  }
+}
+
+// Test 1: textContent set + get
+document.getElementById('t1-set').textContent = 'AFTER';
+document.getElementById('t1-get').textContent = 'Got: ' + document.getElementById('t1-set').textContent;
+
+// Test 2: arithmetic
+var sum = 0;
+for (var i = 1; i <= 100; i++) sum += i;
+document.getElementById('t2-sum').textContent = 'Sum 1-100 = ' + sum;
+
+function fib(n) { return n <= 1 ? n : fib(n-1) + fib(n-2); }
+document.getElementById('t2-fib').textContent = 'Fib(10) = ' + fib(10);
+
+// Test 3: ES6+
+const arr3 = [1, 2, 3, 4, 5];
+document.getElementById('t3-arrow').textContent = 'map x2: [' + arr3.map(x => x * 2).join(', ') + ']';
+const PI = 3.14159;
+document.getElementById('t3-const').textContent = 'const PI = ' + PI;
+const [a3, b3, ...rest3] = [10, 20, 30, 40];
+document.getElementById('t3-destruct').textContent = 'Destructured: a=' + a3 + ' b=' + b3 + ' rest=[' + rest3.join(',') + ']';
+const merged = [...[1,2], ...[3,4]];
+document.getElementById('t3-spread').textContent = 'Spread: [' + merged.join(', ') + ']';
+document.getElementById('t3-ternary').textContent = 'Ternary: ' + (true ? 'yes' : 'no');
+
+// Test 4: strings
+document.getElementById('t4-concat').textContent = 'Hello' + ' ' + 'World';
+document.getElementById('t4-methods').textContent = 'HELLO'.toLowerCase() + ' ' + 'world'.toUpperCase() + ' len=' + 'test'.length;
+document.getElementById('t4-search').textContent = 'indexOf: ' + 'abcdef'.indexOf('cd') + ', includes: ' + 'hello'.includes('ell');
+
+// Test 5: attributes
+var t5el = document.getElementById('t5-target');
+t5el.setAttribute('title', 'My Title');
+t5el.setAttribute('data-value', '42');
+document.getElementById('t5-result').textContent = 'title="' + t5el.getAttribute('title') + '" data-value="' + t5el.getAttribute('data-value') + '"';
+t5el.setAttribute('data-value', '99');
+document.getElementById('t5-multi').textContent = 'Updated data-value="' + t5el.getAttribute('data-value') + '"';
+
+// Test 6: getElementsByTagName
+var allP = document.getElementsByTagName('p');
+document.getElementById('t6-p-count').textContent = allP.length + ' paragraphs found';
+var allH2 = document.getElementsByTagName('h2');
+document.getElementById('t6-h2-count').textContent = allH2.length + ' h2 headings found';
+var allLi = document.getElementsByTagName('li');
+document.getElementById('t6-li-count').textContent = allLi.length + ' list items found';
+
+// Test 7: children
+var t7p = document.getElementById('t7-parent');
+var t7kids = t7p.children;
+document.getElementById('t7-count').textContent = 'Children: ' + t7kids.length;
+var t7tags = [];
+for (var ci = 0; ci < t7kids.length; ci++) {
+  t7tags.push(t7kids[ci].tagName);
+}
+document.getElementById('t7-tags').textContent = 'Tags: [' + t7tags.join(', ') + ']';
+
+// Test 8: chained operations
+var t8el = document.getElementById('t8-chain');
+t8el.textContent = 'Step 1';
+t8el.setAttribute('data-step', '1');
+t8el.textContent = 'Step 2';
+t8el.setAttribute('data-step', '2');
+document.getElementById('t8-result').textContent = 'Final: text="' + t8el.textContent + '" step="' + t8el.getAttribute('data-step') + '"';
+
+// Test 9: verify first two scripts already ran
+document.getElementById('t9-shared').textContent = 'Both scripts ran: ' +
+  (document.getElementById('t9-first').textContent === 'First script ran!' &&
+   document.getElementById('t9-second').textContent === 'Second script ran!');
+
+// Test 10: verify error script didn't break things
+document.getElementById('t10-after').textContent = 'Scripts continued after error!';
+
+// Globals for onclick tests
+var clickCount = 0;
+var clicks15 = 0;
+var accLog = '';
+
+// ── Auto-check all load-time tests ──
+check('t1-set', 'AFTER');
+check('t1-get', 'Got: AFTER');
+check('t2-sum', 'Sum 1-100 = 5050');
+check('t2-fib', 'Fib(10) = 55');
+check('t3-arrow', 'map x2: [2, 4, 6, 8, 10]');
+check('t3-const', 'const PI = 3.14159');
+check('t3-destruct', 'Destructured: a=10 b=20 rest=[30,40]');
+check('t3-spread', 'Spread: [1, 2, 3, 4]');
+check('t3-ternary', 'Ternary: yes');
+check('t4-concat', 'Hello World');
+check('t4-methods', 'hello WORLD len=4');
+check('t4-search', 'indexOf: 2, includes: true');
+check('t5-result', 'title="My Title" data-value="42"');
+check('t5-multi', 'Updated data-value="99"');
+check('t7-count', 'Children: 3');
+check('t7-tags', 'Tags: [p, p, p]');
+check('t8-result', 'Final: text="Step 2" step="2"');
+check('t9-shared', 'Both scripts ran: true');
+check('t10-before', 'Error was caught gracefully');
+check('t10-after', 'Scripts continued after error!');
+
+document.getElementById('summary').textContent = passed + '/' + (passed + failed) + ' load-time tests passed. Click tests below are interactive.';
+console.log('Test results: ' + passed + ' passed, ' + failed + ' failed');
+</script>
+
+<hr>
+<p><em>Load-time tests run automatically. Click tests (11-15) are interactive.</em></p>
+
+</body>
+</html>

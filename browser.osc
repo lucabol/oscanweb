@@ -1,9 +1,10 @@
 // OscaWeb — A minimal SDI web browser with Vim-like keybindings
-// Written in Oscan. No JavaScript, no tabs. Just the web.
+// Written in Oscan. JavaScript via embedded QuickJS-ng engine.
 
 use "url.osc"
 use "html.osc"
 use "http.osc"
+use "js.osc"
 use "libs/ui.osc"
 
 // ─── Constants ───────────────────────────────────────────
@@ -72,6 +73,16 @@ struct WordInfo {
     y: i32,
     w: i32,
     text: str,
+}
+
+// ─── Clickable element info (for onclick handlers) ──────
+
+struct ClickInfo {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    node_idx: i32,
 }
 
 // ─── Image Cache ─────────────────────────────────────────
@@ -343,7 +354,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 base_scheme: str, base_host: str, base_port: i32, base_path: str,
                 search_q: str, word_map: [WordInfo],
                 strikethrough: bool, force_underline: bool, mark_bg: i32,
-                ol_counter: [i32]) {
+                ol_counter: [i32], clickables: [ClickInfo]) {
     let node: HtmlNode = nodes[idx];
 
     // ── Text node ──
@@ -704,6 +715,10 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         };
     };
 
+    // Track onclick elements — record y before children render
+    let has_onclick: bool = str_len(html_get_attr(node, "onclick")) > 0;
+    let onclick_y_start: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+
     // Render children via sibling walk
     let mut child: i32 = node.first_child;
     while child != -1 {
@@ -714,8 +729,24 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     img_cache_w, img_cache_h,
                     base_scheme, base_host, base_port, base_path,
                     search_q, word_map,
-                    child_strike, child_uline, child_markbg, child_ol);
+                    child_strike, child_uline, child_markbg, child_ol,
+                    clickables);
         child = nodes[child].next_sibling;
+    };
+
+    // Record clickable element after children are rendered
+    if has_onclick {
+        let onclick_y_end: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        let onclick_h: i32 = onclick_y_end - onclick_y_start;
+        if onclick_h < LINE_H { } else {
+            let ci: ClickInfo = ClickInfo {
+                x: indent + PAD, y: onclick_y_start,
+                w: vp_width - indent - PAD * 2,
+                h: onclick_h,
+                node_idx: idx,
+            };
+            push(clickables, ci);
+        };
     };
 
     // Block post-spacing
@@ -773,6 +804,9 @@ fn! main() {
     let mut page_links: [LinkInfo] = [];
     let mut error_msg: str = "";
 
+    // JavaScript engine
+    let js_ctx: handle = js_engine_init();
+
     // Image cache
     let mut img_cache_idx: map = map_new();
     let mut img_cache_data: [[i32]] = [];
@@ -812,6 +846,9 @@ fn! main() {
     let mut sel_start_y: i32 = 0;
     let mut sel_end_x: i32 = 0;
     let mut sel_end_y: i32 = 0;
+
+    // Clickable elements (onclick handlers)
+    let mut page_clickables: [ClickInfo] = [];
 
     // Navigation trigger
     let mut needs_navigate: bool = false;
@@ -1013,6 +1050,14 @@ fn! main() {
                         page_loaded = true;
                         scroll_y = 0;
                         status_msg = current_url;
+
+                        // Set DOM for JS bridge and execute inline <script> tags
+                        js_bridge_set_dom(dom_nodes);
+                        js_run_scripts(js_ctx, dom_nodes, dom_root);
+                        if js_bridge_is_dom_dirty() > 0 {
+                            js_bridge_clear_dom_dirty();
+                        };
+
                         done = true;
                     } else {
                         error_msg = resp.error;
@@ -1293,26 +1338,43 @@ fn! main() {
                 let dx: i32 = abs_i32(sel_end_x - sel_start_x);
                 let dy: i32 = abs_i32(sel_end_y - sel_start_y);
                 if dx < 4 and dy < 4 {
-                    // Click — check links
+                    // Click — check onclick handlers first, then links
                     sel_active = false;
-                    for li in 0..len(page_links) {
-                        let lk: LinkInfo = page_links[li];
-                        if mx >= lk.x and mx < lk.x + lk.w and my >= lk.y and my < lk.y + lk.h {
-                            let href: str = lk.href;
-                            if str_len(href) > 0 {
-                                if str_contains(href, "://") {
-                                    nav_url = href;
-                                } else {
-                                    let cu: Url = url_parse(current_url);
-                                    let rp: str = url_resolve_relative(cu.path, href);
-                                    nav_url = url_to_string(Url {
-                                        scheme: cu.scheme, host: cu.host,
-                                        port: cu.port, path: rp,
-                                    });
+                    let mut onclick_handled: bool = false;
+                    for ci in 0..len(page_clickables) {
+                        let ck: ClickInfo = page_clickables[ci];
+                        if mx >= ck.x and mx < ck.x + ck.w and my >= ck.y and my < ck.y + ck.h {
+                            let onclick_attr: str = html_get_attr(dom_nodes[ck.node_idx], "onclick");
+                            if str_len(onclick_attr) > 0 {
+                                let _onclick_result: str = js_engine_eval(js_ctx, onclick_attr);
+                                if js_bridge_is_dom_dirty() > 0 {
+                                    js_bridge_clear_dom_dirty();
                                 };
-                                needs_navigate = true;
+                                onclick_handled = true;
+                                break;
                             };
-                            break;
+                        };
+                    };
+                    if not onclick_handled {
+                        for li in 0..len(page_links) {
+                            let lk: LinkInfo = page_links[li];
+                            if mx >= lk.x and mx < lk.x + lk.w and my >= lk.y and my < lk.y + lk.h {
+                                let href: str = lk.href;
+                                if str_len(href) > 0 {
+                                    if str_contains(href, "://") {
+                                        nav_url = href;
+                                    } else {
+                                        let cu: Url = url_parse(current_url);
+                                        let rp: str = url_resolve_relative(cu.path, href);
+                                        nav_url = url_to_string(Url {
+                                            scheme: cu.scheme, host: cu.host,
+                                            port: cu.port, path: rp,
+                                        });
+                                    };
+                                    needs_navigate = true;
+                                };
+                                break;
+                            };
                         };
                     };
                 } else {
@@ -1386,6 +1448,7 @@ fn! main() {
             // Page content
             if page_loaded and dom_root >= 0 {
                 while len(page_links) > 0 { pop(page_links); };
+                while len(page_clickables) > 0 { pop(page_clickables); };
                 let x_ptr: [i32] = [PAD];
                 let y_ptr: [i32] = [0];
                 let pg_u: Url = url_parse(current_url);
@@ -1397,7 +1460,7 @@ fn! main() {
                             img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
                             search_query, word_map,
-                            false, false, -1, [0]);
+                            false, false, -1, [0], page_clickables);
                 doc_height = y_ptr[0];
 
                 // Draw text selection highlight
@@ -1546,5 +1609,6 @@ fn! main() {
             sleep_ms(16);
     };
 
+    js_engine_destroy(js_ctx);
     canvas_close()
 }
