@@ -855,6 +855,17 @@ fn! main() {
     let mut needs_navigate: bool = false;
     let mut nav_url: str = "";
 
+    // Render gating: only re-render when user input or state changes.
+    // Without this, render_node is called 60× per second and — because the
+    // main loop intentionally runs outside any `arena { }` block — every
+    // per-frame allocation (str_split, str_to_lower, WordInfo/LinkInfo
+    // pushes, etc.) accumulates on the process arena.  For content-heavy
+    // pages (many links/words) the working set grows by ~1 MB/sec until
+    // the OS starts paging and the window becomes unresponsive.
+    let mut render_dirty: bool = true;
+    let mut prev_mx: i32 = -1;
+    let mut prev_my: i32 = -1;
+
     // Navigate to arg if provided
     if arg_count() >= 2 {
         nav_url = arg_get(1);
@@ -1401,6 +1412,25 @@ fn! main() {
             };
 
             // ── Render ──────────────────────────────
+            // Only redraw when something observable changed.  Key presses,
+            // mouse button transitions and navigation all flag the frame
+            // dirty; idle frames become pure sleeps, which keeps process
+            // memory bounded.  (The main loop intentionally runs outside
+            // any `arena { }` block, so every per-frame allocation accumulates
+            // on the process arena; on content-heavy pages this grows by
+            // ~1 MB/sec until the OS starts paging and the window hangs.)
+            //
+            // Mouse *position* changes deliberately do NOT dirty by themselves
+            // — otherwise a user simply moving the cursor over the window
+            // would re-render every frame.  An active text selection or
+            // Follow mode hover explicitly asks for re-render below.
+            let pos_matters: bool = sel_active;
+            if key != 0 or mbtn != prev_btn or
+               (pos_matters and (mx != prev_mx or my != prev_my)) {
+                render_dirty = true;
+            };
+
+            if render_dirty {
             canvas_clear(BG_COLOR);
 
             // Address bar
@@ -1606,6 +1636,10 @@ fn! main() {
                 FG_COLOR);
 
             prev_btn = canvas_mouse_btn();
+                render_dirty = false;
+            };
+            prev_mx = canvas_mouse_x();
+            prev_my = canvas_mouse_y();
             canvas_flush();
             sleep_ms(16);
     };
