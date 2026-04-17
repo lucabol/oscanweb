@@ -5,6 +5,7 @@ use "url.osc"
 use "html.osc"
 use "http.osc"
 use "js.osc"
+use "vlog.osc"
 use "libs/ui.osc"
 
 // ─── Constants ───────────────────────────────────────────
@@ -856,14 +857,40 @@ fn! main() {
     let mut needs_navigate: bool = false;
     let mut nav_url: str = "";
 
-    // Navigate to arg if provided
-    if arg_count() >= 2 {
-        nav_url = arg_get(1);
+    // Render gating: only re-render when user input or state changes.
+    // Without this, render_node is called 60× per second and — because the
+    // main loop intentionally runs outside any `arena { }` block — every
+    // per-frame allocation (str_split, str_to_lower, WordInfo/LinkInfo
+    // pushes, etc.) accumulates on the process arena.  For content-heavy
+    // pages (many links/words) the working set grows by ~1 MB/sec until
+    // the OS starts paging and the window becomes unresponsive.
+    let mut render_dirty: bool = true;
+    let mut prev_mx: i32 = -1;
+    let mut prev_my: i32 = -1;
+
+    // Navigate to arg if provided (skipping --verbose flag)
+    let mut verbose: bool = false;
+    let mut url_arg: str = "";
+    for ai in 1..arg_count() {
+        let a: str = arg_get(ai);
+        if str_eq(a, "--verbose") or str_eq(a, "-v") {
+            verbose = true;
+        } else if str_len(url_arg) == 0 {
+            url_arg = a;
+        };
+    };
+    if verbose {
+        vlog_enable("");
+        vlog_msg("startup", "verbose logging enabled");
+    };
+    if str_len(url_arg) > 0 {
+        nav_url = url_arg;
         let init_chars: [i32] = str_to_chars(nav_url);
         for ci in 0..len(init_chars) {
             push(url_buf, init_chars[ci]);
         };
         needs_navigate = true;
+        vlog_msg("startup url", nav_url);
     };
 
     while canvas_alive() {
@@ -1013,6 +1040,20 @@ fn! main() {
                 needs_navigate = false;
                 status_msg = "Loading...";
                 error_msg = "";
+                vlog_msg("nav start", nav_url);
+
+                // Draw a "Loading…" frame BEFORE the blocking HTTP fetch so the
+                // window is visibly alive.  Without this the Win32 message pump
+                // is blocked for the full duration of the TLS handshake +
+                // recv loop (several seconds on slow hosts) and Windows marks
+                // the app as "Not Responding".
+                canvas_clear(BG_COLOR);
+                gfx_fill_rect(0, 0, WIN_W, CHROME_TOP - 4, STATUS_BG);
+                gfx_draw_text(8, 10, "Loading: {nav_url}", FG_COLOR);
+                let sty0: i32 = WIN_H - CHROME_BOT;
+                gfx_fill_rect(0, sty0, WIN_W, CHROME_BOT, STATUS_BG);
+                gfx_draw_text(4, sty0 + 6, " LOADING | {nav_url}", FG_COLOR);
+                canvas_flush();
 
                 let u: Url = url_parse(nav_url);
                 let use_tls: bool = str_eq(u.scheme, "https");
@@ -1031,9 +1072,14 @@ fn! main() {
                 let mut done: bool = false;
 
                 while not done and redir_count < MAX_REDIRECTS {
+                    vlog_msg("fetch start", fetch_host);
+                    vlog_int("fetch tls", if fetch_tls { 1 } else { 0 });
                     let resp: HttpResponse = http_get(fetch_host, fetch_port, fetch_path, fetch_tls);
+                    vlog_int("fetch status", resp.status_code);
+                    vlog_int("fetch body_len", str_len(resp.body));
 
                     if str_len(resp.redirect_url) > 0 and (resp.status_code == 301 or resp.status_code == 302 or resp.status_code == 307) {
+                        vlog_msg("redirect", resp.redirect_url);
                         let redir_u: Url = url_parse(resp.redirect_url);
                         fetch_host = redir_u.host;
                         fetch_port = redir_u.port;
@@ -1048,20 +1094,25 @@ fn! main() {
                         while len(img_cache_data) > 0 { pop(img_cache_data); };
                         while len(img_cache_w) > 0 { pop(img_cache_w); };
                         while len(img_cache_h) > 0 { pop(img_cache_h); };
+                        vlog_msg("parse start", "");
                         dom_root = html_parse(dom_nodes, resp.body);
+                        vlog_int("parse nodes", len(dom_nodes));
                         page_loaded = true;
                         scroll_y = 0;
                         status_msg = current_url;
 
                         // Set DOM for JS bridge and execute inline <script> tags
                         js_bridge_set_dom(dom_nodes);
+                        vlog_msg("js scripts start", "");
                         js_run_scripts(js_ctx, dom_nodes, dom_root);
+                        vlog_msg("js scripts end", "");
                         if js_bridge_is_dom_dirty() > 0 {
                             js_bridge_clear_dom_dirty();
                         };
 
                         done = true;
                     } else {
+                        vlog_msg("fetch error", resp.error);
                         error_msg = resp.error;
                         status_msg = "Error: {resp.error}";
                         page_loaded = false;
@@ -1078,6 +1129,14 @@ fn! main() {
                 let uc: [i32] = str_to_chars(current_url);
                 for ci in 0..len(uc) { push(url_buf, uc[ci]); };
                 url_cursor = len(url_buf);
+
+                // Force a repaint this frame. The fetch above drew a
+                // provisional "Loading…" canvas to prove liveness, so
+                // render_dirty is currently false. Without this flag the
+                // newly parsed DOM wouldn't repaint until the next key/mouse
+                // event, leaving the "Loading…" screen up until the user
+                // presses a key.
+                render_dirty = true;
             };
 
             // ── Input handling ──────────────────────
@@ -1405,6 +1464,30 @@ fn! main() {
             };
 
             // ── Render ──────────────────────────────
+            // Only redraw when something observable changed.  Key presses,
+            // mouse button transitions and navigation all flag the frame
+            // dirty; idle frames become pure sleeps, which keeps process
+            // memory bounded.  (The main loop intentionally runs outside
+            // any `arena { }` block, so every per-frame allocation accumulates
+            // on the process arena; on content-heavy pages this grows by
+            // ~1 MB/sec until the OS starts paging and the window hangs.)
+            //
+            // Mouse *position* changes deliberately do NOT dirty by themselves
+            // — otherwise a user simply moving the cursor over the window
+            // would re-render every frame.  An active text selection or
+            // Follow mode hover explicitly asks for re-render below.
+            let pos_matters: bool = sel_active;
+            if key != 0 or mbtn != prev_btn or
+               (pos_matters and (mx != prev_mx or my != prev_my)) {
+                render_dirty = true;
+                if vlog_is_enabled() != 0 {
+                    if key != 0 { vlog_int("dirty key", key); };
+                    if mbtn != prev_btn { vlog_int("dirty mbtn", mbtn); };
+                };
+            };
+
+            if render_dirty {
+            vlog_msg("render start", "");
             canvas_clear(BG_COLOR);
 
             // Address bar
@@ -1612,6 +1695,11 @@ fn! main() {
                 FG_COLOR);
 
             prev_btn = canvas_mouse_btn();
+                render_dirty = false;
+                vlog_msg("render end", "");
+            };
+            prev_mx = canvas_mouse_x();
+            prev_my = canvas_mouse_y();
             canvas_flush();
             sleep_ms(16);
     };

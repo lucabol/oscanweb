@@ -2,6 +2,14 @@
 // Uses Oscan's built-in TLS builtins (no C-FFI needed).
 
 use "url.osc"
+use "vlog.osc"
+
+extern {
+    // Apply a recv/send timeout to a raw socket fd (SO_RCVTIMEO).
+    // Prevents the port-80 probe from hanging forever on servers
+    // that accept TCP but never send data (e.g. text.npr.org).
+    fn! net_set_recv_timeout(sock: i32, ms: i32) -> i32;
+}
 
 struct HttpResponse {
     status_code: i32,
@@ -40,6 +48,7 @@ fn! http_parse_headers(header_block: str) -> map {
 
 // TLS fetch in its own function so defer tls_close is at function scope
 fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
+    vlog_msg("tls_connect", host);
     let conn_result: Result<i32, str> = tls_connect(host, port);
     let mut handle: i32 = 0;
     match conn_result {
@@ -47,12 +56,14 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
         Result::Err(e) => { return http_make_error("TLS connection failed: {e}"); },
     };
     defer tls_close(handle);
+    vlog_msg("tls_connected", "");
 
     let send_result: Result<i32, str> = tls_send(handle, request);
     match send_result {
         Result::Ok(_n) => {},
         Result::Err(e) => { return http_make_error("TLS send failed: {e}"); },
     };
+    vlog_msg("tls_sent", "");
 
     // Receive response — parse headers to find Content-Length so we know
     // when the body is complete (some TLS servers never signal EOF).
@@ -61,10 +72,15 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     let mut content_length: i32 = -1;
     let mut body_start: i32 = 0;
     let mut done: bool = false;
+    let mut recv_calls: i32 = 0;
 
     while not done {
         let chunk: str = tls_recv(handle, 8192);
         let chunk_len: i32 = str_len(chunk);
+        recv_calls += 1;
+        if recv_calls <= 3 or recv_calls % 50 == 0 {
+            vlog_int("tls_recv chunk", chunk_len);
+        };
 
         if chunk_len == 0 {
             done = true;
@@ -116,7 +132,8 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
 }
 
 // Plain TCP fetch in its own function so defer socket_close is at function scope
-fn! http_get_plain(host: str, port: i32, request: str) -> HttpResponse {
+fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpResponse {
+    vlog_msg("plain sock_tcp", host);
     let sock_result: Result<i32, str> = socket_tcp();
     let mut sock: i32 = 0;
     match sock_result {
@@ -125,25 +142,43 @@ fn! http_get_plain(host: str, port: i32, request: str) -> HttpResponse {
     };
     defer socket_close(sock);
 
+    // Apply a recv/send timeout so a dead peer can't hang us forever.
+    if timeout_ms > 0 {
+        let tr: i32 = net_set_recv_timeout(sock, timeout_ms);
+        vlog_int("plain set_timeout_rc", tr);
+    };
+
+    vlog_msg("plain connect", host);
     let conn_result: Result<str, str> = socket_connect(sock, host, port);
     match conn_result {
         Result::Ok(_s) => {},
         Result::Err(e) => { return http_make_error("Connection failed: {e}"); },
     };
+    vlog_msg("plain connected", "");
 
     let send_result: Result<i32, str> = socket_send(sock, request);
     match send_result {
         Result::Ok(_n) => {},
         Result::Err(e) => { return http_make_error("Send failed: {e}"); },
     };
+    vlog_msg("plain sent", "");
 
     let mut raw_response: str = "";
     let mut done: bool = false;
+    let mut got_any: bool = false;
     while not done {
         let chunk: str = socket_recv(sock, 8192);
-        if str_len(chunk) == 0 {
+        let chunk_len: i32 = str_len(chunk);
+        if chunk_len == 0 {
+            // Empty recv means either clean EOF or timeout.  If we never
+            // got any data treat it as an error so the caller can fall
+            // back to TLS.
+            if not got_any {
+                return http_make_error("recv timeout or empty response");
+            };
             done = true;
         } else {
+            got_any = true;
             raw_response = str_concat(raw_response, chunk);
         };
     };
@@ -164,11 +199,20 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
     let mut raw_response: str = "";
 
     if use_tls {
-        // Try plain HTTP first — tls_connect hangs on some servers and
-        // there is no timeout mechanism in the runtime.  If the server
-        // answers on port 80 with actual content we use it; if it
-        // redirects to HTTPS (301/302/307) we fall through to TLS.
-        let probe: HttpResponse = http_get_plain(host, 80, request);
+        // Probe plain HTTP first.  This serves two purposes:
+        //   1. If the server answers on :80 with actual content, we avoid
+        //      the TLS handshake entirely.
+        //   2. Empirically, for some servers (e.g. text.npr.org behind
+        //      Akamai) tls_connect hangs indefinitely on a cold start but
+        //      works reliably after an opened-and-closed port-80
+        //      connection to the same host.  The probe "primes" the
+        //      network path (DNS, NAT, edge routing).
+        // The 3s recv timeout keeps the probe bounded even when the
+        // server accepts TCP but never sends data.
+        vlog_msg("probe start", host);
+        let probe: HttpResponse = http_get_plain(host, 80, request, 3000);
+        vlog_int("probe body_len", str_len(probe.body));
+        vlog_msg("probe error", probe.error);
         let mut probe_ok: bool = false;
         if str_len(probe.error) == 0 and str_len(probe.body) > 0 {
             // Check the status line — skip if it's a redirect
@@ -186,14 +230,38 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
             };
         };
         if not probe_ok {
+            // Prime the network path to :443 as well before calling the
+            // (untimeoutable) tls_connect.  Empirically this makes
+            // tls_connect succeed reliably on hosts like text.npr.org
+            // where it otherwise hangs indefinitely on cold start.  We
+            // issue a bounded TCP connect to :443, send nothing, then
+            // close — effectively a DNS-warm + SYN/ACK round trip.
+            vlog_msg("tls prime", host);
+            let prime_result: Result<i32, str> = socket_tcp();
+            match prime_result {
+                Result::Ok(ps) => {
+                    let _tor: i32 = net_set_recv_timeout(ps, 3000);
+                    let pc: Result<str, str> = socket_connect(ps, host, 443);
+                    match pc {
+                        Result::Ok(_s) => { vlog_msg("tls prime ok", ""); },
+                        Result::Err(e) => { vlog_msg("tls prime err", e); },
+                    };
+                    socket_close(ps);
+                },
+                Result::Err(_e) => {},
+            };
+
+            vlog_msg("tls fallback", host);
             let tls_resp: HttpResponse = http_get_tls(host, port, request);
+            vlog_int("tls body_len", str_len(tls_resp.body));
+            vlog_msg("tls error", tls_resp.error);
             if str_len(tls_resp.error) > 0 {
                 return tls_resp;
             };
             raw_response = tls_resp.body;
         };
     } else {
-        let plain_resp: HttpResponse = http_get_plain(host, port, request);
+        let plain_resp: HttpResponse = http_get_plain(host, port, request, 30000);
         if str_len(plain_resp.error) > 0 {
             return plain_resp;
         };

@@ -10,6 +10,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <winhttp.h>
+#endif
 
 /* ── osc_str helpers ──────────────────────────────────────── */
 
@@ -474,4 +482,366 @@ int32_t js_bridge_is_dom_dirty(void) {
 
 void js_bridge_clear_dom_dirty(void) {
     g_dom_dirty = 0;
+}
+
+
+/* ── Verbose file logging ─────────────────────────────────
+ * The browser is a GUI subsystem app on Windows, so stdout is
+ * not attached to any terminal.  When the user passes --verbose
+ * we append diagnostic lines to browser.log (cwd) with a
+ * millisecond-precision wall-clock timestamp plus a monotonic
+ * delta so we can see where time is being spent (e.g. TLS
+ * handshake, recv loop, parse, render).
+ */
+
+static FILE *g_log_fp = NULL;
+static int   g_log_enabled = 0;
+
+static long long vlog_now_ms(void) {
+    struct timespec ts;
+    if (timespec_get(&ts, TIME_UTC)) {
+        return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
+    }
+    return (long long)(clock() * 1000LL / CLOCKS_PER_SEC);
+}
+
+void vlog_enable(osc_str path) {
+    if (g_log_fp) { fclose(g_log_fp); g_log_fp = NULL; }
+    /* If the caller passed an empty path, auto-resolve a predictable
+     * location: %TEMP%\oscanweb.log on Windows, /tmp/oscanweb.log
+     * otherwise.  This keeps the log discoverable regardless of what
+     * cwd the user's launcher chose. */
+    char auto_path[1024];
+    const char *p = NULL;
+    if (path.len == 0) {
+#ifdef _WIN32
+        const char *tmp = getenv("TEMP");
+        if (!tmp) tmp = getenv("TMP");
+        if (!tmp) tmp = "C:\\Windows\\Temp";
+        snprintf(auto_path, sizeof(auto_path), "%s\\oscanweb.log", tmp);
+#else
+        snprintf(auto_path, sizeof(auto_path), "/tmp/oscanweb.log");
+#endif
+        p = auto_path;
+    } else {
+        char *cp = osc_str_to_cstr_alloc(path);
+        if (!cp) return;
+        g_log_fp = fopen(cp, "w");
+        free(cp);
+        goto opened;
+    }
+    g_log_fp = fopen(p, "w");
+opened:
+    if (g_log_fp) {
+        g_log_enabled = 1;
+        fprintf(g_log_fp, "# OscaWeb verbose log\n");
+        fflush(g_log_fp);
+        /* Also shout the path on stderr for any console-attached run. */
+        fprintf(stderr, "[oscanweb] verbose log: %s\n", p ? p : "(caller path)");
+        fflush(stderr);
+    }
+}
+
+void vlog_msg(osc_str tag, osc_str msg) {
+    if (!g_log_enabled || !g_log_fp) return;
+    long long ms = vlog_now_ms();
+    char *t = osc_str_to_cstr_alloc(tag);
+    char *m = osc_str_to_cstr_alloc(msg);
+    fprintf(g_log_fp, "[%lld] %s %s\n",
+            ms,
+            t ? t : "",
+            m ? m : "");
+    fflush(g_log_fp);
+    free(t); free(m);
+}
+
+void vlog_int(osc_str tag, int32_t value) {
+    if (!g_log_enabled || !g_log_fp) return;
+    long long ms = vlog_now_ms();
+    char *t = osc_str_to_cstr_alloc(tag);
+    fprintf(g_log_fp, "[%lld] %s %d\n",
+            ms,
+            t ? t : "",
+            (int)value);
+    fflush(g_log_fp);
+    free(t);
+}
+
+int32_t vlog_is_enabled(void) {
+    return g_log_enabled;
+}
+
+
+/* ── Socket recv timeout (SO_RCVTIMEO) ────────────────────
+ * The Oscan runtime exposes raw OS sockets but has no timeout
+ * primitive, so a server that accepts TCP but never sends data
+ * (e.g. text.npr.org:80) will hang the browser forever.  This
+ * FFI applies SO_RCVTIMEO + SO_SNDTIMEO to a socket fd; returns
+ * 0 on success, nonzero on failure.
+ */
+int32_t net_set_recv_timeout(int32_t sock, int32_t ms) {
+#ifdef _WIN32
+    DWORD tv = (DWORD)ms;
+    int r1 = setsockopt((SOCKET)sock, SOL_SOCKET, SO_RCVTIMEO,
+                        (const char *)&tv, sizeof(tv));
+    int r2 = setsockopt((SOCKET)sock, SOL_SOCKET, SO_SNDTIMEO,
+                        (const char *)&tv, sizeof(tv));
+    return (int32_t)(r1 | r2);
+#else
+    (void)sock; (void)ms;
+    return -1;
+#endif
+}
+
+
+/* ── Bounded TCP connect ──────────────────────────────────
+ * socket_connect in the Oscan runtime has no timeout; on Windows a
+ * connect() to an unreachable host takes ~21s (SYN + 2 retries).
+ * This FFI does the same thing but with a caller-specified timeout
+ * by putting the socket temporarily into non-blocking mode and
+ * waiting for the connection via select().  Returns 0 on success,
+ * nonzero on timeout / error.
+ */
+int32_t net_connect_timeout_ipv4(int32_t sock, int32_t ip_be, int32_t port, int32_t ms) {
+#ifdef _WIN32
+    SOCKET s = (SOCKET)sock;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((u_short)port);
+    addr.sin_addr.s_addr = (u_long)ip_be; /* already network byte order */
+
+    u_long nb = 1;
+    if (ioctlsocket(s, FIONBIO, &nb) != 0) return -1;
+
+    int cr = connect(s, (struct sockaddr*)&addr, sizeof(addr));
+    int rc = 0;
+    if (cr != 0) {
+        int err = WSAGetLastError();
+        if (err != WSAEWOULDBLOCK) { rc = -2; }
+        else {
+            fd_set wset, eset;
+            FD_ZERO(&wset); FD_SET(s, &wset);
+            FD_ZERO(&eset); FD_SET(s, &eset);
+            struct timeval tv;
+            tv.tv_sec = ms / 1000;
+            tv.tv_usec = (ms % 1000) * 1000;
+            int sr = select(0, NULL, &wset, &eset, &tv);
+            if (sr <= 0) { rc = -3; }
+            else if (FD_ISSET(s, &eset)) { rc = -4; }
+            /* sr > 0 and wset set → connected */
+        }
+    }
+
+    /* Restore blocking mode regardless so subsequent recv/send behave
+     * like the rest of the code expects (with SO_RCVTIMEO honored). */
+    nb = 0;
+    ioctlsocket(s, FIONBIO, &nb);
+    return rc;
+#else
+    (void)sock; (void)ip_be; (void)port; (void)ms;
+    return -1;
+#endif
+}
+
+/* Resolve a hostname to an IPv4 address in network byte order.
+ * Returns 0 on failure.  Uses getaddrinfo which has its own internal
+ * timeouts on Windows but those are short enough in practice.
+ */
+int32_t net_resolve_ipv4(osc_str host) {
+#ifdef _WIN32
+    char *h = osc_str_to_cstr_alloc(host);
+    if (!h) return 0;
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    int r = getaddrinfo(h, NULL, &hints, &res);
+    free(h);
+    if (r != 0 || !res) return 0;
+    struct sockaddr_in *sa = (struct sockaddr_in *)res->ai_addr;
+    int32_t ip = (int32_t)sa->sin_addr.s_addr;
+    freeaddrinfo(res);
+    return ip;
+#else
+    (void)host;
+    return 0;
+#endif
+}
+
+
+/* ── WinHTTP-based HTTPS fetch ────────────────────────────
+ * The Oscan runtime's built-in tls_connect occasionally hangs
+ * forever on certain hosts (text.npr.org being the canonical
+ * example).  There's no timeout primitive we can apply to it.
+ *
+ * WinHTTP is built into Windows, has robust timeouts (resolve,
+ * connect, send, receive), handles redirects internally, and
+ * shares its TLS stack with every other Windows app — including
+ * Edge — so it handles the same protocol quirks they do.
+ *
+ * This function takes a full URL and returns the response body as
+ * a string (via osc_str), or an empty string on error (with the
+ * error message also returned via osc_str).  Caller owns nothing;
+ * the returned osc_str's data is malloc'd and must be freed via
+ * winhttp_free_response.
+ */
+
+typedef struct {
+    osc_str body;
+    osc_str error;
+    int32_t status_code;
+} WinHttpResult;
+
+/* Convert a UTF-8 C string to a newly-malloc'd wide string. */
+static wchar_t *utf8_to_wide(const char *s) {
+    if (!s) return NULL;
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    if (wlen <= 0) return NULL;
+    wchar_t *w = (wchar_t *)malloc(wlen * sizeof(wchar_t));
+    if (!w) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, wlen);
+    return w;
+}
+
+/* Copy a C buffer into a fresh osc_str allocated on the given arena
+ * (so the Oscan side owns the memory lifetime normally). */
+static osc_str osc_str_from_bytes(void *arena, const char *data, int32_t len) {
+    /* Build a C-string-terminated copy via osc_str_concat to avoid
+     * reimplementing arena allocation here.  concat with "" gives us
+     * an arena-owned copy of the input bytes. */
+    osc_str empty = { "", 0 };
+    osc_str in = { data, len };
+    return osc_str_concat(arena, empty, in);
+}
+
+WinHttpResult winhttp_fetch(void *arena, osc_str url_s, int32_t timeout_ms) {
+    WinHttpResult r = {0};
+    r.body  = (osc_str){ "", 0 };
+    r.error = (osc_str){ "", 0 };
+#ifdef _WIN32
+    char *url = osc_str_to_cstr_alloc(url_s);
+    if (!url) {
+        r.error = osc_str_from_cstr("oom");
+        return r;
+    }
+
+    wchar_t *wurl = utf8_to_wide(url);
+    free(url);
+    if (!wurl) {
+        r.error = osc_str_from_cstr("utf16 conversion failed");
+        return r;
+    }
+
+    /* Crack the URL. */
+    URL_COMPONENTS uc;
+    memset(&uc, 0, sizeof(uc));
+    uc.dwStructSize = sizeof(uc);
+    wchar_t host[256]  = {0};
+    wchar_t path[2048] = {0};
+    uc.lpszHostName     = host;  uc.dwHostNameLength     = 256;
+    uc.lpszUrlPath      = path;  uc.dwUrlPathLength      = 2048;
+    if (!WinHttpCrackUrl(wurl, 0, 0, &uc)) {
+        free(wurl);
+        r.error = osc_str_from_cstr("bad url");
+        return r;
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"OscaWeb/0.1",
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        free(wurl);
+        r.error = osc_str_from_cstr("WinHttpOpen failed");
+        return r;
+    }
+    /* Set all four timeouts. */
+    WinHttpSetTimeouts(hSession, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        free(wurl);
+        r.error = osc_str_from_cstr("WinHttpConnect failed");
+        return r;
+    }
+
+    DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path,
+        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        free(wurl);
+        r.error = osc_str_from_cstr("WinHttpOpenRequest failed");
+        return r;
+    }
+
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, NULL)) {
+        DWORD err = GetLastError();
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        free(wurl);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "WinHttp send/recv failed (err=%lu)", err);
+        r.error = osc_str_from_bytes(arena, msg, (int32_t)strlen(msg));
+        return r;
+    }
+
+    /* Fetch status code. */
+    DWORD status = 0;
+    DWORD sz = sizeof(status);
+    WinHttpQueryHeaders(hRequest,
+        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
+    r.status_code = (int32_t)status;
+
+    /* Read the body.  Grow a plain malloc buffer, then copy to the
+     * arena at the end so the Oscan caller can keep it. */
+    size_t cap  = 8192;
+    size_t used = 0;
+    char  *buf  = (char *)malloc(cap);
+    if (!buf) {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        free(wurl);
+        r.error = osc_str_from_cstr("oom");
+        return r;
+    }
+
+    for (;;) {
+        DWORD avail = 0;
+        if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
+        if (avail == 0) break;
+        if (used + avail + 1 > cap) {
+            while (used + avail + 1 > cap) cap *= 2;
+            char *nb = (char *)realloc(buf, cap);
+            if (!nb) { free(buf); buf = NULL; break; }
+            buf = nb;
+        }
+        DWORD got = 0;
+        if (!WinHttpReadData(hRequest, buf + used, avail, &got)) break;
+        if (got == 0) break;
+        used += got;
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    free(wurl);
+
+    if (buf) {
+        r.body = osc_str_from_bytes(arena, buf, (int32_t)used);
+        free(buf);
+    }
+    return r;
+#else
+    (void)arena; (void)url_s; (void)timeout_ms;
+    r.error = osc_str_from_cstr("winhttp not supported on this platform");
+    return r;
+#endif
 }
