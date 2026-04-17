@@ -1018,8 +1018,12 @@ fn! main() {
                         scroll_y = 0;
                         status_msg = current_url;
 
-                        // Execute inline <script> tags
+                        // Set DOM for JS bridge and execute inline <script> tags
+                        js_bridge_set_dom(dom_nodes);
                         js_run_scripts(js_ctx, dom_nodes, dom_root);
+                        if js_bridge_is_dom_dirty() > 0 {
+                            js_bridge_clear_dom_dirty();
+                        };
 
                         done = true;
                     } else {

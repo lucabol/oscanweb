@@ -117,6 +117,72 @@ fn! main() {
     let r11: str = js_engine_eval(ctx, "filtered.length");
     assert_eq_str(r11, "1", "script with < and > operators");
 
+    // ── DOM Binding Tests ──
+    println("");
+    println("=== DOM Binding Tests ===");
+
+    // Test document.getElementById
+    let mut dom1: [HtmlNode] = [];
+    let dhtml1: str = "<html><body><div id=\"myDiv\">Hello World</div><p id=\"myP\">Paragraph</p></body></html>";
+    let droot1: i32 = html_parse(dom1, dhtml1);
+    js_bridge_set_dom(dom1);
+
+    let d1: str = js_engine_eval(ctx, "document.getElementById('myDiv').tagName");
+    assert_eq_str(d1, "div", "getElementById returns correct element");
+
+    let d2: str = js_engine_eval(ctx, "document.getElementById('myDiv').textContent");
+    assert_eq_str(d2, "Hello World", "element.textContent getter");
+
+    let d3: str = js_engine_eval(ctx, "document.getElementById('myDiv').id");
+    assert_eq_str(d3, "myDiv", "element.id getter");
+
+    let d4: str = js_engine_eval(ctx, "document.getElementById('nonexistent')");
+    assert_eq_str(d4, "", "getElementById nonexistent returns null");
+
+    // Test getAttribute
+    let d5: str = js_engine_eval(ctx, "document.getElementById('myDiv').getAttribute('id')");
+    assert_eq_str(d5, "myDiv", "getAttribute works");
+
+    // Test getElementsByTagName
+    let d6: str = js_engine_eval(ctx, "document.getElementsByTagName('div').length");
+    assert_eq_str(d6, "1", "getElementsByTagName finds elements");
+
+    // Test textContent setter + dirty flag
+    let _d7: str = js_engine_eval(ctx, "document.getElementById('myDiv').textContent = 'Changed'");
+    assert_true(js_bridge_is_dom_dirty() > 0, "DOM dirty after textContent set");
+    js_bridge_clear_dom_dirty();
+    assert_true(js_bridge_is_dom_dirty() == 0, "DOM dirty cleared");
+
+    let d8: str = js_engine_eval(ctx, "document.getElementById('myDiv').textContent");
+    assert_eq_str(d8, "Changed", "textContent setter works");
+
+    // Test setAttribute + dirty flag
+    let _d9: str = js_engine_eval(ctx, "document.getElementById('myP').setAttribute('class', 'highlight')");
+    assert_true(js_bridge_is_dom_dirty() > 0, "DOM dirty after setAttribute");
+    js_bridge_clear_dom_dirty();
+
+    let d10: str = js_engine_eval(ctx, "document.getElementById('myP').getAttribute('class')");
+    assert_eq_str(d10, "highlight", "setAttribute + getAttribute round-trip");
+
+    // Test children
+    let mut dom2: [HtmlNode] = [];
+    let dhtml2: str = "<ul id=\"list\"><li>A</li><li>B</li><li>C</li></ul>";
+    let droot2: i32 = html_parse(dom2, dhtml2);
+    js_bridge_set_dom(dom2);
+
+    let d11: str = js_engine_eval(ctx, "document.getElementById('list').children.length");
+    assert_eq_str(d11, "3", "children returns correct count");
+
+    // Test script modifying DOM
+    let mut dom3: [HtmlNode] = [];
+    let dhtml3: str = "<div id=\"target\">old</div><script>document.getElementById('target').textContent = 'new';</script>";
+    let droot3: i32 = html_parse(dom3, dhtml3);
+    js_bridge_set_dom(dom3);
+    js_run_scripts(ctx, dom3, droot3);
+
+    let d12: str = js_engine_eval(ctx, "document.getElementById('target').textContent");
+    assert_eq_str(d12, "new", "script modifies DOM via getElementById");
+
     // ── Cleanup ──
     js_engine_destroy(ctx);
 

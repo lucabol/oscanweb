@@ -5,6 +5,9 @@ extern {
     fn! js_engine_init() -> handle;
     fn! js_engine_eval(ctx: handle, code: str) -> str;
     fn! js_engine_destroy(ctx: handle);
+    fn! js_bridge_set_dom(nodes: [HtmlNode]);
+    fn! js_bridge_is_dom_dirty() -> i32;
+    fn! js_bridge_clear_dom_dirty();
 }
 
 // Walk the DOM tree and execute all inline <script> tags
