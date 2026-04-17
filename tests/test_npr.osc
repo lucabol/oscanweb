@@ -1,0 +1,148 @@
+// Test parsing and walking HTML structure similar to text.npr.org
+// The NPR text page has: <li> without <ul>/<ol> wrapper, empty divs,
+// unterminated entities, <style> inside <head>, and data: URLs.
+
+use "../html.osc"
+
+fn! assert_true(cond: bool, test_name: str) {
+    if cond {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name}");
+    };
+}
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! count_children(nodes: [HtmlNode], parent_idx: i32) -> i32 {
+    let mut count: i32 = 0;
+    let mut child: i32 = nodes[parent_idx].first_child;
+    while child != -1 {
+        count += 1;
+        child = nodes[child].next_sibling;
+    };
+    count
+}
+
+// Walk the DOM like render_node does (no gfx calls)
+fn! walk_node(nodes: [HtmlNode], idx: i32, depth: i32) {
+    if idx < 0 or idx >= len(nodes) {
+        println("ERROR: invalid node index {idx}");
+        return;
+    };
+    let node: HtmlNode = nodes[idx];
+    if node.is_text { return; };
+
+    let tag: str = node.tag;
+    if str_eq(tag, "head") or str_eq(tag, "script") or str_eq(tag, "style") or
+       str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title") or
+       str_eq(tag, "noscript") {
+        return;
+    };
+
+    let mut ch: i32 = node.first_child;
+    while ch != -1 {
+        walk_node(nodes, ch, depth + 1);
+        ch = nodes[ch].next_sibling;
+    };
+}
+
+fn! main() {
+    println("=== NPR-like HTML Tests ===");
+
+    // Test 1: <li> without <ul>/<ol> wrapper (footer nav pattern)
+    let mut nodes1: [HtmlNode] = [];
+    let root1: i32 = html_parse(nodes1, "<nav><li><a href=\"/a\">Link A</a></li><li><a href=\"/b\">Link B</a></li></nav>");
+    assert_true(root1 >= 0, "li-without-ul: parsed");
+    walk_node(nodes1, root1, 0);
+    println("  Walk complete: li-without-ul");
+
+    // Test 2: empty <div> elements
+    let mut nodes2: [HtmlNode] = [];
+    let root2: i32 = html_parse(nodes2, "<div></div><div></div>");
+    assert_true(root2 >= 0, "empty-div: parsed");
+    walk_node(nodes2, root2, 0);
+    println("  Walk complete: empty-div");
+
+    // Test 3: unterminated entity
+    let mut nodes3: [HtmlNode] = [];
+    let root3: i32 = html_parse(nodes3, "<p>&copy NPR</p>");
+    assert_true(root3 >= 0, "unterminated-entity: parsed");
+    walk_node(nodes3, root3, 0);
+    println("  Walk complete: unterminated-entity");
+
+    // Test 4: <style> with CSS content (use str_from_chars for braces)
+    let mut nodes4: [HtmlNode] = [];
+    // Build CSS with braces via char codes: { = 123, } = 125
+    let lb: str = str_from_chars([123]);
+    let rb: str = str_from_chars([125]);
+    let css: str = str_concat("body ", str_concat(lb, str_concat(" color: red; ", str_concat(rb, str_concat(" .a>b ", str_concat(lb, str_concat(" margin: 0; ", rb)))))));
+    let style_html: str = str_concat("<head><style>", str_concat(css, "</style></head><body><p>Hello</p></body>"));
+    let root4: i32 = html_parse(nodes4, style_html);
+    assert_true(root4 >= 0, "style-tag: parsed");
+    walk_node(nodes4, root4, 0);
+    println("  Walk complete: style-tag");
+
+    // Test 5: data: URL in link tag attribute
+    let mut nodes5: [HtmlNode] = [];
+    let dquote: str = str_from_chars([34]);
+    let link_html: str = str_concat("<link href=", str_concat(dquote, str_concat("data:image/png;base64,abc123==", str_concat(dquote, ">"))));
+    let full5: str = str_concat("<head>", str_concat(link_html, "</head><body><p>test</p></body>"));
+    let root5: i32 = html_parse(nodes5, full5);
+    assert_true(root5 >= 0, "data-url: parsed");
+    walk_node(nodes5, root5, 0);
+    println("  Walk complete: data-url");
+
+    // Test 6: full NPR-like structure (no curly braces in strings)
+    let mut nodes6: [HtmlNode] = [];
+    let npr_html: str = str_concat(
+        "<html><head><title>NPR</title></head>",
+        str_concat(
+            "<body><header><p>Text-Only <a href=\"/full\">Full Site</a></p></header>",
+            str_concat(
+                "<main><p> </p><div><h1>NPR</h1><div></div><p>Friday</p>",
+                str_concat(
+                    "<ul><li><a href=\"/s1\">Story one</a></li><li><a href=\"/s2\">Story two which is a longer headline</a></li>",
+                    str_concat(
+                        "<li><a href=\"/s3\">Third story</a></li><li><a href=\"/s4\">Fourth story</a></li>",
+                        str_concat(
+                            "<li><a href=\"/s5\">Fifth story</a></li></ul></div></main>",
+                            str_concat(
+                                "<div></div><nav><p>Topics</p><ul><li><a href=\"/n\">News</a></li></ul></nav>",
+                                "<footer><nav><li><a href=\"/c\">Contact</a></li><li><a href=\"/t\">Terms</a></li></nav><p>&amp;copy NPR</p></footer></body></html>"
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    );
+    let root6: i32 = html_parse(nodes6, npr_html);
+    println("  Parsed NPR-like: {len(nodes6)} nodes");
+    assert_true(root6 >= 0, "npr-like: parsed");
+    assert_true(len(nodes6) > 30, "npr-like: has many nodes");
+    walk_node(nodes6, root6, 0);
+    println("  Walk complete: npr-like");
+
+    // Test 7: verify <li> without <ul> doesn't create cycles
+    let mut nodes7: [HtmlNode] = [];
+    let root7: i32 = html_parse(nodes7, "<footer><nav><li>A</li><li>B</li><li>C</li><li>D</li></nav></footer>");
+    let nav7: i32 = nodes7[nodes7[root7].first_child].first_child;
+    assert_eq_i32(count_children(nodes7, nav7), 4, "li-no-ul: nav has 4 li children");
+    // Verify no cycle: walk all children, should terminate
+    let mut walk_count: i32 = 0;
+    let mut wc: i32 = nodes7[nav7].first_child;
+    while wc != -1 and walk_count < 100 {
+        walk_count += 1;
+        wc = nodes7[wc].next_sibling;
+    };
+    assert_true(walk_count == 4, "li-no-ul: sibling walk terminates at 4");
+
+    println("=== NPR Tests Complete ===");
+}
