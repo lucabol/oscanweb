@@ -10,6 +10,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
 
 /* ── osc_str helpers ──────────────────────────────────────── */
 
@@ -474,4 +479,89 @@ int32_t js_bridge_is_dom_dirty(void) {
 
 void js_bridge_clear_dom_dirty(void) {
     g_dom_dirty = 0;
+}
+
+
+/* ── Verbose file logging ─────────────────────────────────
+ * The browser is a GUI subsystem app on Windows, so stdout is
+ * not attached to any terminal.  When the user passes --verbose
+ * we append diagnostic lines to browser.log (cwd) with a
+ * millisecond-precision wall-clock timestamp plus a monotonic
+ * delta so we can see where time is being spent (e.g. TLS
+ * handshake, recv loop, parse, render).
+ */
+
+static FILE *g_log_fp = NULL;
+static int   g_log_enabled = 0;
+
+static long long vlog_now_ms(void) {
+    struct timespec ts;
+    if (timespec_get(&ts, TIME_UTC)) {
+        return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
+    }
+    return (long long)(clock() * 1000LL / CLOCKS_PER_SEC);
+}
+
+void vlog_enable(osc_str path) {
+    if (g_log_fp) { fclose(g_log_fp); g_log_fp = NULL; }
+    char *p = osc_str_to_cstr_alloc(path);
+    if (!p) return;
+    g_log_fp = fopen(p, "w");
+    free(p);
+    if (g_log_fp) {
+        g_log_enabled = 1;
+        fprintf(g_log_fp, "# OscaWeb verbose log\n");
+        fflush(g_log_fp);
+    }
+}
+
+void vlog_msg(osc_str tag, osc_str msg) {
+    if (!g_log_enabled || !g_log_fp) return;
+    long long ms = vlog_now_ms();
+    char *t = osc_str_to_cstr_alloc(tag);
+    char *m = osc_str_to_cstr_alloc(msg);
+    fprintf(g_log_fp, "[%lld] %s %s\n",
+            ms,
+            t ? t : "",
+            m ? m : "");
+    fflush(g_log_fp);
+    free(t); free(m);
+}
+
+void vlog_int(osc_str tag, int32_t value) {
+    if (!g_log_enabled || !g_log_fp) return;
+    long long ms = vlog_now_ms();
+    char *t = osc_str_to_cstr_alloc(tag);
+    fprintf(g_log_fp, "[%lld] %s %d\n",
+            ms,
+            t ? t : "",
+            (int)value);
+    fflush(g_log_fp);
+    free(t);
+}
+
+int32_t vlog_is_enabled(void) {
+    return g_log_enabled;
+}
+
+
+/* ── Socket recv timeout (SO_RCVTIMEO) ────────────────────
+ * The Oscan runtime exposes raw OS sockets but has no timeout
+ * primitive, so a server that accepts TCP but never sends data
+ * (e.g. text.npr.org:80) will hang the browser forever.  This
+ * FFI applies SO_RCVTIMEO + SO_SNDTIMEO to a socket fd; returns
+ * 0 on success, nonzero on failure.
+ */
+int32_t net_set_recv_timeout(int32_t sock, int32_t ms) {
+#ifdef _WIN32
+    DWORD tv = (DWORD)ms;
+    int r1 = setsockopt((SOCKET)sock, SOL_SOCKET, SO_RCVTIMEO,
+                        (const char *)&tv, sizeof(tv));
+    int r2 = setsockopt((SOCKET)sock, SOL_SOCKET, SO_SNDTIMEO,
+                        (const char *)&tv, sizeof(tv));
+    return (int32_t)(r1 | r2);
+#else
+    (void)sock; (void)ms;
+    return -1;
+#endif
 }

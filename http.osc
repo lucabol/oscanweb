@@ -2,6 +2,14 @@
 // Uses Oscan's built-in TLS builtins (no C-FFI needed).
 
 use "url.osc"
+use "vlog.osc"
+
+extern {
+    // Apply a recv/send timeout to a raw socket fd (SO_RCVTIMEO).
+    // Prevents the port-80 probe from hanging forever on servers
+    // that accept TCP but never send data (e.g. text.npr.org).
+    fn! net_set_recv_timeout(sock: i32, ms: i32) -> i32;
+}
 
 struct HttpResponse {
     status_code: i32,
@@ -116,7 +124,8 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
 }
 
 // Plain TCP fetch in its own function so defer socket_close is at function scope
-fn! http_get_plain(host: str, port: i32, request: str) -> HttpResponse {
+fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpResponse {
+    vlog_msg("plain sock_tcp", host);
     let sock_result: Result<i32, str> = socket_tcp();
     let mut sock: i32 = 0;
     match sock_result {
@@ -125,25 +134,43 @@ fn! http_get_plain(host: str, port: i32, request: str) -> HttpResponse {
     };
     defer socket_close(sock);
 
+    // Apply a recv/send timeout so a dead peer can't hang us forever.
+    if timeout_ms > 0 {
+        let tr: i32 = net_set_recv_timeout(sock, timeout_ms);
+        vlog_int("plain set_timeout_rc", tr);
+    };
+
+    vlog_msg("plain connect", host);
     let conn_result: Result<str, str> = socket_connect(sock, host, port);
     match conn_result {
         Result::Ok(_s) => {},
         Result::Err(e) => { return http_make_error("Connection failed: {e}"); },
     };
+    vlog_msg("plain connected", "");
 
     let send_result: Result<i32, str> = socket_send(sock, request);
     match send_result {
         Result::Ok(_n) => {},
         Result::Err(e) => { return http_make_error("Send failed: {e}"); },
     };
+    vlog_msg("plain sent", "");
 
     let mut raw_response: str = "";
     let mut done: bool = false;
+    let mut got_any: bool = false;
     while not done {
         let chunk: str = socket_recv(sock, 8192);
-        if str_len(chunk) == 0 {
+        let chunk_len: i32 = str_len(chunk);
+        if chunk_len == 0 {
+            // Empty recv means either clean EOF or timeout.  If we never
+            // got any data treat it as an error so the caller can fall
+            // back to TLS.
+            if not got_any {
+                return http_make_error("recv timeout or empty response");
+            };
             done = true;
         } else {
+            got_any = true;
             raw_response = str_concat(raw_response, chunk);
         };
     };
@@ -164,11 +191,10 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
     let mut raw_response: str = "";
 
     if use_tls {
-        // Try plain HTTP first — tls_connect hangs on some servers and
-        // there is no timeout mechanism in the runtime.  If the server
-        // answers on port 80 with actual content we use it; if it
-        // redirects to HTTPS (301/302/307) we fall through to TLS.
-        let probe: HttpResponse = http_get_plain(host, 80, request);
+        vlog_msg("probe start", host);
+        let probe: HttpResponse = http_get_plain(host, 80, request, 3000);
+        vlog_int("probe body_len", str_len(probe.body));
+        vlog_msg("probe error", probe.error);
         let mut probe_ok: bool = false;
         if str_len(probe.error) == 0 and str_len(probe.body) > 0 {
             // Check the status line — skip if it's a redirect
@@ -186,14 +212,17 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
             };
         };
         if not probe_ok {
+            vlog_msg("tls fallback", host);
             let tls_resp: HttpResponse = http_get_tls(host, port, request);
+            vlog_int("tls body_len", str_len(tls_resp.body));
+            vlog_msg("tls error", tls_resp.error);
             if str_len(tls_resp.error) > 0 {
                 return tls_resp;
             };
             raw_response = tls_resp.body;
         };
     } else {
-        let plain_resp: HttpResponse = http_get_plain(host, port, request);
+        let plain_resp: HttpResponse = http_get_plain(host, port, request, 30000);
         if str_len(plain_resp.error) > 0 {
             return plain_resp;
         };

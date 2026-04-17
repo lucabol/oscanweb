@@ -1,0 +1,10 @@
+// Verbose diagnostic logging FFI (implemented in js_bridge.c).
+// When --verbose is passed on the command line, entries are appended
+// to browser.log in the cwd with a millisecond timestamp.
+
+extern {
+    fn! vlog_enable(path: str);
+    fn! vlog_msg(tag: str, msg: str);
+    fn! vlog_int(tag: str, value: i32);
+    fn! vlog_is_enabled() -> i32;
+}
