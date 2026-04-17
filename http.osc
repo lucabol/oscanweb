@@ -9,6 +9,13 @@ extern {
     // Prevents the port-80 probe from hanging forever on servers
     // that accept TCP but never send data (e.g. text.npr.org).
     fn! net_set_recv_timeout(sock: i32, ms: i32) -> i32;
+
+    // Returns non-zero if `host` has already been primed this session
+    // (i.e. http_prime_tls has already run for it).  Used to skip the
+    // redundant :443 prime for every subresource fetched from the same
+    // host.  See js_bridge.c.
+    fn! host_was_primed(host: str) -> i32;
+    fn! mark_host_primed(host: str);
 }
 
 struct HttpResponse {
@@ -252,9 +259,16 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
             };
         };
         if not probe_ok {
-            // Prime the network path to :443 before calling the
-            // (untimeoutable) tls_connect.  See http_prime_tls.
-            http_prime_tls(host);
+            // Prime :443 before the (untimeoutable) tls_connect so it
+            // doesn't hang on cold start (e.g. text.npr.org).  But only
+            // prime once per host — subsequent subresources (images,
+            // scripts) reuse the already-warm path, otherwise every image
+            // on a page adds the prime's ~30ms handshake to its load time
+            // and a page with many assets feels frozen.
+            if host_was_primed(host) == 0 {
+                http_prime_tls(host);
+                mark_host_primed(host);
+            };
 
             vlog_msg("tls fallback", host);
             let tls_resp: HttpResponse = http_get_tls(host, port, request);

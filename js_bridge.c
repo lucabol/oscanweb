@@ -594,6 +594,48 @@ int32_t net_set_recv_timeout(int32_t sock, int32_t ms) {
 }
 
 
+/* ── TLS prime host cache ─────────────────────────────────
+ * The :443 prime dance in http_prime_tls adds ~30ms to every HTTPS fetch.
+ * On a page with many subresources (images, scripts) that's death by a
+ * thousand cuts and the UI feels frozen.  Only the FIRST fetch to a host
+ * actually needs the prime; once the TCP path is warm, subsequent
+ * tls_connects don't hang.  Track hosts we've already primed in a simple
+ * bounded ring so we skip the prime for matches.
+ */
+#define PRIME_CACHE_SIZE 16
+#define PRIME_HOST_MAX 255
+static char g_primed_hosts[PRIME_CACHE_SIZE][PRIME_HOST_MAX + 1];
+static int32_t g_primed_count = 0;
+static int32_t g_primed_next = 0;
+
+static int host_slot_matches(int slot, const char *host) {
+    /* strncmp on fixed-size slots; terminator guaranteed. */
+    const char *p = g_primed_hosts[slot];
+    return p[0] != '\0' && strcmp(p, host) == 0;
+}
+
+int32_t host_was_primed(osc_str host_s) {
+    if (host_s.len <= 0 || host_s.len > PRIME_HOST_MAX) return 0;
+    char h[PRIME_HOST_MAX + 1];
+    memcpy(h, host_s.data, (size_t)host_s.len);
+    h[host_s.len] = '\0';
+    int32_t n = g_primed_count < PRIME_CACHE_SIZE ? g_primed_count : PRIME_CACHE_SIZE;
+    for (int32_t i = 0; i < n; i++) {
+        if (host_slot_matches(i, h)) return 1;
+    }
+    return 0;
+}
+
+void mark_host_primed(osc_str host_s) {
+    if (host_s.len <= 0 || host_s.len > PRIME_HOST_MAX) return;
+    int32_t slot = g_primed_next;
+    memcpy(g_primed_hosts[slot], host_s.data, (size_t)host_s.len);
+    g_primed_hosts[slot][host_s.len] = '\0';
+    g_primed_next = (g_primed_next + 1) % PRIME_CACHE_SIZE;
+    if (g_primed_count < PRIME_CACHE_SIZE) g_primed_count++;
+}
+
+
 /* ── Bounded TCP connect ──────────────────────────────────
  * socket_connect in the Oscan runtime has no timeout; on Windows a
  * connect() to an unreachable host takes ~21s (SYN + 2 retries).
