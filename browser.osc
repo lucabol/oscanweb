@@ -1042,6 +1042,13 @@ fn! main() {
                 error_msg = "";
                 vlog_msg("nav start", nav_url);
 
+                // Reset per-host TLS prime cache: first fetch of a new
+                // user navigation re-primes (some hosts, e.g. text.npr.org,
+                // need a fresh :443 warm-up per navigation), but repeated
+                // subresource fetches within the same page still skip the
+                // prime so image-heavy pages don't freeze.
+                reset_prime_cache();
+
                 // Draw a "Loading…" frame BEFORE the blocking HTTP fetch so the
                 // window is visibly alive.  Without this the Win32 message pump
                 // is blocked for the full duration of the TLS handshake +

@@ -635,6 +635,12 @@ void mark_host_primed(osc_str host_s) {
     if (g_primed_count < PRIME_CACHE_SIZE) g_primed_count++;
 }
 
+void reset_prime_cache(void) {
+    g_primed_count = 0;
+    g_primed_next = 0;
+    for (int32_t i = 0; i < PRIME_CACHE_SIZE; i++) g_primed_hosts[i][0] = '\0';
+}
+
 
 /* ── Bounded TCP connect ──────────────────────────────────
  * socket_connect in the Oscan runtime has no timeout; on Windows a
