@@ -1,5 +1,5 @@
 // OscaWeb — A minimal SDI web browser with Vim-like keybindings
-// Written in Oscan. No JavaScript, no tabs. Just the web.
+// Written in Oscan. JavaScript via embedded QuickJS-ng engine.
 
 use "url.osc"
 use "html.osc"
