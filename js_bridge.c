@@ -694,6 +694,7 @@ typedef struct {
 } WinHttpResult;
 
 /* Convert a UTF-8 C string to a newly-malloc'd wide string. */
+#ifdef _WIN32
 static wchar_t *utf8_to_wide(const char *s) {
     if (!s) return NULL;
     int wlen = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
@@ -703,6 +704,7 @@ static wchar_t *utf8_to_wide(const char *s) {
     MultiByteToWideChar(CP_UTF8, 0, s, -1, w, wlen);
     return w;
 }
+#endif
 
 /* Copy a C buffer into a fresh osc_str allocated on the given arena
  * (so the Oscan side owns the memory lifetime normally). */
