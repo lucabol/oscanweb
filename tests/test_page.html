@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head><title>OscaWeb JS Test</title></head>
+<body>
+
+<h1>JavaScript Engine Test</h1>
+<hr>
+
+<h2>1. DOM Manipulation</h2>
+<p id="greeting">This text should be replaced by JavaScript.</p>
+
+<h2>2. Arithmetic</h2>
+<p id="math">Waiting for calculation...</p>
+
+<h2>3. ES6 Features</h2>
+<p id="es6">Waiting for ES6 test...</p>
+
+<h2>4. Dynamic Content</h2>
+<div id="list-container">
+  <ul id="mylist">
+    <li>Original item 1</li>
+    <li>Original item 2</li>
+  </ul>
+</div>
+<p id="list-count">Counting...</p>
+
+<h2>5. setAttribute Test</h2>
+<p id="styled">This paragraph will get a title attribute.</p>
+<p id="attr-result">Checking...</p>
+
+<h2>6. getElementsByTagName</h2>
+<p id="tag-count">Counting paragraphs...</p>
+
+<h2>7. Click Counter (onclick)</h2>
+<p id="counter">Count: 0</p>
+<p id="click-btn" onclick="clickCount++; document.getElementById('counter').textContent = 'Count: ' + clickCount;">[ CLICK ME to increment counter ]</p>
+<p id="toggle-target">This text can be toggled.</p>
+<p id="toggle-btn" onclick="var el = document.getElementById('toggle-target'); if (el.textContent === 'TOGGLED!') { el.textContent = 'This text can be toggled.'; } else { el.textContent = 'TOGGLED!'; }">[ CLICK ME to toggle text ]</p>
+
+<script>
+// Test 1: textContent setter
+document.getElementById('greeting').textContent = 'Hello from QuickJS-ng!';
+
+// Test 2: arithmetic
+var sum = 0;
+for (var i = 1; i <= 100; i++) sum += i;
+document.getElementById('math').textContent = 'Sum of 1-100 = ' + sum;
+
+// Test 3: ES6 features
+const nums = [1, 2, 3, 4, 5];
+const doubled = nums.map(x => x * 2);
+document.getElementById('es6').textContent = 'Doubled: [' + doubled.join(', ') + ']';
+
+// Test 4: reading children
+var list = document.getElementById('mylist');
+var items = list.children;
+document.getElementById('list-count').textContent = 'List has ' + items.length + ' items';
+
+// Test 5: setAttribute + getAttribute
+var el = document.getElementById('styled');
+el.setAttribute('title', 'Added by JavaScript!');
+var title = el.getAttribute('title');
+document.getElementById('attr-result').textContent = 'Title attribute = "' + title + '"';
+
+// Test 6: getElementsByTagName
+var paragraphs = document.getElementsByTagName('p');
+document.getElementById('tag-count').textContent = 'Found ' + paragraphs.length + ' paragraph elements';
+
+// Global counter for onclick test
+var clickCount = 0;
+
+// Console output (visible in terminal)
+console.log('All JS tests executed successfully!');
+</script>
+
+<hr>
+<p><em>If you see replaced text above, JavaScript is working!</em></p>
+<p><em>Click the bracketed text in section 7 to test onclick handlers.</em></p>
+
+</body>
+</html>
