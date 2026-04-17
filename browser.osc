@@ -994,7 +994,7 @@ fn! main() {
                 while not done and redir_count < MAX_REDIRECTS {
                     let resp: HttpResponse = http_get(fetch_host, fetch_port, fetch_path, fetch_tls);
 
-                    if str_len(resp.redirect_url) > 0 and (resp.status_code == 301 or resp.status_code == 302 or resp.status_code == 307) {
+                    if str_len(resp.redirect_url) > 0 and (resp.status_code == 301 or resp.status_code == 302 or resp.status_code == 307 or resp.status_code == 308) {
                         let redir_u: Url = url_parse(resp.redirect_url);
                         fetch_host = redir_u.host;
                         fetch_port = redir_u.port;
