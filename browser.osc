@@ -879,7 +879,7 @@ fn! main() {
         };
     };
     if verbose {
-        vlog_enable("browser.log");
+        vlog_enable("");
         vlog_msg("startup", "verbose logging enabled");
     };
     if str_len(url_arg) > 0 {
@@ -1128,6 +1128,14 @@ fn! main() {
                 let uc: [i32] = str_to_chars(current_url);
                 for ci in 0..len(uc) { push(url_buf, uc[ci]); };
                 url_cursor = len(url_buf);
+
+                // Force a repaint this frame. The fetch above drew a
+                // provisional "Loading…" canvas to prove liveness, so
+                // render_dirty is currently false. Without this flag the
+                // newly parsed DOM wouldn't repaint until the next key/mouse
+                // event, leaving the "Loading…" screen up until the user
+                // presses a key.
+                render_dirty = true;
             };
 
             // ── Input handling ──────────────────────

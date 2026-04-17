@@ -101,7 +101,8 @@ $JsBridge = Join-Path $ProjectDir 'js_bridge.c'
 $QuickJs  = Join-Path $ProjectDir 'libs' 'quickjs' 'quickjs.c'
 if ((Test-Path $JsBridge) -and (Test-Path $QuickJs)) {
     $oscanArgs += @('--extra-c', $JsBridge, '--extra-c', $QuickJs,
-                    '--extra-cflags', "-I$ProjectDir")
+                    '--extra-cflags', "-I$ProjectDir",
+                    '--extra-cflags', '-lwinhttp')
 }
 
 if ($Verbose) { $oscanArgs += @('--warnings', '--verbose') }
