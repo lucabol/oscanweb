@@ -98,6 +98,10 @@ jobs:
           if [ "${{ runner.os }}" = "Linux" ]; then
             # Oscan's freestanding Linux toolchain (musl) doesn't auto-link
             # libc, but js_bridge.c and libs/quickjs/quickjs.c need it.
+            # Allow duplicate definitions because Oscan's runtime already
+            # provides a handful of libc symbols (e.g. __errno_location)
+            # that would otherwise conflict with musl's libc.a.
+            EXTRA+=(--extra-cflags -Wl,--allow-multiple-definition)
             EXTRA+=(--extra-cflags -lc)
           fi
           oscan browser.osc -o "build/${{ matrix.output }}" "${EXTRA[@]}"
