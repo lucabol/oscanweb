@@ -91,7 +91,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p build
-          oscan browser.osc -o "build/${{ matrix.output }}"
+          EXTRA=(--extra-c js_bridge.c --extra-c libs/quickjs/quickjs.c --extra-cflags -I.)
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            EXTRA+=(--extra-cflags -lwinhttp)
+          fi
+          oscan browser.osc -o "build/${{ matrix.output }}" "${EXTRA[@]}"
           ls -la "build/${{ matrix.output }}"
 
       - name: Run tests
