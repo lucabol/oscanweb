@@ -10,12 +10,15 @@ extern {
     // that accept TCP but never send data (e.g. text.npr.org).
     fn! net_set_recv_timeout(sock: i32, ms: i32) -> i32;
 
-    // Returns non-zero if `host` has already been primed this session
-    // (i.e. http_prime_tls has already run for it).  Used to skip the
-    // redundant :443 prime for every subresource fetched from the same
-    // host.  See js_bridge.c.
+    // Returns non-zero if `host` has already been primed during the
+    // current navigation cycle.  The cache is reset at the start of
+    // every top-level user navigation (see reset_prime_cache) so a
+    // fresh page load always re-primes the first fetch, but repeated
+    // subresource fetches to the same host (images, scripts) skip the
+    // redundant :443 prime.  See js_bridge.c.
     fn! host_was_primed(host: str) -> i32;
     fn! mark_host_primed(host: str);
+    fn! reset_prime_cache();
 }
 
 struct HttpResponse {
