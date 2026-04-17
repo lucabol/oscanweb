@@ -399,6 +399,56 @@ fn! html_parse(nodes: [HtmlNode], source: str) -> i32 {
 
             if not html_is_void(tag_name) and not is_self_closing {
                 push(stack, elem_idx);
+
+                // Raw text elements: <script> and <style> content must not
+                // be parsed as HTML (e.g. JS code with < operator).
+                // Scan for the closing tag literally and treat content as
+                // a single text node.
+                if str_eq(tag_name, "script") or str_eq(tag_name, "style") {
+                    let close_str: str = str_concat("</", str_concat(tag_name, ">"));
+                    let close_chars: [i32] = str_to_chars(close_str);
+                    let close_len: i32 = len(close_chars);
+                    let mut raw_buf: [i32] = [];
+                    let mut found_close: bool = false;
+
+                    while i < n and not found_close {
+                        // Check if we're at the closing tag
+                        if chars[i] == 60 and i + close_len <= n {
+                            let mut match_ok: bool = true;
+                            let mut mi: i32 = 0;
+                            while mi < close_len {
+                                let src_ch: i32 = char_to_lower(chars[i + mi]);
+                                if src_ch != close_chars[mi] {
+                                    match_ok = false;
+                                    break;
+                                };
+                                mi += 1;
+                            };
+                            if match_ok {
+                                found_close = true;
+                                i += close_len;
+                            } else {
+                                push(raw_buf, chars[i]);
+                                i += 1;
+                            };
+                        } else {
+                            push(raw_buf, chars[i]);
+                            i += 1;
+                        };
+                    };
+
+                    if len(raw_buf) > 0 {
+                        let raw_text: str = str_from_chars(raw_buf);
+                        let tnode: HtmlNode = html_node_text(raw_text);
+                        push(nodes, tnode);
+                        let tidx: i32 = len(nodes) - 1;
+                        html_append_child(nodes, elem_idx, tidx);
+                    };
+
+                    // Pop the element from stack (it's now complete)
+                    pop(stack);
+                    continue;
+                };
             };
         } else {
             push(text_buf, c);

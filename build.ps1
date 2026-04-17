@@ -56,10 +56,21 @@ if ($Test) {
         Write-Host '   No test files found in tests/' -ForegroundColor Yellow
         exit 0
     }
+
+    # Extra C flags for tests that need the JS engine
+    $JsBridge = Join-Path $ProjectDir 'js_bridge.c'
+    $QuickJs  = Join-Path $ProjectDir 'libs' 'quickjs' 'quickjs.c'
+    $hasJs    = (Test-Path $JsBridge) -and (Test-Path $QuickJs)
+
     $failed = 0
     foreach ($tf in $testFiles) {
         Write-Host "   Running $($tf.Name) ... " -NoNewline
-        & oscan $tf.FullName --run 2>&1 | Out-Null
+        $testArgs = @($tf.FullName, '--run')
+        if ($hasJs) {
+            $testArgs += @('--extra-c', $JsBridge, '--extra-c', $QuickJs,
+                           '--extra-cflags', "-I$ProjectDir")
+        }
+        & oscan @testArgs 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
             Write-Host 'PASS' -ForegroundColor Green
         } else {
@@ -84,6 +95,15 @@ if (-not (Test-Path $BuildDir)) {
 
 Write-Step "Compiling $MainSource"
 $oscanArgs = @($MainSource, '-o', $OutputBin)
+
+# Link QuickJS-ng JavaScript engine
+$JsBridge = Join-Path $ProjectDir 'js_bridge.c'
+$QuickJs  = Join-Path $ProjectDir 'libs' 'quickjs' 'quickjs.c'
+if ((Test-Path $JsBridge) -and (Test-Path $QuickJs)) {
+    $oscanArgs += @('--extra-c', $JsBridge, '--extra-c', $QuickJs,
+                    '--extra-cflags', "-I$ProjectDir")
+}
+
 if ($Verbose) { $oscanArgs += @('--warnings', '--verbose') }
 if ($Verbose) {
     Write-Host "   oscan $($oscanArgs -join ' ')" -ForegroundColor DarkGray

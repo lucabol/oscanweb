@@ -4,6 +4,7 @@
 use "url.osc"
 use "html.osc"
 use "http.osc"
+use "js.osc"
 use "libs/ui.osc"
 
 // ─── Constants ───────────────────────────────────────────
@@ -773,6 +774,9 @@ fn! main() {
     let mut page_links: [LinkInfo] = [];
     let mut error_msg: str = "";
 
+    // JavaScript engine
+    let js_ctx: handle = js_engine_init();
+
     // Image cache
     let mut img_cache_idx: map = map_new();
     let mut img_cache_data: [[i32]] = [];
@@ -1013,6 +1017,10 @@ fn! main() {
                         page_loaded = true;
                         scroll_y = 0;
                         status_msg = current_url;
+
+                        // Execute inline <script> tags
+                        js_run_scripts(js_ctx, dom_nodes, dom_root);
+
                         done = true;
                     } else {
                         error_msg = resp.error;
@@ -1546,5 +1554,6 @@ fn! main() {
             sleep_ms(16);
     };
 
+    js_engine_destroy(js_ctx);
     canvas_close()
 }

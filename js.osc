@@ -1,0 +1,33 @@
+// js.osc — JavaScript engine FFI for OscaWeb
+// Uses QuickJS-ng via C bridge (js_bridge.c)
+
+extern {
+    fn! js_engine_init() -> handle;
+    fn! js_engine_eval(ctx: handle, code: str) -> str;
+    fn! js_engine_destroy(ctx: handle);
+}
+
+// Walk the DOM tree and execute all inline <script> tags
+fn! js_walk_scripts(ctx: handle, nodes: [HtmlNode], idx: i32) {
+    let node: HtmlNode = nodes[idx];
+    if str_eq(node.tag, "script") {
+        let src: str = html_get_attr(node, "src");
+        if str_len(src) == 0 {
+            let content: str = html_get_text_content(nodes, idx);
+            if str_len(content) > 0 {
+                let _result: str = js_engine_eval(ctx, content);
+            };
+        };
+        return;
+    };
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        js_walk_scripts(ctx, nodes, child);
+        child = nodes[child].next_sibling;
+    };
+}
+
+fn! js_run_scripts(ctx: handle, nodes: [HtmlNode], root_idx: i32) {
+    if root_idx < 0 { return; };
+    js_walk_scripts(ctx, nodes, root_idx);
+}
