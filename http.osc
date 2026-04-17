@@ -131,6 +131,28 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     }
 }
 
+// Prime the TLS network path with a bounded TCP connect to :443 in its own
+// function so `defer socket_close` is at function scope (avoids the oscan
+// "socket_tcp without matching defer socket_close" warning).  Empirically
+// this makes the subsequent (untimeoutable) tls_connect succeed reliably on
+// hosts like text.npr.org where it otherwise hangs indefinitely on cold start.
+fn! http_prime_tls(host: str) {
+    vlog_msg("tls prime", host);
+    let prime_result: Result<i32, str> = socket_tcp();
+    let mut ps: i32 = 0;
+    match prime_result {
+        Result::Ok(s) => { ps = s; },
+        Result::Err(_e) => { return; },
+    };
+    defer socket_close(ps);
+    let _tor: i32 = net_set_recv_timeout(ps, 3000);
+    let pc: Result<str, str> = socket_connect(ps, host, 443);
+    match pc {
+        Result::Ok(_s) => { vlog_msg("tls prime ok", ""); },
+        Result::Err(e) => { vlog_msg("tls prime err", e); },
+    };
+}
+
 // Plain TCP fetch in its own function so defer socket_close is at function scope
 fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpResponse {
     vlog_msg("plain sock_tcp", host);
@@ -230,26 +252,9 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
             };
         };
         if not probe_ok {
-            // Prime the network path to :443 as well before calling the
-            // (untimeoutable) tls_connect.  Empirically this makes
-            // tls_connect succeed reliably on hosts like text.npr.org
-            // where it otherwise hangs indefinitely on cold start.  We
-            // issue a bounded TCP connect to :443, send nothing, then
-            // close — effectively a DNS-warm + SYN/ACK round trip.
-            vlog_msg("tls prime", host);
-            let prime_result: Result<i32, str> = socket_tcp();
-            match prime_result {
-                Result::Ok(ps) => {
-                    let _tor: i32 = net_set_recv_timeout(ps, 3000);
-                    let pc: Result<str, str> = socket_connect(ps, host, 443);
-                    match pc {
-                        Result::Ok(_s) => { vlog_msg("tls prime ok", ""); },
-                        Result::Err(e) => { vlog_msg("tls prime err", e); },
-                    };
-                    socket_close(ps);
-                },
-                Result::Err(_e) => {},
-            };
+            // Prime the network path to :443 before calling the
+            // (untimeoutable) tls_connect.  See http_prime_tls.
+            http_prime_tls(host);
 
             vlog_msg("tls fallback", host);
             let tls_resp: HttpResponse = http_get_tls(host, port, request);
