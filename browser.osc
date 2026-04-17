@@ -737,16 +737,17 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     // Record clickable element after children are rendered
     if has_onclick {
         let onclick_y_end: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        let onclick_h: i32 = onclick_y_end - onclick_y_start;
-        if onclick_h < LINE_H { } else {
-            let ci: ClickInfo = ClickInfo {
-                x: indent + PAD, y: onclick_y_start,
-                w: vp_width - indent - PAD * 2,
-                h: onclick_h,
-                node_idx: idx,
-            };
-            push(clickables, ci);
+        let mut onclick_h: i32 = onclick_y_end - onclick_y_start;
+        if onclick_h < LINE_H {
+            onclick_h = LINE_H;
         };
+        let cci: ClickInfo = ClickInfo {
+            x: indent + PAD, y: onclick_y_start,
+            w: vp_width - indent - PAD * 2,
+            h: onclick_h,
+            node_idx: idx,
+        };
+        push(clickables, cci);
     };
 
     // Block post-spacing
