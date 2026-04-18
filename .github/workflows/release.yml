@@ -94,9 +94,13 @@ jobs:
           EXTRA=(--extra-c js_bridge.c --extra-c libs/quickjs/quickjs.c --extra-cflags -I.)
           if [ "${{ runner.os }}" = "Windows" ]; then
             EXTRA+=(--extra-cflags -lwinhttp)
-            # Build as a GUI app so Windows doesn't open a console window
-            # when launching the browser from Explorer.
-            EXTRA+=(--extra-cflags -mwindows)
+            # Build as a GUI app so Windows doesn't pop a console window
+            # when launching the browser from Explorer. Also override the
+            # entry point: --subsystem=windows otherwise makes ld.lld look
+            # for WinMainCRTStartup, which Oscan's freestanding runtime
+            # does not provide (it uses mainCRTStartup).
+            EXTRA+=(--extra-cflags "-Wl,--subsystem,windows")
+            EXTRA+=(--extra-cflags "-Wl,--entry,mainCRTStartup")
           fi
           if [ "${{ runner.os }}" = "Linux" ]; then
             # Oscan's freestanding Linux toolchain (musl) doesn't auto-link
