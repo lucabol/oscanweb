@@ -1,0 +1,678 @@
+// css.osc — Minimal CSS tokenizer, parser, selector matcher, and cascade.
+//
+// Supports the subset of CSS that's most useful for a terminal-style
+// renderer without a real box model:
+//
+//   selectors:   tag, .class, #id, *, and compounds like  h1.title
+//                comma-separated selector lists
+//                (descendant/child/sibling combinators are intentionally
+//                 NOT matched — rules containing them are skipped.)
+//   properties:  color, background-color, background, font-weight,
+//                font-style, text-decoration, display
+//   values:      named colors (subset), #rgb, #rrggbb, rgb(r,g,b),
+//                bold/normal, italic/normal,
+//                underline/line-through/none, none (for display)
+//   cascade:     specificity + source order, inline style=""  wins over
+//                stylesheet rules.
+//   inheritance: color, font-weight, font-style, text-decoration
+//                propagate from parent ComputedStyle to child.
+//
+// @-rules are consumed and ignored.  Pseudo-classes, attribute
+// selectors, combinators, shorthand properties, units, and the box
+// model are NOT supported.
+
+use "html.osc"
+
+// ─── Types ─────────────────────────────────────────────────
+
+struct CssDecl {
+    property: str,
+    value: str,
+    important: bool,
+}
+
+// One simple selector: tag + optional id + optional class.
+// Empty string for any field means "not constrained".
+struct CssSimple {
+    tag: str,
+    id: str,
+    cls: str,
+}
+
+struct CssRule {
+    selectors: [CssSimple],   // comma list of simple selectors
+    decls: [CssDecl],
+    order: i32,               // source order for stable tie-break
+}
+
+// Per-node computed style.  -1 or false means "unset"; during cascade
+// we overwrite with concrete values, then inherit from parent for
+// inheritable properties still left unset.
+struct ComputedStyle {
+    display_none: bool,
+    color: i32,
+    bg_color: i32,
+    bold: i32,
+    italic: i32,
+    underline: i32,
+    strike: i32,
+}
+
+fn! css_empty_style() -> ComputedStyle {
+    ComputedStyle {
+        display_none: false,
+        color: -1,
+        bg_color: -1,
+        bold: -1,
+        italic: -1,
+        underline: -1,
+        strike: -1,
+    }
+}
+
+// ─── Character helpers ─────────────────────────────────────
+
+fn! css_is_ws(c: i32) -> bool {
+    c == 32 or c == 9 or c == 10 or c == 13
+}
+
+fn! css_is_ident_start(c: i32) -> bool {
+    (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or c == 95 or c == 45
+}
+
+fn! css_is_ident(c: i32) -> bool {
+    css_is_ident_start(c) or (c >= 48 and c <= 57)
+}
+
+// ─── Comment stripping ────────────────────────────────────
+
+fn! css_strip_comments(source: str) -> str {
+    let chars: [i32] = str_to_chars(source);
+    let n: i32 = len(chars);
+    let mut out: [i32] = [];
+    let mut i: i32 = 0;
+    while i < n {
+        if i + 1 < n and chars[i] == 47 and chars[i + 1] == 42 {
+            // skip until "*/"
+            i = i + 2;
+            while i + 1 < n and not (chars[i] == 42 and chars[i + 1] == 47) {
+                i = i + 1;
+            };
+            if i + 1 < n { i = i + 2; } else { i = n; };
+        } else {
+            push(out, chars[i]);
+            i = i + 1;
+        };
+    };
+    str_from_chars(out)
+}
+
+// ─── Color parsing ─────────────────────────────────────────
+
+fn! css_hex_digit(c: i32) -> i32 {
+    if c >= 48 and c <= 57 { c - 48 }
+    else if c >= 97 and c <= 102 { c - 97 + 10 }
+    else if c >= 65 and c <= 70 { c - 65 + 10 }
+    else { -1 }
+}
+
+fn! css_rgb(r: i32, g: i32, b: i32) -> i32 {
+    let rc: i32 = if r < 0 { 0 } else if r > 255 { 255 } else { r };
+    let gc: i32 = if g < 0 { 0 } else if g > 255 { 255 } else { g };
+    let bc: i32 = if b < 0 { 0 } else if b > 255 { 255 } else { b };
+    (rc * 65536) + (gc * 256) + bc
+}
+
+fn! css_named_color(name: str) -> i32 {
+    let n: str = str_to_lower(str_trim(name));
+    if str_eq(n, "black")   { return 0; };
+    if str_eq(n, "white")   { return css_rgb(255, 255, 255); };
+    if str_eq(n, "red")     { return css_rgb(255,   0,   0); };
+    if str_eq(n, "green")   { return css_rgb(  0, 128,   0); };
+    if str_eq(n, "lime")    { return css_rgb(  0, 255,   0); };
+    if str_eq(n, "blue")    { return css_rgb(  0,   0, 255); };
+    if str_eq(n, "yellow")  { return css_rgb(255, 255,   0); };
+    if str_eq(n, "cyan")    { return css_rgb(  0, 255, 255); };
+    if str_eq(n, "aqua")    { return css_rgb(  0, 255, 255); };
+    if str_eq(n, "magenta") { return css_rgb(255,   0, 255); };
+    if str_eq(n, "fuchsia") { return css_rgb(255,   0, 255); };
+    if str_eq(n, "silver")  { return css_rgb(192, 192, 192); };
+    if str_eq(n, "gray")    { return css_rgb(128, 128, 128); };
+    if str_eq(n, "grey")    { return css_rgb(128, 128, 128); };
+    if str_eq(n, "maroon")  { return css_rgb(128,   0,   0); };
+    if str_eq(n, "olive")   { return css_rgb(128, 128,   0); };
+    if str_eq(n, "purple")  { return css_rgb(128,   0, 128); };
+    if str_eq(n, "teal")    { return css_rgb(  0, 128, 128); };
+    if str_eq(n, "navy")    { return css_rgb(  0,   0, 128); };
+    if str_eq(n, "orange")  { return css_rgb(255, 165,   0); };
+    if str_eq(n, "pink")    { return css_rgb(255, 192, 203); };
+    if str_eq(n, "brown")   { return css_rgb(165,  42,  42); };
+    -1
+}
+
+fn! css_parse_color(raw: str) -> i32 {
+    let v: str = str_trim(raw);
+    if str_len(v) == 0 { return -1; };
+    let chars: [i32] = str_to_chars(v);
+    let n: i32 = len(chars);
+
+    if chars[0] == 35 {
+        // #rgb or #rrggbb
+        if n == 4 {
+            let hr: i32 = css_hex_digit(chars[1]);
+            let hg: i32 = css_hex_digit(chars[2]);
+            let hb: i32 = css_hex_digit(chars[3]);
+            if hr < 0 or hg < 0 or hb < 0 { return -1; };
+            return css_rgb(hr * 17, hg * 17, hb * 17);
+        };
+        if n == 7 {
+            let r1: i32 = css_hex_digit(chars[1]);
+            let r2: i32 = css_hex_digit(chars[2]);
+            let g1: i32 = css_hex_digit(chars[3]);
+            let g2: i32 = css_hex_digit(chars[4]);
+            let b1: i32 = css_hex_digit(chars[5]);
+            let b2: i32 = css_hex_digit(chars[6]);
+            if r1 < 0 or r2 < 0 or g1 < 0 or g2 < 0 or b1 < 0 or b2 < 0 {
+                return -1;
+            };
+            return css_rgb(r1 * 16 + r2, g1 * 16 + g2, b1 * 16 + b2);
+        };
+        return -1;
+    };
+
+    let vl: str = str_to_lower(v);
+    if str_starts_with(vl, "rgb(") and str_ends_with(vl, ")") {
+        let inner: str = str_slice(vl, 4, str_len(vl) - 1);
+        let parts: [str] = str_split(inner, ",");
+        if len(parts) != 3 { return -1; };
+        let p0: Result<i32, str> = parse_i32(str_trim(parts[0]));
+        let p1: Result<i32, str> = parse_i32(str_trim(parts[1]));
+        let p2: Result<i32, str> = parse_i32(str_trim(parts[2]));
+        let mut rv: i32 = -1;
+        let mut gv: i32 = -1;
+        let mut bv: i32 = -1;
+        match p0 { Result::Ok(xa) => { rv = xa; }, Result::Err(_ea) => {}, };
+        match p1 { Result::Ok(xb) => { gv = xb; }, Result::Err(_eb) => {}, };
+        match p2 { Result::Ok(xc) => { bv = xc; }, Result::Err(_ec) => {}, };
+        if rv < 0 or gv < 0 or bv < 0 { return -1; };
+        return css_rgb(rv, gv, bv);
+    };
+    css_named_color(v)
+}
+
+// ─── Selector parsing ──────────────────────────────────────
+
+// Parse one simple selector like "h1", ".cls", "#id", "*", "h1.cls".
+// Returns a selector with tag="__fail__" when input is unsupported.
+fn! css_parse_simple(s: str) -> CssSimple {
+    let trimmed: str = str_trim(s);
+    let chars: [i32] = str_to_chars(trimmed);
+    let n: i32 = len(chars);
+
+    if n == 0 {
+        return CssSimple { tag: "__fail__", id: "", cls: "" };
+    };
+    if n == 1 and chars[0] == 42 {
+        return CssSimple { tag: "*", id: "", cls: "" };
+    };
+
+    let mut tag_s: str = "";
+    let mut id_s: str = "";
+    let mut cls_s: str = "";
+    let mut i: i32 = 0;
+
+    // Leading tag name (optional)
+    if css_is_ident_start(chars[0]) {
+        let mut tbuf: [i32] = [];
+        while i < n and css_is_ident(chars[i]) {
+            push(tbuf, chars[i]);
+            i = i + 1;
+        };
+        tag_s = str_to_lower(str_from_chars(tbuf));
+    };
+
+    // Remaining segments: .class or #id only
+    while i < n {
+        let c: i32 = chars[i];
+        if c == 46 {
+            i = i + 1;
+            let mut cbuf: [i32] = [];
+            while i < n and css_is_ident(chars[i]) {
+                push(cbuf, chars[i]);
+                i = i + 1;
+            };
+            if len(cbuf) == 0 {
+                return CssSimple { tag: "__fail__", id: "", cls: "" };
+            };
+            if str_len(cls_s) == 0 {
+                cls_s = str_from_chars(cbuf);
+            };
+        } else if c == 35 {
+            i = i + 1;
+            let mut ibuf: [i32] = [];
+            while i < n and css_is_ident(chars[i]) {
+                push(ibuf, chars[i]);
+                i = i + 1;
+            };
+            if len(ibuf) == 0 {
+                return CssSimple { tag: "__fail__", id: "", cls: "" };
+            };
+            id_s = str_from_chars(ibuf);
+        } else {
+            return CssSimple { tag: "__fail__", id: "", cls: "" };
+        };
+    };
+
+    CssSimple { tag: tag_s, id: id_s, cls: cls_s }
+}
+
+// True if the selector list has no unsupported combinators/features.
+fn! css_selector_list_supported(s: str) -> bool {
+    let parts: [str] = str_split(s, ",");
+    let mut ok: bool = true;
+    for pi in 0..len(parts) {
+        let p: str = str_trim(parts[pi]);
+        let pc: [i32] = str_to_chars(p);
+        let pn: i32 = len(pc);
+        let mut saw_space: bool = false;
+        let mut in_tok: bool = false;
+        for ci in 0..pn {
+            let ch: i32 = pc[ci];
+            if ch == 62 or ch == 43 or ch == 126 or ch == 58 or ch == 91 {
+                ok = false;
+            };
+            if css_is_ws(ch) {
+                if in_tok { saw_space = true; };
+            } else {
+                if saw_space { ok = false; };
+                in_tok = true;
+            };
+        };
+    };
+    ok
+}
+
+// ─── Declaration parsing ───────────────────────────────────
+
+fn! css_parse_decls(out_decls: [CssDecl], body_text: str) {
+    let parts: [str] = str_split(body_text, ";");
+    for pi in 0..len(parts) {
+        let raw: str = str_trim(parts[pi]);
+        if str_len(raw) > 0 {
+            let colon_i: i32 = str_find(raw, ":");
+            if colon_i > 0 {
+                let prop: str = str_to_lower(str_trim(str_slice(raw, 0, colon_i)));
+                let mut val: str = str_trim(str_slice(raw, colon_i + 1, str_len(raw)));
+                let mut imp: bool = false;
+                let vl: str = str_to_lower(val);
+                if str_ends_with(vl, "!important") {
+                    imp = true;
+                    val = str_trim(str_slice(val, 0, str_len(val) - 10));
+                };
+                if str_len(prop) > 0 and str_len(val) > 0 {
+                    let d: CssDecl = CssDecl {
+                        property: prop,
+                        value: val,
+                        important: imp,
+                    };
+                    push(out_decls, d);
+                };
+            };
+        };
+    };
+}
+
+// ─── Stylesheet parsing ────────────────────────────────────
+
+// Parse a stylesheet source and append rules to `rules`.
+// Returns the next source-order counter to use.
+fn! css_parse(rules: [CssRule], source: str, start_order: i32) -> i32 {
+    let clean: str = css_strip_comments(source);
+    let chars: [i32] = str_to_chars(clean);
+    let n: i32 = len(chars);
+    let mut i: i32 = 0;
+    let mut order: i32 = start_order;
+
+    while i < n {
+        while i < n and css_is_ws(chars[i]) { i = i + 1; };
+        if i >= n { break; };
+
+        // Skip @-rules entirely (no media-query support yet).
+        if chars[i] == 64 {
+            let mut depth: i32 = 0;
+            let mut saw_brace: bool = false;
+            while i < n {
+                let ch: i32 = chars[i];
+                if ch == 123 {
+                    depth = depth + 1;
+                    saw_brace = true;
+                    i = i + 1;
+                } else if ch == 125 {
+                    depth = depth - 1;
+                    i = i + 1;
+                    if saw_brace and depth <= 0 { break; };
+                } else if ch == 59 and not saw_brace {
+                    i = i + 1;
+                    break;
+                } else {
+                    i = i + 1;
+                };
+            };
+            continue;
+        };
+
+        // Selector list until '{'
+        let mut sel_buf: [i32] = [];
+        while i < n and chars[i] != 123 {
+            push(sel_buf, chars[i]);
+            i = i + 1;
+        };
+        if i >= n { break; };
+        i = i + 1;
+
+        let sel_text: str = str_trim(str_from_chars(sel_buf));
+
+        // Body until '}'
+        let mut body_buf: [i32] = [];
+        while i < n and chars[i] != 125 {
+            push(body_buf, chars[i]);
+            i = i + 1;
+        };
+        if i < n { i = i + 1; };
+        let body_text: str = str_from_chars(body_buf);
+
+        if str_len(sel_text) > 0 and css_selector_list_supported(sel_text) {
+            let sel_parts: [str] = str_split(sel_text, ",");
+            let mut sels: [CssSimple] = [];
+            let mut any_fail: bool = false;
+            for si in 0..len(sel_parts) {
+                let one: CssSimple = css_parse_simple(str_trim(sel_parts[si]));
+                if str_eq(one.tag, "__fail__") {
+                    any_fail = true;
+                } else {
+                    push(sels, one);
+                };
+            };
+            if not any_fail and len(sels) > 0 {
+                let mut decls: [CssDecl] = [];
+                css_parse_decls(decls, body_text);
+                if len(decls) > 0 {
+                    let rule: CssRule = CssRule {
+                        selectors: sels,
+                        decls: decls,
+                        order: order,
+                    };
+                    push(rules, rule);
+                    order = order + 1;
+                };
+            };
+        };
+    };
+
+    order
+}
+
+// ─── Selector matching ─────────────────────────────────────
+
+// Return true if `needle` appears as a space-separated token in `class_attr`.
+fn! css_class_contains(class_attr: str, needle: str) -> bool {
+    if str_len(class_attr) == 0 or str_len(needle) == 0 { return false; };
+    let toks: [str] = str_split(class_attr, " ");
+    let mut hit: bool = false;
+    for ti in 0..len(toks) {
+        if str_eq(str_trim(toks[ti]), needle) { hit = true; };
+    };
+    hit
+}
+
+fn! css_simple_matches(sel: CssSimple, node: HtmlNode) -> bool {
+    if node.is_text { return false; };
+    if str_len(sel.tag) > 0 and not str_eq(sel.tag, "*") {
+        if not str_eq(str_to_lower(node.tag), sel.tag) { return false; };
+    };
+    if str_len(sel.id) > 0 {
+        if not str_eq(html_get_attr(node, "id"), sel.id) { return false; };
+    };
+    if str_len(sel.cls) > 0 {
+        if not css_class_contains(html_get_attr(node, "class"), sel.cls) {
+            return false;
+        };
+    };
+    true
+}
+
+// CSS 2.1 specificity packed into a single int.
+// (id_count * 10000) + (class_count * 100) + tag_count
+fn! css_specificity(sel: CssSimple) -> i32 {
+    let id_w: i32 = if str_len(sel.id) > 0 { 10000 } else { 0 };
+    let cls_w: i32 = if str_len(sel.cls) > 0 { 100 } else { 0 };
+    let tag_w: i32 = if str_len(sel.tag) > 0 and not str_eq(sel.tag, "*") { 1 } else { 0 };
+    id_w + cls_w + tag_w
+}
+
+// ─── Cascade ───────────────────────────────────────────────
+
+// Apply a single declaration to a ComputedStyle in-place.
+fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
+    let prop: str = d.property;
+    let val: str = str_to_lower(str_trim(d.value));
+
+    if str_eq(prop, "color") {
+        let c: i32 = css_parse_color(d.value);
+        if c >= 0 { styles[idx].color = c; };
+        return;
+    };
+    if str_eq(prop, "background-color") or str_eq(prop, "background") {
+        if str_eq(val, "transparent") or str_eq(val, "none") {
+            styles[idx].bg_color = -1;
+            return;
+        };
+        let c: i32 = css_parse_color(d.value);
+        if c >= 0 { styles[idx].bg_color = c; };
+        return;
+    };
+    if str_eq(prop, "font-weight") {
+        if str_eq(val, "bold") or str_eq(val, "bolder") or str_eq(val, "700") or
+           str_eq(val, "800") or str_eq(val, "900") {
+            styles[idx].bold = 1;
+        } else if str_eq(val, "normal") or str_eq(val, "lighter") or
+                  str_eq(val, "400") or str_eq(val, "300") or
+                  str_eq(val, "200") or str_eq(val, "100") {
+            styles[idx].bold = 0;
+        };
+        return;
+    };
+    if str_eq(prop, "font-style") {
+        if str_eq(val, "italic") or str_eq(val, "oblique") {
+            styles[idx].italic = 1;
+        } else if str_eq(val, "normal") {
+            styles[idx].italic = 0;
+        };
+        return;
+    };
+    if str_eq(prop, "text-decoration") or str_eq(prop, "text-decoration-line") {
+        // Value may list multiple keywords, e.g. "underline line-through"
+        let toks: [str] = str_split(val, " ");
+        let mut saw_none: bool = false;
+        let mut saw_u: bool = false;
+        let mut saw_lt: bool = false;
+        for ti in 0..len(toks) {
+            let t: str = str_trim(toks[ti]);
+            if str_eq(t, "none") { saw_none = true; };
+            if str_eq(t, "underline") { saw_u = true; };
+            if str_eq(t, "line-through") { saw_lt = true; };
+        };
+        if saw_none {
+            styles[idx].underline = 0;
+            styles[idx].strike = 0;
+        } else {
+            if saw_u  { styles[idx].underline = 1; };
+            if saw_lt { styles[idx].strike = 1; };
+        };
+        return;
+    };
+    if str_eq(prop, "display") {
+        if str_eq(val, "none") {
+            styles[idx].display_none = true;
+        };
+        return;
+    };
+}
+
+// Insertion-sort matched rules into (specificity, order) ascending so that
+// applying in order gives the correct last-wins cascade (!important on top).
+// We represent "matched" as parallel arrays of indices into `rules` and the
+// selector's specificity.
+fn! css_cascade_apply(styles: [ComputedStyle], idx: i32,
+                     rules: [CssRule], node: HtmlNode) {
+    let mut match_rule: [i32] = [];
+    let mut match_spec: [i32] = [];
+    let mut match_order: [i32] = [];
+
+    for ri in 0..len(rules) {
+        let r: CssRule = rules[ri];
+        let mut best: i32 = -1;
+        for si in 0..len(r.selectors) {
+            if css_simple_matches(r.selectors[si], node) {
+                let sp: i32 = css_specificity(r.selectors[si]);
+                if sp > best { best = sp; };
+            };
+        };
+        if best >= 0 {
+            push(match_rule, ri);
+            push(match_spec, best);
+            push(match_order, r.order);
+        };
+    };
+
+    // Two-pass: apply non-important first (spec+order), then important.
+    // Within each pass, sort by (spec ASC, order ASC) so last write wins.
+    let m: i32 = len(match_rule);
+    // Build a simple index list we'll sort.
+    let mut idx_list: [i32] = [];
+    for li in 0..m { push(idx_list, li); };
+
+    // Selection sort by (spec, order) ascending.  m is small in practice.
+    for a in 0..m {
+        let mut min_i: i32 = a;
+        for b in (a + 1)..m {
+            let ia: i32 = idx_list[min_i];
+            let ib: i32 = idx_list[b];
+            if match_spec[ib] < match_spec[ia] or
+               (match_spec[ib] == match_spec[ia] and match_order[ib] < match_order[ia]) {
+                min_i = b;
+            };
+        };
+        if min_i != a {
+            let tmp: i32 = idx_list[a];
+            idx_list[a] = idx_list[min_i];
+            idx_list[min_i] = tmp;
+        };
+    };
+
+    // Pass 1: non-important
+    for pa in 0..m {
+        let mi: i32 = idx_list[pa];
+        let ri: i32 = match_rule[mi];
+        let decls: [CssDecl] = rules[ri].decls;
+        for di in 0..len(decls) {
+            if not decls[di].important {
+                css_apply_decl(styles, idx, decls[di]);
+            };
+        };
+    };
+    // Pass 2: important
+    for pb in 0..m {
+        let mj: i32 = idx_list[pb];
+        let rj: i32 = match_rule[mj];
+        let decls2: [CssDecl] = rules[rj].decls;
+        for dj in 0..len(decls2) {
+            if decls2[dj].important {
+                css_apply_decl(styles, idx, decls2[dj]);
+            };
+        };
+    };
+}
+
+// Apply inheritable properties from parent to child when child has unset.
+fn! css_inherit(styles: [ComputedStyle], idx: i32, parent: ComputedStyle) {
+    if styles[idx].color == -1     { styles[idx].color     = parent.color; };
+    if styles[idx].bold == -1      { styles[idx].bold      = parent.bold; };
+    if styles[idx].italic == -1    { styles[idx].italic    = parent.italic; };
+    if styles[idx].underline == -1 { styles[idx].underline = parent.underline; };
+    if styles[idx].strike == -1    { styles[idx].strike    = parent.strike; };
+    // bg_color and display_none do NOT inherit.
+}
+
+// Recursive walk: compute ComputedStyle for `idx` and its descendants.
+fn! css_compute_walk(nodes: [HtmlNode], idx: i32,
+                    rules: [CssRule],
+                    styles: [ComputedStyle],
+                    parent_style: ComputedStyle) {
+    if idx < 0 or idx >= len(nodes) { return; };
+    if nodes[idx].is_text {
+        styles[idx] = parent_style;
+        return;
+    };
+
+    styles[idx] = css_empty_style();
+
+    // Cascade from stylesheet rules
+    css_cascade_apply(styles, idx, rules, nodes[idx]);
+
+    // Inline style="..." wins over rule cascade (treated as specificity=inf).
+    let inline_style: str = html_get_attr(nodes[idx], "style");
+    if str_len(inline_style) > 0 {
+        let mut inline_decls: [CssDecl] = [];
+        css_parse_decls(inline_decls, inline_style);
+        for ii in 0..len(inline_decls) {
+            css_apply_decl(styles, idx, inline_decls[ii]);
+        };
+    };
+
+    // Inherit unset props from parent
+    css_inherit(styles, idx, parent_style);
+
+    // Recurse children with this node's computed style as the parent
+    let here: ComputedStyle = styles[idx];
+    let mut child: i32 = nodes[idx].first_child;
+    while child != -1 {
+        css_compute_walk(nodes, child, rules, styles, here);
+        child = nodes[child].next_sibling;
+    };
+}
+
+// Fill `styles` (parallel to `nodes`) with computed styles for every node.
+// Caller should have cleared `styles` first.
+fn! css_compute_all(nodes: [HtmlNode], root: i32,
+                   rules: [CssRule], styles: [ComputedStyle]) {
+    // Pre-fill with defaults so every index is valid.
+    while len(styles) < len(nodes) {
+        push(styles, css_empty_style());
+    };
+    if root < 0 { return; };
+    let root_style: ComputedStyle = css_empty_style();
+    css_compute_walk(nodes, root, rules, styles, root_style);
+}
+
+// ─── Stylesheet collection from DOM ────────────────────────
+
+// Walk the DOM and append each <style> element's text content to `out`.
+fn! css_collect_style_texts_walk(nodes: [HtmlNode], idx: i32, out: [str]) {
+    if idx < 0 or idx >= len(nodes) { return; };
+    let node: HtmlNode = nodes[idx];
+    if not node.is_text and str_eq(node.tag, "style") {
+        let text: str = html_get_text_content(nodes, idx);
+        if str_len(text) > 0 { push(out, text); };
+        return;
+    };
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        css_collect_style_texts_walk(nodes, child, out);
+        child = nodes[child].next_sibling;
+    };
+}
+
+fn! css_collect_style_texts(nodes: [HtmlNode], root: i32, out: [str]) {
+    css_collect_style_texts_walk(nodes, root, out);
+}

@@ -1,0 +1,202 @@
+// Tests for css.osc — tokenizer, parser, matcher, and cascade.
+use "../css.osc"
+use "../html.osc"
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! assert_true(cond: bool, test_name: str) {
+    if cond {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name}");
+    };
+}
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! main() {
+    println("=== CSS Color Tests ===");
+    assert_eq_i32(css_parse_color("#000000"), 0, "hex black");
+    assert_eq_i32(css_parse_color("#ffffff"), 255*65536+255*256+255, "hex white");
+    assert_eq_i32(css_parse_color("#ff0000"), 255*65536, "hex red");
+    assert_eq_i32(css_parse_color("#F00"),    255*65536, "short hex red");
+    assert_eq_i32(css_parse_color("red"),     255*65536, "named red");
+    assert_eq_i32(css_parse_color("Blue"),    255, "named Blue case-insensitive");
+    assert_eq_i32(css_parse_color("rgb(10, 20, 30)"), 10*65536 + 20*256 + 30, "rgb triple");
+    assert_eq_i32(css_parse_color("not-a-color"), -1, "invalid color -> -1");
+
+    println("=== CSS Comment Strip ===");
+    assert_eq_str(css_strip_comments("a /* x */ b"), "a  b", "strip simple comment");
+    assert_eq_str(css_strip_comments("/* all */"), "", "strip whole comment");
+    assert_eq_str(css_strip_comments("no-comments"), "no-comments", "strip no-op");
+
+    println("=== CSS Simple Selector Parse ===");
+    let s1: CssSimple = css_parse_simple("h1");
+    assert_eq_str(s1.tag, "h1", "simple tag selector");
+    assert_eq_str(s1.cls, "", "simple tag has no class");
+
+    let s2: CssSimple = css_parse_simple(".warn");
+    assert_eq_str(s2.tag, "", "class-only has no tag");
+    assert_eq_str(s2.cls, "warn", "class selector");
+
+    let s3: CssSimple = css_parse_simple("#main");
+    assert_eq_str(s3.id, "main", "id selector");
+
+    let s4: CssSimple = css_parse_simple("h1.title");
+    assert_eq_str(s4.tag, "h1", "compound tag");
+    assert_eq_str(s4.cls, "title", "compound class");
+
+    let s5: CssSimple = css_parse_simple("*");
+    assert_eq_str(s5.tag, "*", "universal selector");
+
+    let s6: CssSimple = css_parse_simple("h1>p");
+    assert_eq_str(s6.tag, "__fail__", "child combinator rejected");
+
+    println("=== CSS Selector List Validator ===");
+    assert_true(css_selector_list_supported("h1"), "h1 supported");
+    assert_true(css_selector_list_supported("h1, h2, p"), "selector list supported");
+    assert_true(css_selector_list_supported(".a.b"), "compound supported");
+    assert_true(not css_selector_list_supported("div p"), "descendant rejected");
+    assert_true(not css_selector_list_supported("div > p"), "child combinator rejected");
+    assert_true(not css_selector_list_supported("p:hover"), "pseudo rejected");
+
+    println("=== CSS Parser ===");
+    let mut rules: [CssRule] = [];
+    let src1: str = "h1 {{ color: red; font-weight: bold; }}\n.note {{ color: #00ff00 !important; }}\n/* comment */ p, div {{ color: blue; }}\n@media screen {{ skip-me {{ color: black; }} }}\n";
+    let _o: i32 = css_parse(rules, src1, 0);
+    assert_eq_i32(len(rules), 3, "parsed 3 rules");
+
+    assert_eq_i32(len(rules[0].selectors), 1, "h1 has 1 selector");
+    assert_eq_str(rules[0].selectors[0].tag, "h1", "h1 selector tag");
+    assert_eq_i32(len(rules[0].decls), 2, "h1 has 2 decls");
+    assert_eq_str(rules[0].decls[0].property, "color", "h1 first decl property");
+    assert_eq_str(rules[0].decls[1].property, "font-weight", "h1 second decl property");
+
+    assert_eq_str(rules[1].decls[0].property, "color", ".note color property");
+    assert_true(rules[1].decls[0].important, ".note color !important parsed");
+
+    assert_eq_i32(len(rules[2].selectors), 2, "p, div has 2 selectors");
+
+    println("=== CSS Specificity ===");
+    let sp_tag:  i32 = css_specificity(CssSimple { tag: "h1", id: "", cls: "" });
+    let sp_cls:  i32 = css_specificity(CssSimple { tag: "",   id: "", cls: "a" });
+    let sp_id:   i32 = css_specificity(CssSimple { tag: "",   id: "x", cls: "" });
+    let sp_comb: i32 = css_specificity(CssSimple { tag: "h1", id: "x", cls: "a" });
+    assert_true(sp_cls > sp_tag, "class beats tag");
+    assert_true(sp_id > sp_cls, "id beats class");
+    assert_true(sp_comb > sp_id, "id+class+tag beats id alone");
+
+    println("=== CSS Matching ===");
+    let mut nodes: [HtmlNode] = [];
+    // Build: <div id="main" class="a b"><p class="b">x</p></div>
+    let root_attrs: map = map_new();
+    let root_node: HtmlNode = html_node_element("div", root_attrs);
+    push(nodes, root_node);
+    nodes[0].attrs = map_new();
+    map_set(nodes[0].attrs, "id", "main");
+    map_set(nodes[0].attrs, "class", "a b");
+
+    let p_attrs: map = map_new();
+    let p_node: HtmlNode = html_node_element("p", p_attrs);
+    push(nodes, p_node);
+    nodes[1].attrs = map_new();
+    map_set(nodes[1].attrs, "class", "b");
+
+    html_append_child(nodes, 0, 1);
+
+    let sel_div: CssSimple = CssSimple { tag: "div", id: "", cls: "" };
+    let sel_b:   CssSimple = CssSimple { tag: "",   id: "", cls: "b" };
+    let sel_id:  CssSimple = CssSimple { tag: "",   id: "main", cls: "" };
+    let sel_mis: CssSimple = CssSimple { tag: "",   id: "", cls: "z" };
+
+    assert_true(css_simple_matches(sel_div, nodes[0]), "div matches div");
+    assert_true(css_simple_matches(sel_b,   nodes[0]), ".b matches div.b");
+    assert_true(css_simple_matches(sel_b,   nodes[1]), ".b matches p.b");
+    assert_true(css_simple_matches(sel_id,  nodes[0]), "#main matches");
+    assert_true(not css_simple_matches(sel_mis, nodes[0]), ".z does not match");
+    assert_true(not css_simple_matches(sel_div, nodes[1]), "div does not match p");
+
+    println("=== CSS Cascade / Inherit ===");
+    let mut rules2: [CssRule] = [];
+    let src2: str = "div {{ color: red; }}\np {{ color: blue; }}\n.b {{ color: green; }}\n#main {{ background-color: yellow; }}\n";
+    let _o2: i32 = css_parse(rules2, src2, 0);
+
+    let mut styles: [ComputedStyle] = [];
+    css_compute_all(nodes, 0, rules2, styles);
+
+    assert_eq_i32(len(styles), len(nodes), "styles parallel to nodes");
+
+    // div#main.a.b: id wins → color = red? No: #main only sets bg.
+    // "div" (spec 1) and ".b" (spec 100) both match div → .b wins → green
+    assert_eq_i32(styles[0].color, css_parse_color("green"), "div.b picks .b green");
+    assert_eq_i32(styles[0].bg_color, css_parse_color("yellow"), "#main bg yellow");
+    assert_true(not styles[0].display_none, "div not display-none");
+
+    // p.b: "p" (spec 1) and ".b" (spec 100) match → .b wins → green
+    assert_eq_i32(styles[1].color, css_parse_color("green"), "p.b picks .b green");
+    // bg does not inherit → p has no bg
+    assert_eq_i32(styles[1].bg_color, -1, "p.b bg not inherited");
+
+    println("=== CSS Inline style override ===");
+    let mut nodes3: [HtmlNode] = [];
+    let a3: map = map_new();
+    let n3: HtmlNode = html_node_element("p", a3);
+    push(nodes3, n3);
+    nodes3[0].attrs = map_new();
+    map_set(nodes3[0].attrs, "style", "color: red; font-weight: bold");
+
+    let mut rules3: [CssRule] = [];
+    let _o3: i32 = css_parse(rules3, "p {{ color: blue; }}", 0);
+    let mut styles3: [ComputedStyle] = [];
+    css_compute_all(nodes3, 0, rules3, styles3);
+    assert_eq_i32(styles3[0].color, css_parse_color("red"), "inline beats rule");
+    assert_eq_i32(styles3[0].bold, 1, "inline font-weight bold");
+
+    println("=== CSS Display: none ===");
+    let mut nodes4: [HtmlNode] = [];
+    let a4: map = map_new();
+    let n4: HtmlNode = html_node_element("div", a4);
+    push(nodes4, n4);
+    nodes4[0].attrs = map_new();
+    map_set(nodes4[0].attrs, "style", "display: none");
+    let mut rules4: [CssRule] = [];
+    let mut styles4: [ComputedStyle] = [];
+    css_compute_all(nodes4, 0, rules4, styles4);
+    assert_true(styles4[0].display_none, "display:none honored");
+
+    println("=== CSS text-decoration ===");
+    let mut nodes5: [HtmlNode] = [];
+    let a5: map = map_new();
+    let n5: HtmlNode = html_node_element("span", a5);
+    push(nodes5, n5);
+    nodes5[0].attrs = map_new();
+    map_set(nodes5[0].attrs, "style", "text-decoration: underline line-through");
+    let mut rules5: [CssRule] = [];
+    let mut styles5: [ComputedStyle] = [];
+    css_compute_all(nodes5, 0, rules5, styles5);
+    assert_eq_i32(styles5[0].underline, 1, "underline set");
+    assert_eq_i32(styles5[0].strike, 1, "line-through set");
+
+    println("=== CSS collect <style> ===");
+    let mut dom: [HtmlNode] = [];
+    let root: i32 = html_parse(dom, "<html><head><style>p {{ color: red; }}</style></head><body><p>hi</p></body></html>");
+    assert_true(root >= 0, "parsed HTML with <style>");
+    let mut texts: [str] = [];
+    css_collect_style_texts(dom, root, texts);
+    assert_eq_i32(len(texts), 1, "one <style> collected");
+    assert_true(str_contains(texts[0], "color: red"), "style text captured");
+
+    println("=== CSS Done ===");
+}

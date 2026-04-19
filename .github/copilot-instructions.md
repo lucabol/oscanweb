@@ -34,7 +34,9 @@ This project is written in [Oscan](https://github.com/lucabol/Oscan), a minimali
 
 ```
 User input → url.osc (parse URL) → http.osc (fetch via TCP/TLS)
-  → html.osc (tokenize + build DOM) → browser.osc (render + handle input)
+  → html.osc (tokenize + build DOM) → js.osc (run inline <script>s)
+  → css.osc (parse <style>/inline, match, cascade)
+  → browser.osc (render + handle input)
 ```
 
 ### Flat DOM (html.osc)
@@ -56,7 +58,21 @@ struct HtmlNode {
 
 The renderer walks the flat DOM tree recursively via `render_node()`. It uses `[i32]` single-element arrays as mutable position pointers (`x_ptr`, `y_ptr`) since Oscan has value semantics for structs.
 
-`render_node` takes additional style parameters (`strikethrough`, `force_underline`, `mark_bg`, `ol_counter`) that propagate through the tree. When adding new tag support, extend the if/else chain in the "Determine child properties" section and pass new values to children.
+`render_node` takes additional style parameters (`strikethrough`, `force_underline`, `mark_bg`, `ol_counter`, `styles`) that propagate through the tree. When adding new tag support, extend the if/else chain in the "Determine child properties" section and pass new values to children.
+
+### CSS (css.osc)
+
+`css.osc` provides a minimal cascade engine. After `html_parse` (and after `js_run_scripts` so JS-added nodes/classes participate), the browser:
+
+1. Walks the DOM collecting `<style>` text content via `css_collect_style_texts`.
+2. Parses each stylesheet with `css_parse(rules, source, order)` into `[CssRule]`.
+3. Calls `css_compute_all(nodes, root, rules, styles)` to produce a `[ComputedStyle]` array parallel to `dom_nodes`.
+
+Supported selectors: `tag`, `.class`, `#id`, `*`, compounds (`h1.title`), and comma-separated selector lists. Combinators, pseudo-classes, attribute selectors, and `@media` queries are **not** matched — rules that contain them are parsed and skipped so they never "accidentally" match too broadly.
+
+Supported properties: `color`, `background-color`/`background`, `font-weight`, `font-style`, `text-decoration`, `display: none`. Inline `style=""` beats stylesheet rules; `!important` beats non-`!important`. `color`, `font-weight`, `font-style`, `text-decoration` inherit.
+
+`render_node` consults `styles[idx]` to: return early on `display_none`; override `child_color` with `cs.color` (falling back to `BOLD_COLOR` / `EM_COLOR` for font-weight / font-style when `color` is unset); set `child_uline`, `child_strike`, `child_markbg` from the computed style. Tag defaults still apply when no CSS matches.
 
 **Supported tags with specific rendering:**
 - **Text styling:** `b`/`strong`, `em`/`i`/`cite`, `del`/`s` (strikethrough), `u`/`ins` (underline), `mark` (yellow background), `code`/`pre`

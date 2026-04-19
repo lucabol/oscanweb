@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>OscaWeb CSS Test Page</title>
+<style>
+  /* Comments are stripped */
+  body { color: #c8c8c8; }
+
+  h1 { color: orange; }
+  h2 { color: #00aaff; }
+
+  .warn       { color: red; font-weight: bold; }
+  .muted      { color: gray; font-style: italic; }
+  .hl         { background-color: yellow; color: black; }
+  .struck     { text-decoration: line-through; }
+  .underlined { text-decoration: underline; }
+  .both       { text-decoration: underline line-through; }
+
+  #special    { color: purple; }
+
+  /* Selector list */
+  p, li      { color: #bbddbb; }
+
+  /* !important beats inline style */
+  .force-red { color: red !important; }
+
+  /* Hide-me */
+  .hidden    { display: none; }
+
+  /* Unsupported selectors should be safely ignored. */
+  div > p    { color: magenta; }
+  nav a      { color: lime; }
+  p:hover    { color: cyan; }
+
+  @media (min-width: 100px) {
+    /* at-rules are ignored */
+    .should-not-apply { color: red; }
+  }
+</style>
+</head>
+<body>
+
+<h1>CSS Smoke Test</h1>
+
+<p>Default paragraph text uses the <code>body</code> color inherited via the
+cascade.</p>
+
+<h2>1. Color and typography</h2>
+<p class="warn">This paragraph has <code>class="warn"</code> and should render
+in bold red.</p>
+<p class="muted">This paragraph is muted (gray italic).</p>
+<p>This line has an inline <span style="color: #33cc66; font-weight: bold">green bold span</span> in the middle.</p>
+<p id="special">This paragraph uses an id selector: purple.</p>
+
+<h2>2. Backgrounds</h2>
+<p>Inline highlight: <span class="hl">this word</span> should have a yellow
+background.</p>
+
+<h2>3. Text decoration</h2>
+<p><span class="struck">strikethrough</span>,
+<span class="underlined">underlined</span>,
+<span class="both">both</span>.</p>
+
+<h2>4. !important beats inline style</h2>
+<p class="force-red" style="color: green">Inline style says green, but
+<code>!important</code> class says red. Should render red.</p>
+
+<h2>5. display:none</h2>
+<p>Next paragraph is hidden and should not appear at all:</p>
+<p class="hidden">YOU SHOULD NOT SEE THIS PARAGRAPH.</p>
+<p>Back to visible content.</p>
+
+<h2>6. Unsupported selectors are safely ignored</h2>
+<p>The following should <em>not</em> be magenta (descendant combinator is
+not supported and the rule is skipped):</p>
+<div><p>Plain paragraph inside a div.</p></div>
+
+<h2>7. Multiple stylesheets</h2>
+<style>
+  /* A second &lt;style&gt; block appears later and wins on ties. */
+  .late-wins { color: teal; font-weight: bold; }
+</style>
+<p class="late-wins">This line is styled by the second style block.</p>
+
+<h2>8. Inline style attribute</h2>
+<p style="background-color: #334; color: #ffcc00">
+  Inline style: dark blue background with gold text.
+</p>
+
+<hr>
+<p class="muted">End of CSS test page.</p>
+
+</body>
+</html>
