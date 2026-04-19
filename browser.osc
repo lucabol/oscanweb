@@ -1216,7 +1216,7 @@ fn! main() {
                                 let trimmed: str = str_trim(clip_text);
                                 if str_len(trimmed) > 0 {
                                     if not str_contains(trimmed, "://") {
-                                        nav_url = str_concat("http://", trimmed);
+                                        nav_url = str_concat("https://", trimmed);
                                     } else {
                                         nav_url = trimmed;
                                     };
@@ -1306,7 +1306,7 @@ fn! main() {
                         let typed_url: str = str_from_chars(url_buf);
                         if str_len(typed_url) > 0 {
                             if not str_contains(typed_url, "://") {
-                                nav_url = str_concat("http://", typed_url);
+                                nav_url = str_concat("https://", typed_url);
                             } else {
                                 nav_url = typed_url;
                             };

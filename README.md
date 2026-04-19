@@ -228,10 +228,10 @@ The bottom bar shows at a glance:
 
 ### URL Handling
 
-- Scheme detection (`http://`, `https://`, default `http`)
+- Scheme detection (`http://`, `https://`, default `https`)
 - Relative URL resolution (`../`, `./`, absolute paths, protocol-relative `//`)
 - Fragment stripping, query string preservation
-- Auto-prepends `http://` when no scheme is entered
+- Auto-prepends `https://` when no scheme is entered (matches modern browsers; many sites, e.g. `www.microsoft.com`, return 403 on plain HTTP)
 
 ## Testing
 
