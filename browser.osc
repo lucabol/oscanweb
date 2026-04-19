@@ -4,6 +4,7 @@
 use "url.osc"
 use "html.osc"
 use "http.osc"
+use "css.osc"
 use "js.osc"
 use "vlog.osc"
 use "libs/ui.osc"
@@ -355,7 +356,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 base_scheme: str, base_host: str, base_port: i32, base_path: str,
                 search_q: str, word_map: [WordInfo],
                 strikethrough: bool, force_underline: bool, mark_bg: i32,
-                ol_counter: [i32], clickables: [ClickInfo]) {
+                ol_counter: [i32], clickables: [ClickInfo],
+                styles: [ComputedStyle]) {
     let node: HtmlNode = nodes[idx];
 
     // ── Text node ──
@@ -384,6 +386,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     // ── Element node ──
     let tag: str = node.tag;
     if html_is_skip_tag(tag) { return; };
+
+    // CSS: display:none hides the entire subtree.
+    if idx >= 0 and idx < len(styles) and styles[idx].display_none { return; };
 
     let is_block: bool = html_is_block_tag(tag);
     if is_block and x_ptr[0] > indent + PAD {
@@ -696,6 +701,21 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     else if str_eq(tag, "figure") { child_indent = indent + 20; }
     else if str_eq(tag, "figcaption") { child_color = FIGCAP_COLOR; };
 
+    // CSS overrides from stylesheet cascade + inline style="..."
+    if idx >= 0 and idx < len(styles) {
+        let cs: ComputedStyle = styles[idx];
+        if cs.color >= 0 {
+            child_color = cs.color;
+        } else if cs.bold == 1 {
+            child_color = BOLD_COLOR;
+        } else if cs.italic == 1 {
+            child_color = EM_COLOR;
+        };
+        if cs.underline == 1 { child_uline = true; };
+        if cs.strike == 1 { child_strike = true; };
+        if cs.bg_color >= 0 { child_markbg = cs.bg_color; };
+    };
+
     // List item: numbered or bulleted
     if str_eq(tag, "li") {
         x_ptr[0] = indent + PAD;
@@ -731,7 +751,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     base_scheme, base_host, base_port, base_path,
                     search_q, word_map,
                     child_strike, child_uline, child_markbg, child_ol,
-                    clickables);
+                    clickables, styles);
         child = nodes[child].next_sibling;
     };
 
@@ -799,6 +819,7 @@ fn! main() {
     let mut current_url: str = "";
     let mut dom_nodes: [HtmlNode] = [];
     let mut dom_root: i32 = -1;
+    let mut dom_styles: [ComputedStyle] = [];
     let mut page_loaded: bool = false;
     let mut status_msg: str = "Press 'o' to enter a URL";
     let mut scroll_y: i32 = 0;
@@ -1107,6 +1128,7 @@ fn! main() {
                         redir_count += 1;
                     } else if resp.ok {
                         while len(dom_nodes) > 0 { pop(dom_nodes); };
+                        while len(dom_styles) > 0 { pop(dom_styles); };
                         // Clear image cache for new page
                         img_cache_idx = map_new();
                         while len(img_cache_data) > 0 { pop(img_cache_data); };
@@ -1115,6 +1137,7 @@ fn! main() {
                         vlog_msg("parse start", "");
                         dom_root = html_parse(dom_nodes, resp.body);
                         vlog_int("parse nodes", len(dom_nodes));
+
                         page_loaded = true;
                         scroll_y = 0;
                         status_msg = current_url;
@@ -1127,6 +1150,20 @@ fn! main() {
                         if js_bridge_is_dom_dirty() > 0 {
                             js_bridge_clear_dom_dirty();
                         };
+
+                        // CSS: collect <style> contents and inline style=""
+                        // attributes, parse into rules, then compute per-node
+                        // ComputedStyle.  Done after JS so dynamically added
+                        // nodes/classes participate in the cascade.
+                        let mut css_rules: [CssRule] = [];
+                        let mut style_texts: [str] = [];
+                        css_collect_style_texts(dom_nodes, dom_root, style_texts);
+                        let mut css_order: i32 = 0;
+                        for sti in 0..len(style_texts) {
+                            css_order = css_parse(css_rules, style_texts[sti], css_order);
+                        };
+                        vlog_int("css rules", len(css_rules));
+                        css_compute_all(dom_nodes, dom_root, css_rules, dom_styles);
 
                         done = true;
                     } else {
@@ -1567,7 +1604,8 @@ fn! main() {
                             img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
                             search_query, word_map,
-                            false, false, -1, [0], page_clickables);
+                            false, false, -1, [0], page_clickables,
+                            dom_styles);
                 doc_height = y_ptr[0];
                 max_scroll = max_i32(doc_height - (WIN_H - CHROME_TOP - CHROME_BOT), 0);
                 if scroll_y > max_scroll { scroll_y = max_scroll; };

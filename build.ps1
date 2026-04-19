@@ -69,6 +69,9 @@ if ($Test) {
         if ($hasJs) {
             $testArgs += @('--extra-c', $JsBridge, '--extra-c', $QuickJs,
                            '--extra-cflags', "-I$ProjectDir")
+            if ($_isWin) {
+                $testArgs += @('--extra-cflags', '-lwinhttp')
+            }
         }
         & oscan @testArgs 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {

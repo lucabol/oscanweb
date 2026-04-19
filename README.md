@@ -9,6 +9,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
 - **HTTP and HTTPS support** — TLS is built into Oscan (zero external dependencies)
 - **JavaScript execution** — inline `<script>` tags and `onclick` handlers via embedded QuickJS-ng
+- **Basic CSS styling** — `<style>` blocks and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, `display:none`) with a real cascade and inheritance
 - **Image rendering** — PNG, JPEG, BMP, GIF, and SVG decoded, cached, and displayed inline
 - **Rich HTML rendering** — headings, lists, tables, blockquotes, code blocks, and 30+ tags
 - **Text selection & copy** — click-and-drag to select text, automatically copied to clipboard
@@ -212,10 +213,64 @@ The bottom bar shows at a glance:
 | `browser.osc`    | Main application — rendering engine, browser chrome, Vim keybindings, image pipeline, and page navigation |
 | `url.osc`        | URL parsing (scheme, host, port, path) and relative URL resolution |
 | `html.osc`       | State-machine-based HTML tokenizer and flat DOM tree builder |
+| `css.osc`        | CSS tokenizer, parser, selector matcher, and cascade engine |
 | `http.osc`       | HTTP/HTTPS client using Oscan's built-in TLS (`tls_connect`, `tls_send`, `tls_recv`) |
 | `js.osc`         | JavaScript engine FFI — walks the DOM to execute inline `<script>` tags |
 | `js_bridge.c`    | C bridge exposing QuickJS-ng engine lifecycle, console, and DOM bindings to Oscan |
 | `libs/ui.osc`    | Reusable UI widget library (panel, label, separator, button, checkbox, slider, textbox) |
+
+## CSS
+
+OscaWeb ships a small CSS engine (`css.osc`) that parses `<style>` blocks
+and `style=""` attributes, matches a simple selector subset against the
+DOM, runs the CSS 2.1 cascade, and propagates inheritable properties.
+External `<link rel="stylesheet">` resources are **not** fetched — inline
+stylesheets only.
+
+### Supported
+
+- **Selectors** — `tag`, `.class`, `#id`, `*`, compounds (`h1.title`),
+  comma-separated selector lists
+- **Properties** — `color`, `background-color` / `background`,
+  `font-weight`, `font-style`, `text-decoration`
+  (`underline` / `line-through` / `none`), `display: none`
+- **Values** — named colors (subset), `#rgb`, `#rrggbb`, `rgb(r, g, b)`,
+  `bold`/`normal` (and numeric weights), `italic`, `!important`
+- **Cascade** — specificity + source order, inline `style=""` wins over
+  stylesheet rules, `!important` wins over non-`!important`
+- **Inheritance** — `color`, `font-weight`, `font-style`,
+  `text-decoration` propagate from parent to child
+
+Because OscaWeb is a terminal-style renderer with a monospace bitmap
+font, `font-weight: bold` and `font-style: italic` are approximated by
+switching to the bold/italic accent color rather than changing glyph
+shape.
+
+### Not supported
+
+- Combinators (descendant ` `, child `>`, sibling `+`/`~`) — rules
+  containing them are parsed and skipped
+- Pseudo-classes / pseudo-elements (`:hover`, `::before`, …)
+- Attribute selectors (`[href]`)
+- Box-model properties (`width`, `height`, `margin`, `padding`, `border`,
+  `float`, `position`, `flex`, `grid`)
+- Units other than unitless integers for `rgb()` and bare hex colors
+- `@media`, `@import`, `@font-face` and other at-rules (parsed and
+  ignored)
+- External stylesheets via `<link rel="stylesheet">`
+
+### Try it
+
+```powershell
+# Serve the bundled smoke-test page, then open it in the browser
+cd tests
+python -m http.server 8000
+# in another shell:
+build/browser.exe http://localhost:8000/test_page_css.html
+```
+
+See `tests/test_page_css.html` for a compact page that exercises every
+supported CSS feature.
 
 ## Networking
 
@@ -252,6 +307,7 @@ oscanweb/
 ├── url.osc              # URL parsing and resolution
 ├── http.osc             # HTTP/HTTPS client (built-in TLS)
 ├── html.osc             # HTML tokenizer and DOM builder
+├── css.osc              # CSS tokenizer, parser, selector matcher, cascade
 ├── js.osc               # JavaScript engine FFI (QuickJS-ng)
 ├── js_bridge.c          # C bridge for QuickJS-ng DOM bindings
 ├── build.ps1            # Build script
@@ -261,17 +317,26 @@ oscanweb/
 │   ├── ui.osc           # UI widget library (panel, button, checkbox, slider, textbox)
 │   └── quickjs/         # QuickJS-ng engine source (quickjs.c, quickjs.h)
 └── tests/
-    ├── test_url.osc     # URL parser tests
-    ├── test_html.osc    # HTML parser tests
-    ├── test_render.osc  # Rendering tests
-    ├── test_js.osc      # JavaScript engine tests
-    ├── test_hints.osc   # Link hint label tests
-    └── run_tests.ps1    # Test runner
+    ├── test_url.osc        # URL parser tests
+    ├── test_html.osc       # HTML parser tests
+    ├── test_css.osc        # CSS parser / cascade tests
+    ├── test_render.osc     # Rendering tests
+    ├── test_js.osc         # JavaScript engine tests
+    ├── test_hints.osc      # Link hint label tests
+    ├── test_page_css.html  # Manual CSS smoke-test page
+    └── run_tests.ps1       # Test runner
 ```
 
 ## Limitations
 
-- **No CSS layout** — structural rendering only (no box model, no flexbox)
+- **No CSS layout** — colors, weights, decorations, backgrounds, and
+  `display:none` are honored, but there is no box model, no flexbox/grid,
+  no floats, and no width/height/margin/padding rules
+- **CSS selectors are simple only** — `tag`, `.class`, `#id`, `*`, and
+  comma-separated lists; combinators (` `, `>`, `+`, `~`), pseudo-classes,
+  attribute selectors, and `@media` queries are ignored
+- **No external stylesheets** — `<link rel="stylesheet">` is not fetched
+  (inline `<style>` blocks and `style=""` attributes are supported)
 - **No external script loading** — `<script src="...">` tags are ignored
 - **No cookies or session management**
 - **No form submission** — `<form>`, `<input>`, `<textarea>` not rendered
