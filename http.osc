@@ -226,74 +226,44 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
 }
 
 fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
-    let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\n\r\n";
+    // Send Accept and Accept-Language so CDNs that treat their absence as a
+    // "not a real browser" signal route us normally. Notably www.microsoft.com
+    // (Akamai) returns 403 from a NetStorage health-beacon endpoint when
+    // Accept-Language is missing, regardless of HTTP version or User-Agent.
+    let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\n\r\n";
 
     let mut raw_response: str = "";
 
     if use_tls {
-        // Probe plain HTTP first.  This serves two purposes:
-        //   1. If the server answers on :80 with actual content, we avoid
-        //      the TLS handshake entirely.
-        //   2. Empirically, for some servers (e.g. text.npr.org behind
-        //      Akamai) tls_connect hangs indefinitely on a cold start but
-        //      works reliably after an opened-and-closed port-80
-        //      connection to the same host.  The probe "primes" the
-        //      network path (DNS, NAT, edge routing).
-        // The 3s recv timeout keeps the probe bounded even when the
-        // server accepts TCP but never sends data.
-        vlog_msg("probe start", host);
-        let probe: HttpResponse = http_get_plain(host, 80, request, 3000);
-        vlog_int("probe body_len", str_len(probe.body));
-        vlog_msg("probe error", probe.error);
-        let mut probe_ok: bool = false;
-        if str_len(probe.error) == 0 and str_len(probe.body) > 0 {
-            // Only accept the probe body if it's a 2xx success response.
-            // Anything else — redirects (3xx), client errors (4xx, e.g.
-            // www.microsoft.com's Akamai edge returns 403 on port 80),
-            // or server errors (5xx) — means port 80 isn't serving the
-            // real content, so fall back to TLS.
-            let probe_line_end: i32 = str_find(probe.body, "\r\n");
-            let mut probe_status: str = probe.body;
-            if probe_line_end > 0 {
-                probe_status = str_slice(probe.body, 0, probe_line_end);
-            };
-            if str_contains(probe_status, " 2") {
-                // Guard against false positives like "HTTP/1.1 200 Found 2 more"
-                // by checking the status code sits right after the first space.
-                let sp: i32 = str_find(probe_status, " ");
-                if sp >= 0 {
-                    let after_ver: str = str_slice(probe_status, sp + 1, str_len(probe_status));
-                    if str_len(after_ver) >= 1 {
-                        let first_char: [i32] = str_to_chars(str_slice(after_ver, 0, 1));
-                        if len(first_char) > 0 and first_char[0] == 50 {
-                            raw_response = probe.body;
-                            probe_ok = true;
-                        };
-                    };
-                };
-            };
+        // Prime :443 once per host before the (untimeoutable) tls_connect so
+        // it doesn't hang on cold start for servers like text.npr.org.  A
+        // subsequent subresource fetch to the same host skips the prime so
+        // image-heavy pages don't freeze.  See reset_prime_cache() which is
+        // called at the start of every top-level navigation.
+        //
+        // Note: we used to probe plain HTTP :80 first to "maybe skip TLS" and
+        // "warm the network path".  Both goals were bad:
+        //   * Skipping TLS on 2xx from :80 almost never happens in practice
+        //     — modern sites all 301/403 on :80 — so the probe just burned
+        //     50-100ms per HTTPS fetch.
+        //   * Warming the network path is exactly what http_prime_tls does,
+        //     but targeted at :443 (the right port) and cheaper (TCP only).
+        //   * The probe also conflated port-80 error pages with the real
+        //     response on misconfigured edges (www.microsoft.com returned
+        //     a 403 body on :80 that the probe originally accepted).
+        if host_was_primed(host) == 0 {
+            http_prime_tls(host);
+            mark_host_primed(host);
         };
-        if not probe_ok {
-            // Prime :443 before the (untimeoutable) tls_connect so it
-            // doesn't hang on cold start (e.g. text.npr.org).  But only
-            // prime once per host — subsequent subresources (images,
-            // scripts) reuse the already-warm path, otherwise every image
-            // on a page adds the prime's ~30ms handshake to its load time
-            // and a page with many assets feels frozen.
-            if host_was_primed(host) == 0 {
-                http_prime_tls(host);
-                mark_host_primed(host);
-            };
 
-            vlog_msg("tls fallback", host);
-            let tls_resp: HttpResponse = http_get_tls(host, port, request);
-            vlog_int("tls body_len", str_len(tls_resp.body));
-            vlog_msg("tls error", tls_resp.error);
-            if str_len(tls_resp.error) > 0 {
-                return tls_resp;
-            };
-            raw_response = tls_resp.body;
+        vlog_msg("tls_connect", host);
+        let tls_resp: HttpResponse = http_get_tls(host, port, request);
+        vlog_int("tls body_len", str_len(tls_resp.body));
+        vlog_msg("tls error", tls_resp.error);
+        if str_len(tls_resp.error) > 0 {
+            return tls_resp;
         };
+        raw_response = tls_resp.body;
     } else {
         let plain_resp: HttpResponse = http_get_plain(host, port, request, 30000);
         if str_len(plain_resp.error) > 0 {
