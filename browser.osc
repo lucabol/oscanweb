@@ -897,6 +897,17 @@ fn! main() {
         // Poll key OUTSIDE arena so array push/pop stays on parent arena
         let key: i32 = canvas_key();
 
+        // Mouse wheel scrolling — handle outside arena and independent of mode
+        // so the page scrolls like in a normal browser regardless of whether
+        // the URL bar, search, or follow mode is active. Positive wheel values
+        // mean scroll up (content moves down, scroll_y decreases).
+        let wheel: i32 = canvas_wheel();
+        if wheel != 0 {
+            scroll_y -= wheel * LINE_H * 3;
+            if scroll_y < 0 { scroll_y = 0; };
+            if scroll_y > max_scroll { scroll_y = max_scroll; };
+        };
+
         // Handle textbox input outside arena to avoid realloc on child arena
         let url_is_insert: bool = match mode {
             BrowserMode::Insert => true,
@@ -1484,12 +1495,13 @@ fn! main() {
             // would re-render every frame.  An active text selection or
             // Follow mode hover explicitly asks for re-render below.
             let pos_matters: bool = sel_active;
-            if key != 0 or mbtn != prev_btn or
+            if key != 0 or mbtn != prev_btn or wheel != 0 or
                (pos_matters and (mx != prev_mx or my != prev_my)) {
                 render_dirty = true;
                 if vlog_is_enabled() != 0 {
                     if key != 0 { vlog_int("dirty key", key); };
                     if mbtn != prev_btn { vlog_int("dirty mbtn", mbtn); };
+                    if wheel != 0 { vlog_int("dirty wheel", wheel); };
                 };
             };
 
