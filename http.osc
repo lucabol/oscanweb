@@ -247,18 +247,30 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
         vlog_msg("probe error", probe.error);
         let mut probe_ok: bool = false;
         if str_len(probe.error) == 0 and str_len(probe.body) > 0 {
-            // Check the status line — skip if it's a redirect
+            // Only accept the probe body if it's a 2xx success response.
+            // Anything else — redirects (3xx), client errors (4xx, e.g.
+            // www.microsoft.com's Akamai edge returns 403 on port 80),
+            // or server errors (5xx) — means port 80 isn't serving the
+            // real content, so fall back to TLS.
             let probe_line_end: i32 = str_find(probe.body, "\r\n");
             let mut probe_status: str = probe.body;
             if probe_line_end > 0 {
                 probe_status = str_slice(probe.body, 0, probe_line_end);
             };
-            if not str_contains(probe_status, " 301") and
-               not str_contains(probe_status, " 302") and
-               not str_contains(probe_status, " 307") and
-               not str_contains(probe_status, " 308") {
-                raw_response = probe.body;
-                probe_ok = true;
+            if str_contains(probe_status, " 2") {
+                // Guard against false positives like "HTTP/1.1 200 Found 2 more"
+                // by checking the status code sits right after the first space.
+                let sp: i32 = str_find(probe_status, " ");
+                if sp >= 0 {
+                    let after_ver: str = str_slice(probe_status, sp + 1, str_len(probe_status));
+                    if str_len(after_ver) >= 1 {
+                        let first_char: [i32] = str_to_chars(str_slice(after_ver, 0, 1));
+                        if len(first_char) > 0 and first_char[0] == 50 {
+                            raw_response = probe.body;
+                            probe_ok = true;
+                        };
+                    };
+                };
             };
         };
         if not probe_ok {
