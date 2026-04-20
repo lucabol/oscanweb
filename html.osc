@@ -227,7 +227,21 @@ fn! html_parse(nodes: [HtmlNode], source: str) -> i32 {
                 let raw_text: str = str_from_chars(text_buf);
                 let decoded: str = html_entity_decode(raw_text);
                 let trimmed: str = str_trim(decoded);
-                if str_len(trimmed) > 0 {
+                // Inside <pre> (or nested under one), whitespace is
+                // significant — e.g. Wikipedia's syntax-highlighted code
+                // uses bare "\n" text nodes between <span> tokens to mark
+                // line breaks.  Trimming those drops the newlines and
+                // collapses the whole block onto a single line.
+                let mut in_pre_ancestor: bool = false;
+                let mut psi: i32 = len(stack) - 1;
+                while psi >= 0 {
+                    if str_eq(nodes[stack[psi]].tag, "pre") {
+                        in_pre_ancestor = true;
+                        break;
+                    };
+                    psi = psi - 1;
+                };
+                if str_len(trimmed) > 0 or in_pre_ancestor {
                     let tnode: HtmlNode = html_node_text(decoded);
                     push(nodes, tnode);
                     let tidx: i32 = len(nodes) - 1;
