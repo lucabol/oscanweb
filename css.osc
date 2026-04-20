@@ -53,6 +53,11 @@ struct CssRule {
     selectors: [CssCompound],  // comma list of descendant chains
     decls: [CssDecl],
     order: i32,                // source order for stable tie-break
+    // Media gating: 0 = always apply, 1 = only when terminal is dark,
+    // 2 = only when terminal is light.  Other @media queries cause the
+    // whole block to be skipped at parse time (media = -1 marker is
+    // not stored; such rules are simply not emitted).
+    media: i32,
 }
 
 // Per-node computed style.  -1 or false means "unset"; during cascade
@@ -67,6 +72,15 @@ struct ComputedStyle {
     underline: i32,
     strike: i32,
     text_align: i32,    // -1 unset, 0 left, 1 center, 2 right
+    // Phase 3 additions — all pixel values, -1 means unset.
+    max_width_px: i32,  // max-width resolved to pixels (>=0), else -1
+    max_width_pct: i32, // max-width in percent of viewport (1..100), else -1
+    pad_t: i32,
+    pad_r: i32,
+    pad_b: i32,
+    pad_l: i32,
+    line_height_px: i32,   // -1 unset; positive pixel value; inherits
+    center_block: i32,     // 1 = margin:auto centering sentinel, -1 unset, 0 explicit non-center
 }
 
 fn! css_empty_style() -> ComputedStyle {
@@ -79,6 +93,14 @@ fn! css_empty_style() -> ComputedStyle {
         underline: -1,
         strike: -1,
         text_align: -1,
+        max_width_px: -1,
+        max_width_pct: -1,
+        pad_t: -1,
+        pad_r: -1,
+        pad_b: -1,
+        pad_l: -1,
+        line_height_px: -1,
+        center_block: -1,
     }
 }
 
@@ -210,6 +232,104 @@ fn! css_parse_color(raw: str) -> i32 {
         return css_rgb(rv, gv, bv);
     };
     css_named_color(v)
+}
+
+// ─── Length parsing ────────────────────────────────────────
+
+// Base line height in pixels, matching browser.osc LINE_H.  Kept here so
+// css.osc doesn't depend on browser.osc.  Update both together.
+let CSS_BASE_LINE_H: i32 = 12;
+
+// Parse a single length token.  Returns (px, pct) pair encoded as two ints:
+//   px >= 0 : concrete pixel value
+//   px < 0, pct in 1..100 : percent value (of some outer size)
+//   px < 0, pct < 0 : parse failure
+// Supported units: "px" and "" (unitless -> treated as px for spacing,
+// callers are free to reinterpret for line-height).  "%" sets the pct path.
+fn! css_parse_length(raw: str, px_out: [i32], pct_out: [i32]) {
+    px_out[0] = -1;
+    pct_out[0] = -1;
+    let v: str = str_trim(str_to_lower(raw));
+    if str_len(v) == 0 { return; };
+    let chars: [i32] = str_to_chars(v);
+    let n: i32 = len(chars);
+
+    // Collect leading digits (+ optional minus, + optional '.' for decimals).
+    let mut i: i32 = 0;
+    let mut neg: bool = false;
+    if n > 0 and chars[0] == 45 { neg = true; i = 1; };
+    let mut int_part: i32 = 0;
+    let mut saw_digit: bool = false;
+    while i < n and chars[i] >= 48 and chars[i] <= 57 {
+        int_part = int_part * 10 + (chars[i] - 48);
+        saw_digit = true;
+        i = i + 1;
+    };
+    // Fractional part — accumulate as hundredths (two digits max).
+    let mut frac_x100: i32 = 0;
+    if i < n and chars[i] == 46 {
+        i = i + 1;
+        let mut scale: i32 = 10;
+        let mut taken: i32 = 0;
+        while i < n and chars[i] >= 48 and chars[i] <= 57 and taken < 2 {
+            frac_x100 = frac_x100 + (chars[i] - 48) * scale;
+            scale = scale / 10;
+            taken = taken + 1;
+            i = i + 1;
+        };
+        // skip extra digits
+        while i < n and chars[i] >= 48 and chars[i] <= 57 { i = i + 1; };
+        saw_digit = true;
+    };
+    if not saw_digit { return; };
+
+    // Suffix
+    let mut suffix: str = "";
+    if i < n { suffix = str_slice(v, i, n); };
+    suffix = str_trim(suffix);
+
+    let mut value_x100: i32 = int_part * 100 + frac_x100;
+    if neg { value_x100 = 0 - value_x100; };
+
+    if str_eq(suffix, "%") {
+        // round to nearest
+        let pct_r: i32 = (value_x100 + 50) / 100;
+        if pct_r > 0 {
+            pct_out[0] = pct_r;
+        };
+        return;
+    };
+    // px, unitless, and unknown-unit (treat as px, log nothing)
+    if str_eq(suffix, "") or str_eq(suffix, "px") or
+       str_eq(suffix, "em") or str_eq(suffix, "rem") or
+       str_eq(suffix, "pt") or str_eq(suffix, "ch") {
+        // em/rem/pt/ch approximated as px (we don't have font sizing).
+        let px_r: i32 = (value_x100 + 50) / 100;
+        if px_r >= 0 {
+            px_out[0] = px_r;
+        };
+    };
+}
+
+// Split a padding shorthand into up to 4 tokens, collapsing whitespace.
+fn! css_split_values(s: str) -> [str] {
+    let chars: [i32] = str_to_chars(s);
+    let n: i32 = len(chars);
+    let mut out: [str] = [];
+    let mut buf: [i32] = [];
+    for i in 0..n {
+        let c: i32 = chars[i];
+        if css_is_ws(c) {
+            if len(buf) > 0 {
+                push(out, str_from_chars(buf));
+                while len(buf) > 0 { pop(buf); };
+            };
+        } else {
+            push(buf, c);
+        };
+    };
+    if len(buf) > 0 { push(out, str_from_chars(buf)); };
+    out
 }
 
 // ─── Selector parsing ──────────────────────────────────────
@@ -374,36 +494,74 @@ fn! css_parse_decls(out_decls: [CssDecl], body_text: str) {
 // Returns the next source-order counter to use.
 fn! css_parse(rules: [CssRule], source: str, start_order: i32) -> i32 {
     let clean: str = css_strip_comments(source);
-    let chars: [i32] = str_to_chars(clean);
-    let n: i32 = len(chars);
-    let mut i: i32 = 0;
-    let mut order: i32 = start_order;
+    let order_ptr: [i32] = [start_order];
+    css_parse_block(rules, clean, 0, str_len(clean), 0, order_ptr);
+    order_ptr[0]
+}
+
+// Recursive parser that reads rules within a character-index range.
+// `media` is the active media code (0, 1, 2) applied to emitted rules.
+// Advances order_ptr[0] as it emits rules.
+fn! css_parse_block(rules: [CssRule], source: str,
+                   start: i32, end: i32,
+                   media: i32, order_ptr: [i32]) {
+    let chars: [i32] = str_to_chars(source);
+    let n: i32 = if end < len(chars) { end } else { len(chars) };
+    let mut i: i32 = start;
 
     while i < n {
         while i < n and css_is_ws(chars[i]) { i = i + 1; };
         if i >= n { break; };
 
-        // Skip @-rules entirely (no media-query support yet).
+        // @-rule handling
         if chars[i] == 64 {
-            let mut depth: i32 = 0;
-            let mut saw_brace: bool = false;
-            while i < n {
-                let ch: i32 = chars[i];
-                if ch == 123 {
-                    depth = depth + 1;
-                    saw_brace = true;
-                    i = i + 1;
-                } else if ch == 125 {
-                    depth = depth - 1;
-                    i = i + 1;
-                    if saw_brace and depth <= 0 { break; };
-                } else if ch == 59 and not saw_brace {
-                    i = i + 1;
-                    break;
-                } else {
-                    i = i + 1;
-                };
+            // Read the @-name
+            let name_start: i32 = i + 1;
+            let mut ni: i32 = name_start;
+            while ni < n and css_is_ident(chars[ni]) { ni = ni + 1; };
+            let at_name: str = str_to_lower(str_slice(source, name_start, ni));
+
+            // Read prelude up to '{' or ';'
+            let mut pi: i32 = ni;
+            while pi < n and chars[pi] != 123 and chars[pi] != 59 { pi = pi + 1; };
+            let prelude: str = str_trim(str_slice(source, ni, pi));
+
+            if pi < n and chars[pi] == 59 {
+                // @-rule with no block (e.g., @charset "utf-8";) -> skip
+                i = pi + 1;
+                continue;
             };
+            if pi >= n { break; };
+
+            // prelude has '{', find matching '}'
+            let mut depth: i32 = 1;
+            let mut bi: i32 = pi + 1;
+            while bi < n and depth > 0 {
+                if chars[bi] == 123 { depth = depth + 1; };
+                if chars[bi] == 125 { depth = depth - 1; };
+                if depth == 0 { break; };
+                bi = bi + 1;
+            };
+            let block_start: i32 = pi + 1;
+            let block_end: i32 = bi;
+
+            if str_eq(at_name, "media") {
+                let sub_media: i32 = css_media_code(prelude);
+                if sub_media >= 0 {
+                    // Recursively parse inner rules with the matched media tag.
+                    // Nested @media queries take the outer media if it's
+                    // stricter; simple rule: inner wins unless outer is
+                    // already 1 or 2, in which case keep the outer (the
+                    // outer filter dominates).
+                    let effective: i32 = if media == 0 { sub_media } else { media };
+                    css_parse_block(rules, source, block_start, block_end,
+                                   effective, order_ptr);
+                };
+                // Unsupported @media queries: drop the whole block.
+            };
+            // Unknown @-rule: drop.
+
+            i = if bi < n { bi + 1 } else { n };
             continue;
         };
 
@@ -434,8 +592,8 @@ fn! css_parse(rules: [CssRule], source: str, start_order: i32) -> i32 {
             for si in 0..len(sel_parts) {
                 let one: CssCompound = css_parse_compound(str_trim(sel_parts[si]));
                 let mut fail: bool = false;
-                for pi in 0..len(one.parts) {
-                    if str_eq(one.parts[pi].tag, "__fail__") { fail = true; };
+                for psi in 0..len(one.parts) {
+                    if str_eq(one.parts[psi].tag, "__fail__") { fail = true; };
                 };
                 if fail {
                     any_fail = true;
@@ -450,16 +608,41 @@ fn! css_parse(rules: [CssRule], source: str, start_order: i32) -> i32 {
                     let rule: CssRule = CssRule {
                         selectors: sels,
                         decls: decls,
-                        order: order,
+                        order: order_ptr[0],
+                        media: media,
                     };
                     push(rules, rule);
-                    order = order + 1;
+                    order_ptr[0] = order_ptr[0] + 1;
                 };
             };
         };
     };
+}
 
-    order
+// Decode a @media prelude into a media code:
+//   0 = always (shouldn't normally return 0 for a real @media block, but
+//       e.g. @media all or @media screen both mean "always apply in this
+//       terminal renderer" -> 0)
+//   1 = prefers-color-scheme: dark
+//   2 = prefers-color-scheme: light
+//  -1 = unsupported, caller should drop the block
+fn! css_media_code(prelude: str) -> i32 {
+    let p: str = str_to_lower(str_trim(prelude));
+    if str_len(p) == 0 { return 0; };
+    // Heuristic match — the prelude is compact.
+    if str_find(p, "prefers-color-scheme") >= 0 {
+        if str_find(p, "dark") >= 0 { return 1; };
+        if str_find(p, "light") >= 0 { return 2; };
+        return -1;
+    };
+    // Plain @media screen / @media all / @media print -> treat as always,
+    // except print which we explicitly drop (print styles rarely help here).
+    if str_find(p, "print") >= 0 { return -1; };
+    if str_find(p, "screen") >= 0 or str_find(p, "all") >= 0 or str_find(p, "only") >= 0 {
+        return 0;
+    };
+    // Width-based queries (min-width, max-width, orientation, ...) -> drop.
+    -1
 }
 
 // ─── Selector matching ─────────────────────────────────────
@@ -605,6 +788,165 @@ fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
         };
         return;
     };
+
+    // ── Phase 3: padding ─────────────────────────────────────
+    if str_eq(prop, "padding") {
+        let toks: [str] = css_split_values(d.value);
+        let m: i32 = len(toks);
+        if m >= 1 and m <= 4 {
+            let px_p: [i32] = [-1];
+            let pct_p: [i32] = [-1];
+            let mut vals: [i32] = [];
+            for ti in 0..m {
+                css_parse_length(toks[ti], px_p, pct_p);
+                if px_p[0] < 0 { return; };
+                push(vals, px_p[0]);
+            };
+            let t: i32 = vals[0];
+            let r: i32 = if m >= 2 { vals[1] } else { vals[0] };
+            let b: i32 = if m >= 3 { vals[2] } else { t };
+            let l: i32 = if m >= 4 { vals[3] } else { r };
+            styles[idx].pad_t = t;
+            styles[idx].pad_r = r;
+            styles[idx].pad_b = b;
+            styles[idx].pad_l = l;
+        };
+        return;
+    };
+    if str_eq(prop, "padding-top") {
+        let px_p: [i32] = [-1];
+        let pct_p: [i32] = [-1];
+        css_parse_length(d.value, px_p, pct_p);
+        if px_p[0] >= 0 { styles[idx].pad_t = px_p[0]; };
+        return;
+    };
+    if str_eq(prop, "padding-right") {
+        let px_p: [i32] = [-1];
+        let pct_p: [i32] = [-1];
+        css_parse_length(d.value, px_p, pct_p);
+        if px_p[0] >= 0 { styles[idx].pad_r = px_p[0]; };
+        return;
+    };
+    if str_eq(prop, "padding-bottom") {
+        let px_p: [i32] = [-1];
+        let pct_p: [i32] = [-1];
+        css_parse_length(d.value, px_p, pct_p);
+        if px_p[0] >= 0 { styles[idx].pad_b = px_p[0]; };
+        return;
+    };
+    if str_eq(prop, "padding-left") {
+        let px_p: [i32] = [-1];
+        let pct_p: [i32] = [-1];
+        css_parse_length(d.value, px_p, pct_p);
+        if px_p[0] >= 0 { styles[idx].pad_l = px_p[0]; };
+        return;
+    };
+
+    // ── Phase 3: max-width ───────────────────────────────────
+    if str_eq(prop, "max-width") {
+        if str_eq(val, "none") {
+            styles[idx].max_width_px = -1;
+            styles[idx].max_width_pct = -1;
+            return;
+        };
+        let px_p: [i32] = [-1];
+        let pct_p: [i32] = [-1];
+        css_parse_length(d.value, px_p, pct_p);
+        if px_p[0] >= 0 {
+            styles[idx].max_width_px = px_p[0];
+            styles[idx].max_width_pct = -1;
+        } else if pct_p[0] > 0 {
+            styles[idx].max_width_px = -1;
+            styles[idx].max_width_pct = pct_p[0];
+        };
+        return;
+    };
+
+    // ── Phase 3: line-height ─────────────────────────────────
+    if str_eq(prop, "line-height") {
+        if str_eq(val, "normal") {
+            styles[idx].line_height_px = CSS_BASE_LINE_H;
+            return;
+        };
+        // Try pure number first (unitless multiplier).  css_parse_length
+        // returns px=N for unitless, but we want the multiplier semantics:
+        // detect by looking for a suffix in the raw value.
+        let raw_l: str = str_trim(str_to_lower(d.value));
+        let has_pct: bool = str_ends_with(raw_l, "%");
+        let has_unit: bool = str_ends_with(raw_l, "px") or str_ends_with(raw_l, "em") or
+                             str_ends_with(raw_l, "rem") or str_ends_with(raw_l, "pt");
+        let px_p: [i32] = [-1];
+        let pct_p: [i32] = [-1];
+        css_parse_length(d.value, px_p, pct_p);
+        if has_pct and pct_p[0] > 0 {
+            styles[idx].line_height_px = (CSS_BASE_LINE_H * pct_p[0]) / 100;
+        } else if not has_unit and px_p[0] >= 0 {
+            // Unitless: raw number is the multiplier.  css_parse_length
+            // already rounded to int.  Re-parse to capture fractional part
+            // by multiplying base * 100 and dividing — we lose fractions,
+            // so handle common case: if "1.5" was sent, px_p[0] would be 2
+            // (rounded).  We want 1.5 * 12 = 18.  Re-scan fractional part.
+            let chars: [i32] = str_to_chars(raw_l);
+            let nlen: i32 = len(chars);
+            let mut int_v: i32 = 0;
+            let mut j: i32 = 0;
+            while j < nlen and chars[j] >= 48 and chars[j] <= 57 {
+                int_v = int_v * 10 + (chars[j] - 48);
+                j = j + 1;
+            };
+            let mut frac_x100: i32 = 0;
+            if j < nlen and chars[j] == 46 {
+                j = j + 1;
+                let mut scale: i32 = 10;
+                let mut taken: i32 = 0;
+                while j < nlen and chars[j] >= 48 and chars[j] <= 57 and taken < 2 {
+                    frac_x100 = frac_x100 + (chars[j] - 48) * scale;
+                    scale = scale / 10;
+                    taken = taken + 1;
+                    j = j + 1;
+                };
+            };
+            let mul_x100: i32 = int_v * 100 + frac_x100;
+            styles[idx].line_height_px = (CSS_BASE_LINE_H * mul_x100 + 50) / 100;
+        } else if px_p[0] >= 0 {
+            styles[idx].line_height_px = px_p[0];
+        };
+        return;
+    };
+
+    // ── Phase 3: margin (only the "auto" centering sentinel) ────
+    if str_eq(prop, "margin") or str_eq(prop, "margin-left") or str_eq(prop, "margin-right") {
+        let toks: [str] = css_split_values(val);
+        let m: i32 = len(toks);
+        let mut left_auto: bool = false;
+        let mut right_auto: bool = false;
+        if str_eq(prop, "margin") {
+            // margin: auto  (1 token) => all sides auto
+            // margin: V H   (2 tokens) => H is left/right
+            // margin: T H B (3 tokens) => H is left/right
+            // margin: T R B L (4 tokens)
+            if m == 1 {
+                if str_eq(toks[0], "auto") { left_auto = true; right_auto = true; };
+            } else if m == 2 {
+                if str_eq(toks[1], "auto") { left_auto = true; right_auto = true; };
+            } else if m == 3 {
+                if str_eq(toks[1], "auto") { left_auto = true; right_auto = true; };
+            } else if m == 4 {
+                if str_eq(toks[1], "auto") { right_auto = true; };
+                if str_eq(toks[3], "auto") { left_auto = true; };
+            };
+        } else if str_eq(prop, "margin-left") and m >= 1 {
+            if str_eq(toks[0], "auto") { left_auto = true; };
+        } else if str_eq(prop, "margin-right") and m >= 1 {
+            if str_eq(toks[0], "auto") { right_auto = true; };
+        };
+        if left_auto and right_auto {
+            styles[idx].center_block = 1;
+        } else if left_auto or right_auto {
+            // Single-side auto is rare; leave as unset to avoid surprises.
+        };
+        return;
+    };
 }
 
 // Insertion-sort matched rules into (specificity, order) ascending so that
@@ -620,6 +962,9 @@ fn! css_cascade_apply(styles: [ComputedStyle], idx: i32,
 
     for ri in 0..len(rules) {
         let r: CssRule = rules[ri];
+        // Media gate: OscaWeb's terminal theme is always dark.
+        // media == 0 -> always apply; 1 -> dark-only (apply); 2 -> light-only (skip).
+        if r.media == 2 { continue; };
         let mut best: i32 = -1;
         for si in 0..len(r.selectors) {
             if css_compound_matches(r.selectors[si], node, nodes, ancestors) {
@@ -691,7 +1036,8 @@ fn! css_inherit(styles: [ComputedStyle], idx: i32, parent: ComputedStyle) {
     if styles[idx].underline == -1  { styles[idx].underline  = parent.underline; };
     if styles[idx].strike == -1     { styles[idx].strike     = parent.strike; };
     if styles[idx].text_align == -1 { styles[idx].text_align = parent.text_align; };
-    // bg_color and display_none do NOT inherit.
+    if styles[idx].line_height_px == -1 { styles[idx].line_height_px = parent.line_height_px; };
+    // bg_color, display_none, padding, max_width, center_block do NOT inherit.
 }
 
 // Recursive walk: compute ComputedStyle for `idx` and its descendants.

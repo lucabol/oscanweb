@@ -14,7 +14,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Runtime zoom** — `+`/`-` zoom in/out, `0` resets (1×–4×)
 - **HTTP and HTTPS support** — TLS is built into Oscan (zero external dependencies)
 - **JavaScript execution** — inline `<script>` tags and `onclick` handlers via embedded QuickJS-ng
-- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`) with a real cascade, descendant combinator, and inheritance
+- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`, `padding`, `max-width`, `line-height`, `margin: 0 auto` centering, and `@media (prefers-color-scheme)`) with a real cascade, descendant combinator, and inheritance. Tables now auto-size columns to content and wrap long cells.
 - **Image rendering** — PNG, JPEG, BMP, GIF, and SVG decoded, cached, and displayed inline
 - **Rich HTML rendering** — headings, lists, tables, blockquotes, code blocks, and 30+ tags
 - **Text selection & copy** — click-and-drag to select text, automatically copied to clipboard
