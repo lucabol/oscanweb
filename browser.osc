@@ -1696,7 +1696,7 @@ fn! main() {
                                 nav_url = str_concat("https://", target);
                             } else {
                                 // Omnibox search: route to DuckDuckGo
-                                nav_url = str_concat("https://duckduckgo.com/?q=", url_encode(target));
+                                nav_url = str_concat("https://lite.duckduckgo.com/lite/?q=", url_encode(target));
                             };
                             needs_navigate = true;
                             mode = BrowserMode::Normal;
