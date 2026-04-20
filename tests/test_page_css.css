@@ -1,0 +1,5 @@
+/* External stylesheet loaded via <link rel="stylesheet"> in test_page_css.html.
+   If the test page is served over HTTP, this file should load and the
+   .from-external class below should render. */
+.from-external { color: #00ccaa; font-weight: bold; }
+.from-external-bg { background-color: #223344; color: #eeeeee; }

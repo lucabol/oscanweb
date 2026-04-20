@@ -68,9 +68,11 @@ fn! main() {
     assert_true(css_selector_list_supported("h1"), "h1 supported");
     assert_true(css_selector_list_supported("h1, h2, p"), "selector list supported");
     assert_true(css_selector_list_supported(".a.b"), "compound supported");
-    assert_true(not css_selector_list_supported("div p"), "descendant rejected");
     assert_true(not css_selector_list_supported("div > p"), "child combinator rejected");
     assert_true(not css_selector_list_supported("p:hover"), "pseudo rejected");
+    assert_true(css_selector_list_supported("div p"), "descendant combinator supported");
+    assert_true(css_selector_list_supported("nav a.x, .y h2"), "mixed descendants supported");
+    assert_true(not css_selector_list_supported("a > b, .x y"), "list with one bad rejected");
 
     println("=== CSS Parser ===");
     let mut rules: [CssRule] = [];
@@ -79,7 +81,7 @@ fn! main() {
     assert_eq_i32(len(rules), 3, "parsed 3 rules");
 
     assert_eq_i32(len(rules[0].selectors), 1, "h1 has 1 selector");
-    assert_eq_str(rules[0].selectors[0].tag, "h1", "h1 selector tag");
+    assert_eq_str(rules[0].selectors[0].parts[0].tag, "h1", "h1 selector tag");
     assert_eq_i32(len(rules[0].decls), 2, "h1 has 2 decls");
     assert_eq_str(rules[0].decls[0].property, "color", "h1 first decl property");
     assert_eq_str(rules[0].decls[1].property, "font-weight", "h1 second decl property");
@@ -197,6 +199,121 @@ fn! main() {
     css_collect_style_texts(dom, root, texts);
     assert_eq_i32(len(texts), 1, "one <style> collected");
     assert_true(str_contains(texts[0], "color: red"), "style text captured");
+
+    println("=== CSS text-align ===");
+    let mut nodes_ta: [HtmlNode] = [];
+    let a_ta: map = map_new();
+    let n_ta: HtmlNode = html_node_element("h1", a_ta);
+    push(nodes_ta, n_ta);
+    nodes_ta[0].attrs = map_new();
+    map_set(nodes_ta[0].attrs, "style", "text-align: center");
+    let mut rules_ta: [CssRule] = [];
+    let mut styles_ta: [ComputedStyle] = [];
+    css_compute_all(nodes_ta, 0, rules_ta, styles_ta);
+    assert_eq_i32(styles_ta[0].text_align, 1, "text-align:center = 1");
+
+    // Inheritance: parent body with text-align:right should propagate to child p.
+    let mut dom_ta: [HtmlNode] = [];
+    let root_ta: i32 = html_parse(dom_ta, "<body style=\"text-align: right\"><p>x</p></body>");
+    let mut rules_ta2: [CssRule] = [];
+    let mut styles_ta2: [ComputedStyle] = [];
+    css_compute_all(dom_ta, root_ta, rules_ta2, styles_ta2);
+    // Find the <p> child and confirm it inherited text_align = 2.
+    let mut found_p: i32 = -1;
+    for pi in 0..len(dom_ta) {
+        if not dom_ta[pi].is_text and str_eq(dom_ta[pi].tag, "p") { found_p = pi; };
+    };
+    assert_true(found_p >= 0, "found <p> node");
+    assert_eq_i32(styles_ta2[found_p].text_align, 2, "text-align:right inherited to child");
+
+    println("=== CSS descendant combinator ===");
+    // Parse a compound
+    let c1: CssCompound = css_parse_compound("nav a");
+    assert_eq_i32(len(c1.parts), 2, "compound nav a has 2 parts");
+    assert_eq_str(c1.parts[0].tag, "nav", "outer is nav");
+    assert_eq_str(c1.parts[1].tag, "a", "subject is a");
+
+    let c2: CssCompound = css_parse_compound("  article  .title  ");
+    assert_eq_i32(len(c2.parts), 2, "whitespace collapsed");
+    assert_eq_str(c2.parts[0].tag, "article", "first part article");
+    assert_eq_str(c2.parts[1].cls, "title", "second part .title class");
+
+    // Specificity = sum of parts
+    let spec_c1: i32 = css_compound_specificity(c1);
+    assert_eq_i32(spec_c1, 2, "nav + a specificity = 1+1");
+    let spec_c2: i32 = css_compound_specificity(c2);
+    assert_eq_i32(spec_c2, 101, "article + .title = 1 + 100");
+
+    // Build: <nav><p><a>x</a></p></nav>
+    let mut dc_nodes: [HtmlNode] = [];
+    let nav_node: HtmlNode = html_node_element("nav", map_new());
+    push(dc_nodes, nav_node);
+    let p_wrap: HtmlNode = html_node_element("p", map_new());
+    push(dc_nodes, p_wrap);
+    let a_leaf: HtmlNode = html_node_element("a", map_new());
+    push(dc_nodes, a_leaf);
+    html_append_child(dc_nodes, 0, 1);
+    html_append_child(dc_nodes, 1, 2);
+
+    // Ancestor path to the <a>: [nav_idx, p_idx]
+    let mut anc_a: [i32] = [];
+    push(anc_a, 0);
+    push(anc_a, 1);
+    assert_true(css_compound_matches(c1, dc_nodes[2], dc_nodes, anc_a),
+                "nav a matches <a> under <nav>");
+
+    // Build a sibling <a> that is NOT under <nav>
+    let mut other_nodes: [HtmlNode] = [];
+    let body_node: HtmlNode = html_node_element("body", map_new());
+    push(other_nodes, body_node);
+    let a_only: HtmlNode = html_node_element("a", map_new());
+    push(other_nodes, a_only);
+    html_append_child(other_nodes, 0, 1);
+    let mut anc_b: [i32] = [];
+    push(anc_b, 0);
+    assert_true(not css_compound_matches(c1, other_nodes[1], other_nodes, anc_b),
+                "nav a does NOT match <a> not under <nav>");
+
+    // End-to-end via cascade: #main .inner should apply inside a <div id=main>.
+    let mut dom_dc: [HtmlNode] = [];
+    let r_dc: i32 = html_parse(dom_dc,
+        "<div id=\"main\"><p><span class=\"inner\">hi</span></p></div><span class=\"inner\">out</span>");
+    let mut rules_dc: [CssRule] = [];
+    let _odc: i32 = css_parse(rules_dc, "#main .inner {{ color: red; }}", 0);
+    let mut styles_dc: [ComputedStyle] = [];
+    css_compute_all(dom_dc, r_dc, rules_dc, styles_dc);
+
+    let mut inner_inside: i32 = -1;
+    let mut inner_outside: i32 = -1;
+    for qi in 0..len(dom_dc) {
+        if not dom_dc[qi].is_text and str_eq(dom_dc[qi].tag, "span") {
+            let cls: str = html_get_attr(dom_dc[qi], "class");
+            if str_eq(cls, "inner") {
+                // First match is inside #main (document order); second is outside.
+                if inner_inside < 0 { inner_inside = qi; }
+                else { inner_outside = qi; };
+            };
+        };
+    };
+    assert_true(inner_inside >= 0 and inner_outside >= 0, "found both .inner spans");
+    assert_eq_i32(styles_dc[inner_inside].color, css_parse_color("red"),
+                  "#main .inner matches inside");
+    assert_eq_i32(styles_dc[inner_outside].color, -1,
+                  "#main .inner does NOT match outside");
+
+    println("=== CSS collect sources (link + style) ===");
+    let mut dom_src: [HtmlNode] = [];
+    let r_src: i32 = html_parse(dom_src,
+        "<html><head><link rel=\"stylesheet\" href=\"a.css\"><style>p {{ color: red; }}</style><link rel=\"icon\" href=\"x.ico\"></head><body><p>hi</p></body></html>");
+    assert_true(r_src >= 0, "parsed HTML with link + style");
+    let mut ks: [i32] = [];
+    let mut vs: [str] = [];
+    css_collect_sources(dom_src, r_src, ks, vs);
+    assert_eq_i32(len(ks), 2, "two sources collected (link + style)");
+    assert_eq_i32(ks[0], 1, "first source is <link> (kind 1)");
+    assert_eq_str(vs[0], "a.css", "link href captured");
+    assert_eq_i32(ks[1], 0, "second source is <style> (kind 0)");
+    assert_true(str_contains(vs[1], "color: red"), "style text captured");
 
     println("=== CSS Done ===");
 }

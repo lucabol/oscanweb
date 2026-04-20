@@ -4,22 +4,25 @@
 // renderer without a real box model:
 //
 //   selectors:   tag, .class, #id, *, and compounds like  h1.title
+//                descendant combinator (whitespace), e.g.  nav a.x
 //                comma-separated selector lists
-//                (descendant/child/sibling combinators are intentionally
-//                 NOT matched — rules containing them are skipped.)
+//                (child/sibling combinators, pseudo-classes, and
+//                 attribute selectors are intentionally NOT matched —
+//                 rules containing them are skipped.)
 //   properties:  color, background-color, background, font-weight,
-//                font-style, text-decoration, display
+//                font-style, text-decoration, text-align, display
 //   values:      named colors (subset), #rgb, #rrggbb, rgb(r,g,b),
 //                bold/normal, italic/normal,
-//                underline/line-through/none, none (for display)
+//                underline/line-through/none, none (for display),
+//                left/center/right/justify (for text-align)
 //   cascade:     specificity + source order, inline style=""  wins over
 //                stylesheet rules.
-//   inheritance: color, font-weight, font-style, text-decoration
-//                propagate from parent ComputedStyle to child.
+//   inheritance: color, font-weight, font-style, text-decoration,
+//                text-align propagate from parent ComputedStyle to child.
 //
 // @-rules are consumed and ignored.  Pseudo-classes, attribute
-// selectors, combinators, shorthand properties, units, and the box
-// model are NOT supported.
+// selectors, child/sibling combinators, shorthand properties, units,
+// and the box model are NOT supported.
 
 use "html.osc"
 
@@ -39,10 +42,17 @@ struct CssSimple {
     cls: str,
 }
 
+// Compound descendant chain: parts[0] is the outermost ancestor and
+// parts[len-1] is the subject (the node that ultimately gets matched).
+// A single-part compound is a plain simple selector.
+struct CssCompound {
+    parts: [CssSimple],
+}
+
 struct CssRule {
-    selectors: [CssSimple],   // comma list of simple selectors
+    selectors: [CssCompound],  // comma list of descendant chains
     decls: [CssDecl],
-    order: i32,               // source order for stable tie-break
+    order: i32,                // source order for stable tie-break
 }
 
 // Per-node computed style.  -1 or false means "unset"; during cascade
@@ -56,6 +66,7 @@ struct ComputedStyle {
     italic: i32,
     underline: i32,
     strike: i32,
+    text_align: i32,    // -1 unset, 0 left, 1 center, 2 right
 }
 
 fn! css_empty_style() -> ComputedStyle {
@@ -67,6 +78,7 @@ fn! css_empty_style() -> ComputedStyle {
         italic: -1,
         underline: -1,
         strike: -1,
+        text_align: -1,
     }
 }
 
@@ -267,6 +279,7 @@ fn! css_parse_simple(s: str) -> CssSimple {
 }
 
 // True if the selector list has no unsupported combinators/features.
+// Spaces (descendant combinator) ARE allowed; >, +, ~, :, [ are not.
 fn! css_selector_list_supported(s: str) -> bool {
     let parts: [str] = str_split(s, ",");
     let mut ok: bool = true;
@@ -274,22 +287,55 @@ fn! css_selector_list_supported(s: str) -> bool {
         let p: str = str_trim(parts[pi]);
         let pc: [i32] = str_to_chars(p);
         let pn: i32 = len(pc);
-        let mut saw_space: bool = false;
-        let mut in_tok: bool = false;
         for ci in 0..pn {
             let ch: i32 = pc[ci];
             if ch == 62 or ch == 43 or ch == 126 or ch == 58 or ch == 91 {
                 ok = false;
             };
-            if css_is_ws(ch) {
-                if in_tok { saw_space = true; };
-            } else {
-                if saw_space { ok = false; };
-                in_tok = true;
-            };
         };
     };
     ok
+}
+
+// Split a selector chain into whitespace-separated tokens. Multiple
+// runs of whitespace collapse to a single separator.
+fn! css_split_ws(s: str) -> [str] {
+    let chars: [i32] = str_to_chars(s);
+    let n: i32 = len(chars);
+    let mut out: [str] = [];
+    let mut buf: [i32] = [];
+    for i in 0..n {
+        let c: i32 = chars[i];
+        if css_is_ws(c) {
+            if len(buf) > 0 {
+                push(out, str_from_chars(buf));
+                while len(buf) > 0 { pop(buf); };
+            };
+        } else {
+            push(buf, c);
+        };
+    };
+    if len(buf) > 0 { push(out, str_from_chars(buf)); };
+    out
+}
+
+// Parse one compound like "nav a" or "h1.title" into a CssCompound.
+// Returns a compound whose first part has tag="__fail__" on unsupported input.
+fn! css_parse_compound(s: str) -> CssCompound {
+    let toks: [str] = css_split_ws(str_trim(s));
+    let mut parts: [CssSimple] = [];
+    if len(toks) == 0 {
+        push(parts, CssSimple { tag: "__fail__", id: "", cls: "" });
+        return CssCompound { parts: parts };
+    };
+    for ti in 0..len(toks) {
+        let one: CssSimple = css_parse_simple(toks[ti]);
+        push(parts, one);
+        if str_eq(one.tag, "__fail__") {
+            return CssCompound { parts: parts };
+        };
+    };
+    CssCompound { parts: parts }
 }
 
 // ─── Declaration parsing ───────────────────────────────────
@@ -383,11 +429,15 @@ fn! css_parse(rules: [CssRule], source: str, start_order: i32) -> i32 {
 
         if str_len(sel_text) > 0 and css_selector_list_supported(sel_text) {
             let sel_parts: [str] = str_split(sel_text, ",");
-            let mut sels: [CssSimple] = [];
+            let mut sels: [CssCompound] = [];
             let mut any_fail: bool = false;
             for si in 0..len(sel_parts) {
-                let one: CssSimple = css_parse_simple(str_trim(sel_parts[si]));
-                if str_eq(one.tag, "__fail__") {
+                let one: CssCompound = css_parse_compound(str_trim(sel_parts[si]));
+                let mut fail: bool = false;
+                for pi in 0..len(one.parts) {
+                    if str_eq(one.parts[pi].tag, "__fail__") { fail = true; };
+                };
+                if fail {
                     any_fail = true;
                 } else {
                     push(sels, one);
@@ -448,6 +498,37 @@ fn! css_specificity(sel: CssSimple) -> i32 {
     let cls_w: i32 = if str_len(sel.cls) > 0 { 100 } else { 0 };
     let tag_w: i32 = if str_len(sel.tag) > 0 and not str_eq(sel.tag, "*") { 1 } else { 0 };
     id_w + cls_w + tag_w
+}
+
+// Specificity of a compound = sum of specificities of its simple parts.
+fn! css_compound_specificity(c: CssCompound) -> i32 {
+    let mut sum: i32 = 0;
+    for i in 0..len(c.parts) {
+        sum = sum + css_specificity(c.parts[i]);
+    };
+    sum
+}
+
+// Match a compound descendant chain against a node.
+// `ancestors` lists indices in shallowest-first order (root ... parent).
+fn! css_compound_matches(sel: CssCompound, node: HtmlNode,
+                        nodes: [HtmlNode], ancestors: [i32]) -> bool {
+    let np: i32 = len(sel.parts);
+    if np == 0 { return false; };
+    // Subject = last part must match the node itself.
+    if not css_simple_matches(sel.parts[np - 1], node) { return false; };
+    if np == 1 { return true; };
+    // Match remaining parts against ancestors, right-to-left, greedy.
+    let mut k: i32 = np - 2;               // next part to match (from right)
+    let mut ai: i32 = len(ancestors) - 1;  // walk ancestors from parent up
+    while k >= 0 and ai >= 0 {
+        let anc_idx: i32 = ancestors[ai];
+        if css_simple_matches(sel.parts[k], nodes[anc_idx]) {
+            k = k - 1;
+        };
+        ai = ai - 1;
+    };
+    k < 0
 }
 
 // ─── Cascade ───────────────────────────────────────────────
@@ -511,6 +592,13 @@ fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
         };
         return;
     };
+    if str_eq(prop, "text-align") {
+        if str_eq(val, "left")    { styles[idx].text_align = 0; };
+        if str_eq(val, "center")  { styles[idx].text_align = 1; };
+        if str_eq(val, "right")   { styles[idx].text_align = 2; };
+        if str_eq(val, "justify") { styles[idx].text_align = 0; };
+        return;
+    };
     if str_eq(prop, "display") {
         if str_eq(val, "none") {
             styles[idx].display_none = true;
@@ -524,7 +612,8 @@ fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
 // We represent "matched" as parallel arrays of indices into `rules` and the
 // selector's specificity.
 fn! css_cascade_apply(styles: [ComputedStyle], idx: i32,
-                     rules: [CssRule], node: HtmlNode) {
+                     rules: [CssRule], node: HtmlNode,
+                     nodes: [HtmlNode], ancestors: [i32]) {
     let mut match_rule: [i32] = [];
     let mut match_spec: [i32] = [];
     let mut match_order: [i32] = [];
@@ -533,8 +622,8 @@ fn! css_cascade_apply(styles: [ComputedStyle], idx: i32,
         let r: CssRule = rules[ri];
         let mut best: i32 = -1;
         for si in 0..len(r.selectors) {
-            if css_simple_matches(r.selectors[si], node) {
-                let sp: i32 = css_specificity(r.selectors[si]);
+            if css_compound_matches(r.selectors[si], node, nodes, ancestors) {
+                let sp: i32 = css_compound_specificity(r.selectors[si]);
                 if sp > best { best = sp; };
             };
         };
@@ -596,19 +685,22 @@ fn! css_cascade_apply(styles: [ComputedStyle], idx: i32,
 
 // Apply inheritable properties from parent to child when child has unset.
 fn! css_inherit(styles: [ComputedStyle], idx: i32, parent: ComputedStyle) {
-    if styles[idx].color == -1     { styles[idx].color     = parent.color; };
-    if styles[idx].bold == -1      { styles[idx].bold      = parent.bold; };
-    if styles[idx].italic == -1    { styles[idx].italic    = parent.italic; };
-    if styles[idx].underline == -1 { styles[idx].underline = parent.underline; };
-    if styles[idx].strike == -1    { styles[idx].strike    = parent.strike; };
+    if styles[idx].color == -1      { styles[idx].color      = parent.color; };
+    if styles[idx].bold == -1       { styles[idx].bold       = parent.bold; };
+    if styles[idx].italic == -1     { styles[idx].italic     = parent.italic; };
+    if styles[idx].underline == -1  { styles[idx].underline  = parent.underline; };
+    if styles[idx].strike == -1     { styles[idx].strike     = parent.strike; };
+    if styles[idx].text_align == -1 { styles[idx].text_align = parent.text_align; };
     // bg_color and display_none do NOT inherit.
 }
 
 // Recursive walk: compute ComputedStyle for `idx` and its descendants.
+// `ancestors` is maintained shallowest-first (root ... parent-of-idx).
 fn! css_compute_walk(nodes: [HtmlNode], idx: i32,
                     rules: [CssRule],
                     styles: [ComputedStyle],
-                    parent_style: ComputedStyle) {
+                    parent_style: ComputedStyle,
+                    ancestors: [i32]) {
     if idx < 0 or idx >= len(nodes) { return; };
     if nodes[idx].is_text {
         styles[idx] = parent_style;
@@ -618,7 +710,7 @@ fn! css_compute_walk(nodes: [HtmlNode], idx: i32,
     styles[idx] = css_empty_style();
 
     // Cascade from stylesheet rules
-    css_cascade_apply(styles, idx, rules, nodes[idx]);
+    css_cascade_apply(styles, idx, rules, nodes[idx], nodes, ancestors);
 
     // Inline style="..." wins over rule cascade (treated as specificity=inf).
     let inline_style: str = html_get_attr(nodes[idx], "style");
@@ -633,13 +725,16 @@ fn! css_compute_walk(nodes: [HtmlNode], idx: i32,
     // Inherit unset props from parent
     css_inherit(styles, idx, parent_style);
 
-    // Recurse children with this node's computed style as the parent
+    // Recurse children with this node's computed style as the parent,
+    // and with `idx` pushed onto the ancestors list.
     let here: ComputedStyle = styles[idx];
+    push(ancestors, idx);
     let mut child: i32 = nodes[idx].first_child;
     while child != -1 {
-        css_compute_walk(nodes, child, rules, styles, here);
+        css_compute_walk(nodes, child, rules, styles, here, ancestors);
         child = nodes[child].next_sibling;
     };
+    pop(ancestors);
 }
 
 // Fill `styles` (parallel to `nodes`) with computed styles for every node.
@@ -652,7 +747,8 @@ fn! css_compute_all(nodes: [HtmlNode], root: i32,
     };
     if root < 0 { return; };
     let root_style: ComputedStyle = css_empty_style();
-    css_compute_walk(nodes, root, rules, styles, root_style);
+    let mut ancestors: [i32] = [];
+    css_compute_walk(nodes, root, rules, styles, root_style, ancestors);
 }
 
 // ─── Stylesheet collection from DOM ────────────────────────
@@ -675,4 +771,54 @@ fn! css_collect_style_texts_walk(nodes: [HtmlNode], idx: i32, out: [str]) {
 
 fn! css_collect_style_texts(nodes: [HtmlNode], root: i32, out: [str]) {
     css_collect_style_texts_walk(nodes, root, out);
+}
+
+// Check whether a whitespace-separated attribute value contains `needle`
+// as one of its tokens, case-insensitively.
+fn! css_rel_contains_stylesheet(rel_attr: str) -> bool {
+    if str_len(rel_attr) == 0 { return false; };
+    let toks: [str] = str_split(str_to_lower(rel_attr), " ");
+    let mut hit: bool = false;
+    for ti in 0..len(toks) {
+        if str_eq(str_trim(toks[ti]), "stylesheet") { hit = true; };
+    };
+    hit
+}
+
+// Collect an ordered list of stylesheet sources found in the DOM.
+// Each entry has a parallel kind: 0 = inline <style> text, 1 = <link> href.
+// Preserving document order lets the caller honor the cascade.
+fn! css_collect_sources_walk(nodes: [HtmlNode], idx: i32,
+                             out_kinds: [i32], out_values: [str]) {
+    if idx < 0 or idx >= len(nodes) { return; };
+    let node: HtmlNode = nodes[idx];
+    if not node.is_text {
+        if str_eq(node.tag, "style") {
+            let text: str = html_get_text_content(nodes, idx);
+            if str_len(text) > 0 {
+                push(out_kinds, 0);
+                push(out_values, text);
+            };
+            return;
+        };
+        if str_eq(node.tag, "link") {
+            let rel: str = html_get_attr(node, "rel");
+            let href: str = html_get_attr(node, "href");
+            if str_len(href) > 0 and css_rel_contains_stylesheet(rel) {
+                push(out_kinds, 1);
+                push(out_values, href);
+            };
+            return;
+        };
+    };
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        css_collect_sources_walk(nodes, child, out_kinds, out_values);
+        child = nodes[child].next_sibling;
+    };
+}
+
+fn! css_collect_sources(nodes: [HtmlNode], root: i32,
+                       out_kinds: [i32], out_values: [str]) {
+    css_collect_sources_walk(nodes, root, out_kinds, out_values);
 }
