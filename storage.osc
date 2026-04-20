@@ -1,0 +1,60 @@
+// Persistent flat-file storage for OscaWeb (history, bookmarks).
+//
+// Files are stored directly in %APPDATA% on Windows or $HOME on Linux/macOS.
+// We cannot create subdirectories (Oscan has no mkdir builtin), so the
+// files live at the root of the chosen directory.
+//
+// All operations silently no-op on error; browsing continues to work even
+// when the filesystem is unavailable.
+
+fn! storage_dir() -> str {
+    // Prefer APPDATA on Windows.  Fall back to HOME (Linux/macOS).  If
+    // neither is set, return "." so we at least write to the cwd.
+    let appdata: Result<str, str> = env_get("APPDATA");
+    match appdata {
+        Result::Ok(v) => { return v; },
+        Result::Err(_e) => {},
+    };
+    let home: Result<str, str> = env_get("HOME");
+    match home {
+        Result::Ok(v) => { return v; },
+        Result::Err(_e) => {},
+    };
+    "."
+}
+
+fn! storage_path(filename: str) -> str {
+    let dir: str = storage_dir();
+    // Both "\" (Windows) and "/" (POSIX) are accepted by the underlying
+    // fopen call.  Prefer "/" for portability.
+    str_concat(str_concat(dir, "/"), filename)
+}
+
+// Read a flat-file list.  Returns an empty array on any error (file missing,
+// permission denied, etc.).  Blank lines are skipped.
+fn! storage_load_lines(filename: str) -> [str] {
+    let mut result: [str] = [];
+    let path: str = storage_path(filename);
+    let r: Result<str, str> = read_file(path);
+    let mut body: str = "";
+    match r {
+        Result::Ok(s) => { body = s; },
+        Result::Err(_e) => { return result; },
+    };
+    if str_len(body) == 0 { return result; };
+    let parts: [str] = str_split(body, "\n");
+    for i in 0..len(parts) {
+        let line: str = str_trim(parts[i]);
+        if str_len(line) > 0 {
+            push(result, line);
+        };
+    };
+    result
+}
+
+// Write a flat-file list.  Silently swallows errors.
+fn! storage_save_lines(filename: str, lines: [str]) {
+    let path: str = storage_path(filename);
+    let body: str = str_join(lines, "\n");
+    let _r: Result<str, str> = write_file(path, body);
+}
