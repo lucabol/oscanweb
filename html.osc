@@ -350,7 +350,7 @@ fn! html_parse(nodes: [HtmlNode], source: str) -> i32 {
                 };
 
                 if str_len(attr_name) > 0 {
-                    map_set(tag_attrs, attr_name, attr_value);
+                    map_set(tag_attrs, attr_name, html_entity_decode(attr_value));
                 };
             };
 
