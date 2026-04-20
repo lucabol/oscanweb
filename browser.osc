@@ -303,6 +303,43 @@ fn html_is_skip_tag(tag: str) -> bool {
     str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title")
 }
 
+// ─── Pre/code verbatim rendering ────────────────────────
+// Flush a run of characters at the current cursor.  Shared between the
+// newline-break path and the end-of-text trailing flush below.  Paints a
+// PRE_BG band from the segment's start to the right edge of the content
+// box (so adjacent inline children on the same line stitch into one
+// contiguous background) and records a WordInfo so text selection works
+// inside verbatim blocks.
+fn! flush_pre_segment(segment_chars: [i32], x_ptr: [i32], y_ptr: [i32],
+                      vp_top: i32, line_right: i32, line_left: i32,
+                      color: i32, font: i32, scale: i32,
+                      word_map: [WordInfo]) {
+    let gh: i32 = glyph_h_of(scale);
+    let lh: i32 = line_h_of(scale);
+    let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+    let visible: bool = draw_y + gh >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT;
+    if len(segment_chars) > 0 {
+        let seg: str = str_from_chars(segment_chars);
+        let seg_w: i32 = text_width_f(seg, font, scale);
+        if visible {
+            let bg_x: i32 = x_ptr[0];
+            let bg_w: i32 = line_right - bg_x;
+            if bg_w > 0 { gfx_fill_rect(bg_x, draw_y, bg_w, lh, PRE_BG); };
+            draw_text_f(x_ptr[0], draw_y, seg, color, font, scale);
+            let wi: WordInfo = WordInfo { x: x_ptr[0], y: draw_y, w: seg_w, text: seg };
+            push(word_map, wi);
+        };
+        x_ptr[0] = x_ptr[0] + seg_w;
+    } else if x_ptr[0] == line_left {
+        // Empty line: still paint the full-width band so the block reads
+        // as one cohesive code rectangle rather than disconnected stripes.
+        if visible {
+            let bg_w2: i32 = line_right - line_left;
+            if bg_w2 > 0 { gfx_fill_rect(line_left, draw_y, bg_w2, lh, PRE_BG); };
+        };
+    };
+}
+
 // ─── Text rendering with word-wrap ──────────────────────
 
 fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
@@ -577,19 +614,41 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     // ── Text node ──
     if node.is_text {
         let text: str = node.text;
-        if str_len(str_trim(text)) == 0 { return; };
         if in_pre {
-            let lines: [str] = str_split(text, "\n");
-            for li in 0..len(lines) {
-                let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                if draw_y + FONT_H >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-                    gfx_fill_rect(PAD, draw_y, vp_width - PAD * 2, LINE_H, PRE_BG);
-                    gfx_draw_text(x_ptr[0], draw_y, lines[li], CODE_FG, FONT_DEFAULT);
+            // Verbatim rendering: preserve whitespace, honour inherited
+            // color/font/scale, advance y only on actual '\n'.  The previous
+            // implementation split every text child on '\n' and forced a line
+            // break at the end of each, which turned inline syntax-highlight
+            // spans (e.g. Wikipedia code blocks) into one token per line.
+            let raw: [i32] = str_to_chars(text);
+            let pre_lh: i32 = line_h_of(scale);
+            let line_left: i32 = indent + PAD;
+            let line_right: i32 = vp_width - PAD;
+            let mut segment_chars: [i32] = [];
+            let raw_len: i32 = len(raw);
+            for ci in 0..raw_len {
+                let c: i32 = raw[ci];
+                if c == 13 { continue; };
+                if c == 10 {
+                    flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
+                                      line_right, line_left, color, font, scale, word_map);
+                    while len(segment_chars) > 0 { pop(segment_chars); };
+                    y_ptr[0] = y_ptr[0] + pre_lh;
+                    x_ptr[0] = line_left;
+                } else if c == 9 {
+                    // Tab → 4 spaces.  No tab-stop alignment; real-world
+                    // verbatim blocks (Wikipedia, MDN) indent with spaces
+                    // already, and a fixed expansion keeps the renderer simple.
+                    push(segment_chars, 32); push(segment_chars, 32);
+                    push(segment_chars, 32); push(segment_chars, 32);
+                } else {
+                    push(segment_chars, c);
                 };
-                y_ptr[0] = y_ptr[0] + LINE_H;
-                x_ptr[0] = indent + PAD;
             };
+            flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
+                              line_right, line_left, color, font, scale, word_map);
         } else {
+            if str_len(str_trim(text)) == 0 { return; };
             render_text(text, x_ptr, y_ptr, color, font, scale, vp_top, vp_width,
                         is_link or force_underline, links, link_href, search_q, word_map,
                         strikethrough, mark_bg);
@@ -949,8 +1008,16 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         child_link = true;
         child_href = url_unwrap_tracking(html_get_attr(node, "href"));
     }
-    else if str_eq(tag, "pre") or str_eq(tag, "code") {
+    else if str_eq(tag, "pre") {
         child_color = CODE_FG; child_pre = true; child_font = FONT_DEFAULT;
+    }
+    else if str_eq(tag, "code") {
+        // Inherit verbatim layout from a parent <pre> (via in_pre), but
+        // standalone inline <code> in a paragraph renders with normal
+        // word-wrap — just in mono font and CODE_FG.  Forcing the pre
+        // layout on inline <code> used to break line flow after every
+        // occurrence.
+        child_color = CODE_FG; child_font = FONT_DEFAULT;
     }
     else if is_mono_tag(tag) {
         child_color = CODE_FG; child_font = FONT_DEFAULT;
