@@ -6,6 +6,7 @@ use "html.osc"
 use "http.osc"
 use "css.osc"
 use "js.osc"
+use "storage.osc"
 use "vlog.osc"
 use "libs/ui.osc"
 
@@ -449,8 +450,31 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 search_q: str, word_map: [WordInfo],
                 strikethrough: bool, force_underline: bool, mark_bg: i32,
                 ol_counter: [i32], clickables: [ClickInfo],
-                styles: [ComputedStyle]) {
+                styles: [ComputedStyle],
+                reader_on: bool,
+                fragment_target: str, fragment_y_out: [i32]) {
     let node: HtmlNode = nodes[idx];
+
+    // Reader mode: hide chrome tags at block level.  Main content lives in
+    // <main>/<article>; removing nav/header/footer/aside strips site chrome
+    // without a heavy readability scorer.
+    if reader_on and not node.is_text {
+        let rt: str = node.tag;
+        if str_eq(rt, "nav") or str_eq(rt, "header") or str_eq(rt, "footer") or
+           str_eq(rt, "aside") or str_eq(rt, "form") {
+            return;
+        };
+    };
+
+    // Fragment target: record absolute y when we encounter the node whose id
+    // matches.  y_ptr[0] here is pre-scroll document space — exactly what we
+    // need to set scroll_y to.
+    if not node.is_text and str_len(fragment_target) > 0 and fragment_y_out[0] < 0 {
+        let nid: str = html_get_attr(node, "id");
+        if str_len(nid) > 0 and str_eq(nid, fragment_target) {
+            fragment_y_out[0] = y_ptr[0];
+        };
+    };
 
     // ── Text node ──
     if node.is_text {
@@ -754,11 +778,11 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     let mut child_markbg: i32 = mark_bg;
     let mut child_ol: [i32] = ol_counter;
 
-    if str_eq(tag, "h1") { child_color = H1_COLOR; child_scale = heading_scale(tag); }
-    else if str_eq(tag, "h2") { child_color = H2_COLOR; child_scale = heading_scale(tag); }
+    if str_eq(tag, "h1") { child_color = H1_COLOR; child_scale = heading_scale(tag) * scale; }
+    else if str_eq(tag, "h2") { child_color = H2_COLOR; child_scale = heading_scale(tag) * scale; }
     else if str_eq(tag, "h3") or str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
         child_color = H3_COLOR;
-        child_scale = heading_scale(tag);
+        child_scale = heading_scale(tag) * scale;
     }
     else if str_eq(tag, "b") or str_eq(tag, "strong") { child_color = BOLD_COLOR; }
     else if str_eq(tag, "em") or str_eq(tag, "i") or str_eq(tag, "cite") { child_color = EM_COLOR; }
@@ -768,7 +792,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         child_href = html_get_attr(node, "href");
     }
     else if str_eq(tag, "pre") or str_eq(tag, "code") {
-        child_color = CODE_FG; child_pre = true; child_font = FONT_DEFAULT; child_scale = 1;
+        child_color = CODE_FG; child_pre = true; child_font = FONT_DEFAULT;
     }
     else if is_mono_tag(tag) {
         child_color = CODE_FG; child_font = FONT_DEFAULT;
@@ -873,7 +897,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     base_scheme, base_host, base_port, base_path,
                     search_q, word_map,
                     child_strike, child_uline, child_markbg, child_ol,
-                    clickables, styles);
+                    clickables, styles,
+                    reader_on, fragment_target, fragment_y_out);
         child = nodes[child].next_sibling;
     };
 
@@ -927,6 +952,27 @@ fn! make_hint_labels(count: i32) -> [str] {
     labels
 }
 
+// ─── Reader-mode helpers ────────────────────────────────
+// Prefer <main> or <article> as the reader root when available — this
+// usually strips the site's nav / header / footer / sidebars far more
+// cleanly than tag-list exclusion alone.
+fn! find_main_content_idx(nodes: [HtmlNode], start_idx: i32) -> i32 {
+    if start_idx < 0 or start_idx >= len(nodes) { return -1; };
+    let node: HtmlNode = nodes[start_idx];
+    if not node.is_text {
+        if str_eq(node.tag, "main") or str_eq(node.tag, "article") {
+            return start_idx;
+        };
+    };
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        let r: i32 = find_main_content_idx(nodes, child);
+        if r >= 0 { return r; };
+        child = nodes[child].next_sibling;
+    };
+    -1
+}
+
 // ─── Main ────────────────────────────────────────────────
 
 fn! main() {
@@ -969,6 +1015,24 @@ fn! main() {
     // History
     let mut history_back: [str] = [];
     let mut history_forward: [str] = [];
+
+    // Persistent history (most-recent-first) and bookmarks, loaded from disk.
+    let mut persistent_history: [str] = storage_load_lines("oscaweb_history.txt");
+    let mut bookmarks: [str] = storage_load_lines("oscaweb_bookmarks.txt");
+
+    // URL-bar autocomplete (derived each frame in Insert mode)
+    let mut ac_matches: [str] = [];
+    let mut ac_selected: i32 = -1;
+    let mut show_bookmarks: bool = false;
+
+    // Reader mode
+    let mut reader_on: bool = false;
+
+    // Runtime zoom (1..4)
+    let mut body_scale: i32 = 1;
+
+    // Pending scroll target when the URL fragment (#id) matches an element.
+    let mut pending_fragment: str = "";
 
     // Follow mode
     let mut follow_links: [LinkInfo] = [];
@@ -1192,6 +1256,31 @@ fn! main() {
             // ── Navigation ──────────────────────────
             if needs_navigate {
                 needs_navigate = false;
+
+                // Pre-parse to see if this is a same-page fragment jump — if
+                // so we can skip the network round-trip entirely and just
+                // scroll.
+                let pending_u: Url = url_parse(nav_url);
+                let prev_u: Url = url_parse(current_url);
+                let same_page: bool = page_loaded and
+                    str_eq(pending_u.scheme, prev_u.scheme) and
+                    str_eq(pending_u.host, prev_u.host) and
+                    pending_u.port == prev_u.port and
+                    str_eq(pending_u.path, prev_u.path);
+
+                if same_page and str_len(pending_u.fragment) > 0 {
+                    // Same-document fragment jump: update pending fragment,
+                    // update current_url so the URL bar reflects it, and let
+                    // the render pass find the target.
+                    pending_fragment = pending_u.fragment;
+                    current_url = nav_url;
+                    while len(url_buf) > 0 { pop(url_buf); };
+                    let uc_s: [i32] = str_to_chars(current_url);
+                    for ci in 0..len(uc_s) { push(url_buf, uc_s[ci]); };
+                    url_cursor = len(url_buf);
+                    render_dirty = true;
+                } else {
+
                 status_msg = "Loading...";
                 error_msg = "";
                 vlog_msg("nav start", nav_url);
@@ -1347,6 +1436,30 @@ fn! main() {
                 // event, leaving the "Loading…" screen up until the user
                 // presses a key.
                 render_dirty = true;
+
+                // Record fragment for post-render scroll.
+                pending_fragment = pending_u.fragment;
+
+                // Persistent history: prepend current_url, dedupe, trim to
+                // 500 entries, and write back to disk.  current_url already
+                // reflects any redirect target.
+                if str_len(current_url) > 0 {
+                    let mut dedup: [str] = [];
+                    push(dedup, current_url);
+                    for phi in 0..len(persistent_history) {
+                        if len(dedup) >= 500 { break; };
+                        let old: str = persistent_history[phi];
+                        if not str_eq(old, current_url) {
+                            push(dedup, old);
+                        };
+                    };
+                    while len(persistent_history) > 0 { pop(persistent_history); };
+                    for ph2 in 0..len(dedup) {
+                        push(persistent_history, dedup[ph2]);
+                    };
+                    storage_save_lines("oscaweb_history.txt", persistent_history);
+                };
+                };  // end else (not same-page fragment)
             };
 
             // ── Input handling ──────────────────────
@@ -1396,7 +1509,12 @@ fn! main() {
                             };
                         };
                     } else if key == 114 {
-                        if str_len(current_url) > 0 {
+                        if last_key == 103 {
+                            // gr — toggle reader mode
+                            reader_on = not reader_on;
+                            scroll_y = 0;
+                            render_dirty = true;
+                        } else if str_len(current_url) > 0 {
                             nav_url = current_url;
                             needs_navigate = true;
                         };
@@ -1486,6 +1604,62 @@ fn! main() {
                             if scroll_y < 0 { scroll_y = 0; };
                             if scroll_y > max_scroll { scroll_y = max_scroll; };
                         };
+                    } else if key == 98 {
+                        // b — toggle bookmark for current URL
+                        if str_len(current_url) > 0 {
+                            let mut was_bookmarked: bool = false;
+                            let mut new_bm: [str] = [];
+                            for bi in 0..len(bookmarks) {
+                                if str_eq(bookmarks[bi], current_url) {
+                                    was_bookmarked = true;
+                                } else {
+                                    push(new_bm, bookmarks[bi]);
+                                };
+                            };
+                            if not was_bookmarked {
+                                // Prepend new bookmark
+                                let mut with_new: [str] = [];
+                                push(with_new, current_url);
+                                for bi2 in 0..len(new_bm) {
+                                    push(with_new, new_bm[bi2]);
+                                };
+                                while len(bookmarks) > 0 { pop(bookmarks); };
+                                for bi3 in 0..len(with_new) {
+                                    push(bookmarks, with_new[bi3]);
+                                };
+                                status_msg = "Bookmarked: {current_url}";
+                            } else {
+                                while len(bookmarks) > 0 { pop(bookmarks); };
+                                for bi4 in 0..len(new_bm) {
+                                    push(bookmarks, new_bm[bi4]);
+                                };
+                                status_msg = "Removed bookmark: {current_url}";
+                            };
+                            storage_save_lines("oscaweb_bookmarks.txt", bookmarks);
+                        };
+                    } else if key == 66 {
+                        // B — open bookmarks overlay
+                        show_bookmarks = not show_bookmarks;
+                    } else if key >= 49 and key <= 57 and show_bookmarks {
+                        // 1..9 opens the corresponding bookmark
+                        let pick: i32 = key - 49;
+                        if pick < len(bookmarks) {
+                            nav_url = bookmarks[pick];
+                            needs_navigate = true;
+                            show_bookmarks = false;
+                        };
+                    } else if key == 43 or key == 61 {
+                        // + or = — zoom in
+                        if body_scale < 4 { body_scale = body_scale + 1; };
+                        render_dirty = true;
+                    } else if key == 45 {
+                        // - — zoom out
+                        if body_scale > 1 { body_scale = body_scale - 1; };
+                        render_dirty = true;
+                    } else if key == 48 {
+                        // 0 — reset zoom
+                        body_scale = 1;
+                        render_dirty = true;
                     };
                     if key > 0 { last_key = key; };
                 },
@@ -1494,18 +1668,41 @@ fn! main() {
                         mode = BrowserMode::Normal;
                         url_focused = false;
                         url_select_all = false;
+                        ac_selected = -1;
+                    } else if key == 1003 or key == 9 {
+                        // Down-arrow / Tab cycles autocomplete forward
+                        if len(ac_matches) > 0 {
+                            ac_selected = ac_selected + 1;
+                            if ac_selected >= len(ac_matches) { ac_selected = 0; };
+                        };
+                    } else if key == 1004 {
+                        // Up-arrow cycles autocomplete backward
+                        if len(ac_matches) > 0 {
+                            if ac_selected <= 0 { ac_selected = len(ac_matches) - 1; }
+                            else { ac_selected = ac_selected - 1; };
+                        };
                     } else if key == KEY_ENTER and url_focused {
                         let typed_url: str = str_from_chars(url_buf);
-                        if str_len(typed_url) > 0 {
-                            if not str_contains(typed_url, "://") {
-                                nav_url = str_concat("https://", typed_url);
+                        // If an autocomplete suggestion is highlighted, use it
+                        let target: str = if ac_selected >= 0 and ac_selected < len(ac_matches) {
+                            ac_matches[ac_selected]
+                        } else {
+                            typed_url
+                        };
+                        if str_len(target) > 0 {
+                            if str_contains(target, "://") {
+                                nav_url = target;
+                            } else if url_looks_like_url(target) {
+                                nav_url = str_concat("https://", target);
                             } else {
-                                nav_url = typed_url;
+                                // Omnibox search: route to DuckDuckGo
+                                nav_url = str_concat("https://duckduckgo.com/?q=", url_encode(target));
                             };
                             needs_navigate = true;
                             mode = BrowserMode::Normal;
                             url_focused = false;
                             url_select_all = false;
+                            ac_selected = -1;
                         };
                     };
                 },
@@ -1529,6 +1726,7 @@ fn! main() {
                                         nav_url = url_to_string(Url {
                                             scheme: cu.scheme, host: cu.host,
                                             port: cu.port, path: rp,
+                                            fragment: "",
                                         });
                                     };
                                     needs_navigate = true;
@@ -1643,6 +1841,7 @@ fn! main() {
                                         nav_url = url_to_string(Url {
                                             scheme: cu.scheme, host: cu.host,
                                             port: cu.port, path: rp,
+                                            fragment: "",
                                         });
                                     };
                                     needs_navigate = true;
@@ -1753,17 +1952,41 @@ fn! main() {
                 let y_ptr: [i32] = [0];
                 let pg_u: Url = url_parse(current_url);
                 while len(word_map) > 0 { pop(word_map); };
-                render_node(dom_nodes, dom_root, x_ptr, y_ptr,
+                // Reader mode: if <main>/<article> exists, render just that
+                // subtree; otherwise render the full tree with reader_on set
+                // so nav/header/footer/aside are hidden.
+                let mut render_root: i32 = dom_root;
+                if reader_on {
+                    let main_idx: i32 = find_main_content_idx(dom_nodes, dom_root);
+                    if main_idx >= 0 { render_root = main_idx; };
+                };
+                let fragment_y_out: [i32] = [-1];
+                render_node(dom_nodes, render_root, x_ptr, y_ptr,
                             scroll_y, canvas_width(), page_links,
-                            FG_COLOR, BODY_FONT, 1, false, "", 0, false,
+                            FG_COLOR, BODY_FONT, body_scale, false, "", 0, false,
                             img_cache_idx, img_cache_data,
                             img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
                             search_query, word_map,
                             false, false, -1, [0], page_clickables,
-                            dom_styles);
+                            dom_styles,
+                            reader_on, pending_fragment, fragment_y_out);
                 doc_height = y_ptr[0];
                 max_scroll = max_i32(doc_height - (canvas_height() - CHROME_TOP - CHROME_BOT), 0);
+
+                // Fragment scroll: if the pending fragment matched a node,
+                // set scroll_y to its y position and schedule another
+                // render pass so the content appears at the top.
+                if str_len(pending_fragment) > 0 {
+                    if fragment_y_out[0] >= 0 {
+                        scroll_y = fragment_y_out[0];
+                        if scroll_y > max_scroll { scroll_y = max_scroll; };
+                        render_dirty = true;
+                    };
+                    // Consume fragment either way — avoids re-scrolling on
+                    // every frame if the id isn't present.
+                    pending_fragment = "";
+                };
                 if scroll_y > max_scroll { scroll_y = max_scroll; };
 
                 // Draw text selection highlight
@@ -1817,6 +2040,41 @@ fn! main() {
                 gfx_draw_text(ax, ay, "r         Reload", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
                 gfx_draw_text(ax, ay, "Q         Quit browser", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
                 gfx_draw_text(ax, ay, "Esc       Normal mode", FG_COLOR, FONT_DEFAULT);
+            };
+
+            // URL-bar autocomplete dropdown (Insert mode only).  Matches
+            // substrings of persistent history.  Down/Up cycle; Enter opens
+            // the highlighted entry (or the literal typed text when none is
+            // selected).
+            while len(ac_matches) > 0 { pop(ac_matches); };
+            let in_insert: bool = match mode {
+                BrowserMode::Insert => true,
+                _ => false,
+            };
+            if in_insert and len(url_buf) > 0 {
+                let typed_lc: str = str_to_lower(str_from_chars(url_buf));
+                for phi in 0..len(persistent_history) {
+                    if len(ac_matches) >= 6 { break; };
+                    let cand: str = persistent_history[phi];
+                    if str_contains(str_to_lower(cand), typed_lc) and
+                       not str_eq(str_to_lower(cand), typed_lc) {
+                        push(ac_matches, cand);
+                    };
+                };
+            };
+            if ac_selected >= len(ac_matches) { ac_selected = -1; };
+            if len(ac_matches) > 0 {
+                let ady: i32 = CHROME_TOP;
+                let ad_h: i32 = len(ac_matches) * 14 + 4;
+                gfx_fill_rect(4, ady, canvas_width() - 8, ad_h, STATUS_BG);
+                gfx_rect(4, ady, canvas_width() - 8, ad_h, UI_BORDER);
+                for ami in 0..len(ac_matches) {
+                    let rowy: i32 = ady + 2 + ami * 14;
+                    if ami == ac_selected {
+                        gfx_fill_rect(4, rowy, canvas_width() - 8, 14, SEL_COLOR);
+                    };
+                    gfx_draw_text(10, rowy + 3, ac_matches[ami], FG_COLOR, FONT_DEFAULT);
+                };
             };
 
             // Follow mode hints
@@ -1873,8 +2131,11 @@ fn! main() {
                 gfx_draw_text(hx + 10, ky, "d / u        Half page down / up", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "gg / G       Top / bottom", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "f            Follow link (hints)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL  (type to search)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "r            Reload page", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "gr           Toggle reader mode", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "b / B        Bookmark / bookmarks list", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "+ / - / 0    Zoom in / out / reset", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "p            Paste URL and go", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "yy           Copy URL to clipboard", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "Ctrl+V       Paste in URL bar", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
@@ -1886,6 +2147,31 @@ fn! main() {
                 gfx_draw_text(hx + 10, ky, "?            Toggle this help", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "Mouse click on links also works!", LINK_COLOR, FONT_DEFAULT);
+            };
+
+            // Bookmarks overlay
+            if show_bookmarks {
+                let bx: i32 = 200;
+                let by: i32 = 100;
+                let bh: i32 = 40 + max_i32(len(bookmarks), 1) * LINE_H;
+                gfx_fill_rect(bx, by, 600, bh, STATUS_BG);
+                gfx_rect(bx, by, 600, bh, UI_BORDER);
+                gfx_draw_text(bx + 10, by + 10, "Bookmarks (press 1-9 to open, B to close)",
+                              H1_COLOR, FONT_DEFAULT);
+                if len(bookmarks) == 0 {
+                    gfx_draw_text(bx + 10, by + 30,
+                                  "No bookmarks yet. Press 'b' on a page to save one.",
+                                  HR_COLOR, FONT_DEFAULT);
+                } else {
+                    let mut bky: i32 = by + 30;
+                    let cap: i32 = if len(bookmarks) < 9 { len(bookmarks) } else { 9 };
+                    for bki in 0..cap {
+                        let row_num: i32 = bki + 1;
+                        let bm_row: str = "{row_num}. {bookmarks[bki]}";
+                        gfx_draw_text(bx + 10, bky, bm_row, LINK_COLOR, FONT_DEFAULT);
+                        bky += LINE_H;
+                    };
+                };
             };
 
             // Status bar
@@ -1903,8 +2189,10 @@ fn! main() {
             } else {
                 "Top"
             };
+            let reader_flag: str = if reader_on { " | READER" } else { "" };
+            let zoom_flag: str = if body_scale > 1 { " | zoom {body_scale}x" } else { "" };
             gfx_draw_text(4, sty + 6,
-                " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}",
+                " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}{reader_flag}{zoom_flag}",
                 FG_COLOR, FONT_DEFAULT);
 
             prev_btn = canvas_mouse_btn();

@@ -76,19 +76,38 @@ fn! main() {
     let r3: str = url_resolve_relative("/", "page.html");
     assert_eq_str(r3, "/page.html", "resolve from root");
 
-    // Fragment stripping
+    // Fragment preserved
     let uf1: Url = url_parse("https://example.com/page#section");
     assert_eq_str(uf1.path, "/page", "fragment stripped from path");
+    assert_eq_str(uf1.fragment, "section", "fragment captured");
 
     let uf2: Url = url_parse("https://example.com/page#");
     assert_eq_str(uf2.path, "/page", "empty fragment stripped");
 
     let uf3: Url = url_parse("https://example.com/#top");
     assert_eq_str(uf3.path, "/", "fragment at root gives /");
+    assert_eq_str(uf3.fragment, "top", "fragment captured at root");
 
-    // Query string stripping
+    // Query string PRESERVED (needed for search URLs, permalinks)
     let uq1: Url = url_parse("https://example.com/search?q=test");
-    assert_eq_str(uq1.path, "/search", "query string stripped");
+    assert_eq_str(uq1.path, "/search?q=test", "query string preserved in path");
+
+    // Fragment serialises back out
+    let rtf: str = url_to_string(url_parse("https://example.com/page#sec"));
+    assert_eq_str(rtf, "https://example.com/page#sec", "round-trip with fragment");
+
+    // URL-vs-query heuristic
+    if url_looks_like_url("http://x") { println("PASS: url with scheme"); } else { println("FAIL: url with scheme"); };
+    if url_looks_like_url("example.com") { println("PASS: bare hostname"); } else { println("FAIL: bare hostname"); };
+    if url_looks_like_url("localhost:8000") { println("PASS: localhost"); } else { println("FAIL: localhost"); };
+    if not url_looks_like_url("news today") { println("PASS: query with space"); } else { println("FAIL: query with space"); };
+    if not url_looks_like_url("weather") { println("PASS: dotless query"); } else { println("FAIL: dotless query"); };
+    if not url_looks_like_url("") { println("PASS: empty not a URL"); } else { println("FAIL: empty not a URL"); };
+
+    // url_encode
+    assert_eq_str(url_encode("hello world"), "hello%20world", "encode space");
+    assert_eq_str(url_encode("a+b=c"), "a%2Bb%3Dc", "encode special chars");
+    assert_eq_str(url_encode("abc-_.~"), "abc-_.~", "unreserved preserved");
 
     println("=== URL Tests Complete ===");
 }

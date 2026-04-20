@@ -5,6 +5,7 @@ struct Url {
     host: str,
     port: i32,
     path: str,
+    fragment: str,
 }
 
 fn! url_parse(raw: str) -> Url {
@@ -13,6 +14,7 @@ fn! url_parse(raw: str) -> Url {
     let mut host: str = "";
     let mut port: i32 = 80;
     let mut path: str = "/";
+    let mut fragment: str = "";
 
     // Extract scheme
     let scheme_pos: i32 = str_find(s, "://");
@@ -55,25 +57,21 @@ fn! url_parse(raw: str) -> Url {
         path = "/";
     };
 
-    // Strip fragment (#...) — it's client-side only, never sent to server
+    // Extract fragment (#...) — it's client-side only, never sent to server
     let hash_pos: i32 = str_find(path, "#");
     if hash_pos >= 0 {
+        fragment = str_slice(path, hash_pos + 1, str_len(path));
         path = str_slice(path, 0, hash_pos);
         if str_len(path) == 0 {
             path = "/";
         };
     };
 
-    // Strip query string (?...) for now — we don't support forms
-    let qmark_pos: i32 = str_find(path, "?");
-    if qmark_pos >= 0 {
-        path = str_slice(path, 0, qmark_pos);
-        if str_len(path) == 0 {
-            path = "/";
-        };
-    };
+    // Query string (?...) is PRESERVED in path — servers need it to route
+    // search pages, permalinks, etc.  (Earlier versions stripped it, which
+    // broke DuckDuckGo / YouTube / permalink URLs.)
 
-    Url { scheme: scheme, host: host, port: port, path: path }
+    Url { scheme: scheme, host: host, port: port, path: path, fragment: fragment }
 }
 
 fn! url_to_string(u: Url) -> str {
@@ -92,7 +90,62 @@ fn! url_to_string(u: Url) -> str {
     };
 
     result = "{result}{u.path}";
+    if str_len(u.fragment) > 0 {
+        result = "{result}#{u.fragment}";
+    };
     result
+}
+
+// Percent-encode a query string for omnibox search URLs.  Keeps
+// unreserved chars (A-Z a-z 0-9 - _ . ~) and encodes everything else
+// as %HH.  Space becomes %20 (simplest; "+" would also work inside
+// a query string but %20 is universally accepted).
+fn! url_encode(s: str) -> str {
+    let chars: [i32] = str_to_chars(s);
+    let hexd: [i32] = str_to_chars("0123456789ABCDEF");
+    let mut out: [i32] = [];
+    for i in 0..len(chars) {
+        let c: i32 = chars[i];
+        let is_unreserved: bool =
+            (c >= 65 and c <= 90) or
+            (c >= 97 and c <= 122) or
+            (c >= 48 and c <= 57) or
+            c == 45 or c == 95 or c == 46 or c == 126;
+        if is_unreserved {
+            push(out, c);
+        } else {
+            push(out, 37); // '%'
+            push(out, hexd[(c / 16) % 16]);
+            push(out, hexd[c % 16]);
+        };
+    };
+    str_from_chars(out)
+}
+
+// Heuristic for distinguishing a URL from an omnibox search query.
+// Returns true when `s` should be treated as a URL (and fetched
+// directly), false when it should be fed to a search engine.
+fn! url_looks_like_url(s: str) -> bool {
+    let t: str = str_trim(s);
+    if str_len(t) == 0 { return false; };
+    if str_contains(t, "://") { return true; };
+    if str_starts_with(t, "//") { return true; };
+    if str_starts_with(t, "/") { return true; };
+    if str_starts_with(t, "localhost") { return true; };
+    if str_contains(t, " ") { return false; };
+    // A single dotless word is almost never a hostname the user meant;
+    // treat it as a query ("news", "weather", "oscan").
+    if not str_contains(t, ".") { return false; };
+    // Exclude pure decimal numbers ("3.14") and nothing-but-dots.
+    let chars: [i32] = str_to_chars(t);
+    let mut has_alpha: bool = false;
+    for i in 0..len(chars) {
+        let c: i32 = chars[i];
+        if (c >= 65 and c <= 90) or (c >= 97 and c <= 122) {
+            has_alpha = true;
+        };
+    };
+    has_alpha
 }
 
 fn! url_resolve_relative(base_path: str, relative: str) -> str {

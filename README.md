@@ -7,6 +7,11 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 ### Key Features
 
 - **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
+- **Omnibox search** — type any query in the address bar; non-URL input is sent to DuckDuckGo automatically, with autocomplete from your browsing history
+- **Reader mode** — `gr` strips navigation/header/footer/forms and renders the main content for distraction-free reading
+- **Fragment navigation** — `#section` anchors scroll to the matching element; same-page fragment links skip the network round-trip
+- **Persistent history & bookmarks** — history is saved to `%APPDATA%\oscaweb_history.txt` (500 entries); `b` bookmarks the current page, `B` opens the bookmarks panel, `1`–`9` jumps to a saved site
+- **Runtime zoom** — `+`/`-` zoom in/out, `0` resets (1×–4×)
 - **HTTP and HTTPS support** — TLS is built into Oscan (zero external dependencies)
 - **JavaScript execution** — inline `<script>` tags and `onclick` handlers via embedded QuickJS-ng
 - **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`) with a real cascade, descendant combinator, and inheritance
@@ -59,13 +64,25 @@ OscaWeb uses Vimium-inspired keybindings. Press `?` in the browser to toggle the
 | Key   | Action                            |
 | ----- | --------------------------------- |
 | `f`   | Follow link (hint mode)           |
-| `o`   | Open URL (clear address bar)      |
+| `o`   | Open URL / search (clear bar)     |
 | `O`   | Edit current URL                  |
 | `r`   | Reload page                       |
+| `gr`  | Toggle reader mode                |
+| `b`   | Bookmark / un-bookmark current URL|
+| `B`   | Toggle bookmarks panel            |
+| `1`–`9` | Open Nth bookmark (while panel open) |
 | `p`   | Paste URL from clipboard and go   |
 | `yy`  | Copy current URL to clipboard     |
 | `H`   | Go back in history                |
 | `L`   | Go forward in history             |
+
+### Zoom
+
+| Key   | Action              |
+| ----- | ------------------- |
+| `+` / `=` | Zoom in         |
+| `-`   | Zoom out            |
+| `0`   | Reset zoom          |
 
 ### Search
 
@@ -87,13 +104,20 @@ OscaWeb uses Vimium-inspired keybindings. Press `?` in the browser to toggle the
 
 ### Address Bar Editing (Insert Mode)
 
-| Key      | Action               |
-| -------- | -------------------- |
-| `Ctrl+A` | Move cursor to start |
-| `Ctrl+E` | Move cursor to end   |
-| `←` `→`  | Move cursor          |
-| `Enter`  | Navigate to URL      |
-| `Esc`    | Cancel editing       |
+| Key      | Action                                 |
+| -------- | -------------------------------------- |
+| `Ctrl+A` | Move cursor to start                   |
+| `Ctrl+E` | Move cursor to end                     |
+| `←` `→`  | Move cursor                            |
+| `Down` / `Tab` | Cycle autocomplete suggestion ↓  |
+| `Up`     | Cycle autocomplete suggestion ↑        |
+| `Enter`  | Navigate to URL (or DuckDuckGo search) |
+| `Esc`    | Cancel editing                         |
+
+The address bar is also an omnibox: anything that does not look like a URL
+(scheme, dot in the host, `localhost`, or `host:port`) is sent to
+DuckDuckGo as a search query. Substring matches against your saved
+browsing history appear as autocomplete suggestions while you type.
 
 ## HTML Rendering
 
@@ -211,11 +235,12 @@ The bottom bar shows at a glance:
 | Module           | Description |
 | ---------------- | ----------- |
 | `browser.osc`    | Main application — rendering engine, browser chrome, Vim keybindings, image pipeline, and page navigation |
-| `url.osc`        | URL parsing (scheme, host, port, path) and relative URL resolution |
+| `url.osc`        | URL parsing (scheme, host, port, path, query, fragment) and relative URL resolution |
 | `html.osc`       | State-machine-based HTML tokenizer and flat DOM tree builder |
 | `css.osc`        | CSS tokenizer, parser, selector matcher, and cascade engine |
 | `http.osc`       | HTTP/HTTPS client using Oscan's built-in TLS (`tls_connect`, `tls_send`, `tls_recv`) |
 | `js.osc`         | JavaScript engine FFI — walks the DOM to execute inline `<script>` tags |
+| `storage.osc`    | Flat-file persistence for history and bookmarks (APPDATA on Windows, HOME on Linux) |
 | `js_bridge.c`    | C bridge exposing QuickJS-ng engine lifecycle, console, and DOM bindings to Oscan |
 | `libs/ui.osc`    | Reusable UI widget library (panel, label, separator, button, checkbox, slider, textbox) |
 
@@ -290,7 +315,7 @@ supported CSS feature.
 
 - Scheme detection (`http://`, `https://`, default `https`)
 - Relative URL resolution (`../`, `./`, absolute paths, protocol-relative `//`)
-- Fragment stripping, query string preservation
+- Query string and fragment (`#anchor`) preservation; fragment-only navigation skips the network
 - Auto-prepends `https://` when no scheme is entered (matches modern browsers; many sites, e.g. `www.microsoft.com`, return 403 on plain HTTP)
 
 ## Testing
@@ -314,6 +339,7 @@ oscanweb/
 ├── html.osc             # HTML tokenizer and DOM builder
 ├── css.osc              # CSS tokenizer, parser, selector matcher, cascade
 ├── js.osc               # JavaScript engine FFI (QuickJS-ng)
+├── storage.osc          # Flat-file persistence for history & bookmarks
 ├── js_bridge.c          # C bridge for QuickJS-ng DOM bindings
 ├── build.ps1            # Build script
 ├── README.md            # This file
@@ -331,6 +357,51 @@ oscanweb/
     ├── test_page_css.html  # Manual CSS smoke-test page
     └── run_tests.ps1       # Test runner
 ```
+
+## Reader Mode, Bookmarks & Zoom
+
+### Reader mode (`gr`)
+
+Toggles a distraction-free view. If the page contains a `<main>` or
+`<article>` element, the renderer uses that subtree as the document root.
+Otherwise, `<nav>`, `<header>`, `<footer>`, `<aside>`, and `<form>`
+elements are hidden. Press `gr` again to return to the full page.
+
+### Fragment navigation
+
+Links to `#anchor` targets scroll the matching element to the top of the
+viewport. When the only difference between the link target and the
+current URL is the fragment, OscaWeb skips the network request entirely
+and scrolls in-place.
+
+### Omnibox & autocomplete
+
+The address bar doubles as a search box. Press `o` and type:
+
+- **URL-like input** (contains `://`, a dot in the host part, `localhost`,
+  or `host:port`) → navigated directly
+- **Anything else** → sent to DuckDuckGo as `https://duckduckgo.com/?q=...`
+
+As you type, substring matches from your saved browsing history appear
+below the address bar. `Down`/`Tab` and `Up` cycle through the
+suggestions; `Enter` opens the highlighted one (or the literal text if
+nothing is selected).
+
+### History & bookmarks
+
+- **History** is stored one URL per line in
+  `%APPDATA%\oscaweb_history.txt` (or `$HOME/oscaweb_history.txt` on
+  Linux), most-recent first, capped at 500 entries.
+- **Bookmarks** live in `oscaweb_bookmarks.txt` next to the history file.
+  Press `b` on any page to toggle it; `B` opens a panel listing all
+  bookmarks; pressing `1`–`9` while the panel is open jumps to the
+  matching entry.
+
+### Zoom
+
+`+` / `=` zooms in, `-` zooms out, `0` resets. The current zoom factor
+is shown in the status bar. Zoom is clamped between 1× and 4× and scales
+headings, paragraphs, code blocks, and tables uniformly.
 
 ## Limitations
 
