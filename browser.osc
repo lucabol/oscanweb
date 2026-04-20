@@ -309,7 +309,8 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 font: i32, scale: i32,
                 vp_top: i32, vp_width: i32, underline: bool,
                 links: [LinkInfo], href: str, search_q: str,
-                word_map: [WordInfo], strikethrough: bool, mark_bg: i32) {
+                word_map: [WordInfo], strikethrough: bool, mark_bg: i32,
+                indent: i32) {
     // Normalize whitespace: collapse \n, \r, \t into spaces so split by space
     // doesn't emit them as visible "words" (which render as missing-glyph ?).
     let raw_chars: [i32] = str_to_chars(text);
@@ -342,7 +343,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
         let word_w: i32 = text_width_f(word, font, scale);
 
         // Word wrap
-        if x_ptr[0] + word_w > max_x and x_ptr[0] > PAD {
+        if x_ptr[0] + word_w > max_x and x_ptr[0] > indent + PAD {
             // If we wrapped to a new line, emit link for the previous line segment
             if str_len(href) > 0 and link_w > 0 and not link_recorded {
                 let draw_y_check: i32 = link_y;
@@ -355,7 +356,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                     link_recorded = true;
                 };
             };
-            x_ptr[0] = PAD;
+            x_ptr[0] = indent + PAD;
             y_ptr[0] = y_ptr[0] + lh;
         };
 
@@ -592,7 +593,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         } else {
             render_text(text, x_ptr, y_ptr, color, font, scale, vp_top, vp_width,
                         is_link or force_underline, links, link_href, search_q, word_map,
-                        strikethrough, mark_bg);
+                        strikethrough, mark_bg, indent);
         };
         return;
     };
