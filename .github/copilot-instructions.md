@@ -81,7 +81,7 @@ Supported properties: `color`, `background-color`/`background`, `font-weight`, `
 - **Links & images:** `a` (clickable + underlined), `img` (fetched, decoded, cached, scaled; SVG via `svg_load`, raster via `img_load`)
 - **Tables:** `table`/`tr`/`td`/`th` (column-aligned with borders; handles `thead`/`tbody`/`tfoot` wrappers)
 - **Semantic blocks:** `section`, `article`, `nav`, `header`, `footer`, `main`, `figure`/`figcaption`
-- **Skipped:** `head`, `script`, `style`, `meta`, `link`, `title`, `noscript`
+- **Skipped:** `head`, `script`, `style`, `meta`, `link`, `title`
 
 Key data collected during rendering:
 - `page_links: [LinkInfo]` — clickable link hit areas (one per `<a>` element, not per word)

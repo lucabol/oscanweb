@@ -290,8 +290,7 @@ fn html_is_block_tag(tag: str) -> bool {
 
 fn html_is_skip_tag(tag: str) -> bool {
     str_eq(tag, "head") or str_eq(tag, "script") or str_eq(tag, "style") or
-    str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title") or
-    str_eq(tag, "noscript")
+    str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title")
 }
 
 // ─── Text rendering with word-wrap ──────────────────────
@@ -1696,7 +1695,7 @@ fn! main() {
                                 nav_url = str_concat("https://", target);
                             } else {
                                 // Omnibox search: route to DuckDuckGo
-                                nav_url = str_concat("https://lite.duckduckgo.com/lite/?q=", url_encode(target));
+                                nav_url = str_concat("https://html.duckduckgo.com/html/?q=", url_encode(target));
                             };
                             needs_navigate = true;
                             mode = BrowserMode::Normal;
