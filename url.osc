@@ -122,6 +122,73 @@ fn! url_encode(s: str) -> str {
     str_from_chars(out)
 }
 
+// Decode a percent-encoded string (e.g. "a%20b" -> "a b").  Invalid
+// escapes are passed through verbatim.  '+' is NOT decoded to space
+// here (that is a form-encoding convention, not general URL decoding).
+fn! url_decode(s: str) -> str {
+    let chars: [i32] = str_to_chars(s);
+    let n: i32 = len(chars);
+    let mut out: [i32] = [];
+    let mut i: i32 = 0;
+    while i < n {
+        let c: i32 = chars[i];
+        if c == 37 and i + 2 < n {
+            let h1: i32 = css_like_hex(chars[i + 1]);
+            let h2: i32 = css_like_hex(chars[i + 2]);
+            if h1 >= 0 and h2 >= 0 {
+                push(out, h1 * 16 + h2);
+                i = i + 3;
+            } else {
+                push(out, c);
+                i = i + 1;
+            };
+        } else {
+            push(out, c);
+            i = i + 1;
+        };
+    };
+    str_from_chars(out)
+}
+
+fn! css_like_hex(c: i32) -> i32 {
+    if c >= 48 and c <= 57 { return c - 48; };
+    if c >= 65 and c <= 70 { return c - 55; };
+    if c >= 97 and c <= 102 { return c - 87; };
+    -1
+}
+
+// Unwrap search-engine tracking/redirect URLs that hide the real
+// destination behind a query parameter.  Currently handles DuckDuckGo
+// result links such as "//duckduckgo.com/l/?uddg=<encoded>&rut=...".
+// Returns the original href untouched when no rewrite applies.
+fn! url_unwrap_tracking(href: str) -> str {
+    // Strip leading protocol-relative "//" or explicit scheme
+    let stripped: str =
+        if str_starts_with(href, "//") { str_slice(href, 2, str_len(href)) }
+        else if str_starts_with(href, "https://") { str_slice(href, 8, str_len(href)) }
+        else if str_starts_with(href, "http://") { str_slice(href, 7, str_len(href)) }
+        else if str_starts_with(href, "/") { str_slice(href, 1, str_len(href)) }
+        else { href };
+
+    // DuckDuckGo redirect: (duckduckgo.com)?/l/?uddg=<encoded-target>
+    // Detect by the "uddg=" query parameter rather than a specific path
+    // prefix, to cover "//duckduckgo.com/l/?uddg=...", "https://...",
+    // and bare "/l/?uddg=..." forms uniformly.
+    let marker: i32 = str_find(stripped, "uddg=");
+    if marker >= 0 {
+        let after: str = str_slice(stripped, marker + 5, str_len(stripped));
+        // Cut at the first '&' (other params like &rut=...)
+        let amp: i32 = str_find(after, "&");
+        let encoded: str = if amp >= 0 { str_slice(after, 0, amp) } else { after };
+        let decoded: str = url_decode(encoded);
+        if str_len(decoded) > 0 and str_contains(decoded, "://") {
+            return decoded;
+        };
+    };
+
+    href
+}
+
 // Heuristic for distinguishing a URL from an omnibox search query.
 // Returns true when `s` should be treated as a URL (and fetched
 // directly), false when it should be fed to a search engine.
