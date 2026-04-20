@@ -642,9 +642,11 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     let entry_line_h: i32 = effective_line_h(styles, idx, scale);
 
-    if is_block and x_ptr[0] > eff_indent + PAD {
+    if is_block {
+        if x_ptr[0] > eff_indent + PAD {
+            y_ptr[0] = y_ptr[0] + entry_line_h;
+        };
         x_ptr[0] = eff_indent + PAD;
-        y_ptr[0] = y_ptr[0] + entry_line_h;
     };
     if is_block and pad_top_px > 0 {
         y_ptr[0] = y_ptr[0] + pad_top_px;
@@ -2126,6 +2128,13 @@ fn! main() {
                 // subtree; otherwise render the full tree with reader_on set
                 // so nav/header/footer/aside are hidden.
                 let mut render_root: i32 = dom_root;
+                // Remember whether we mutated dom_styles[render_root] for
+                // reader mode, so we can restore it after rendering (otherwise
+                // toggling reader off leaves the page permanently narrowed).
+                let mut reader_override: bool = false;
+                let mut reader_prev_mwpx: i32 = -1;
+                let mut reader_prev_mwpct: i32 = -1;
+                let mut reader_prev_center: i32 = -1;
                 if reader_on {
                     let main_idx: i32 = find_main_content_idx(dom_nodes, dom_root);
                     if main_idx >= 0 { render_root = main_idx; };
@@ -2138,8 +2147,12 @@ fn! main() {
                     if render_root >= 0 and render_root < len(dom_styles) {
                         if dom_styles[render_root].max_width_px < 0
                            and dom_styles[render_root].max_width_pct < 0 {
+                            reader_prev_mwpx = dom_styles[render_root].max_width_px;
+                            reader_prev_mwpct = dom_styles[render_root].max_width_pct;
+                            reader_prev_center = dom_styles[render_root].center_block;
                             dom_styles[render_root].max_width_px = 880 * body_scale;
                             dom_styles[render_root].center_block = 1;
+                            reader_override = true;
                         };
                     };
                 };
@@ -2154,6 +2167,13 @@ fn! main() {
                             false, false, -1, [0], page_clickables,
                             dom_styles,
                             reader_on, pending_fragment, fragment_y_out);
+                // Restore original ComputedStyle fields so toggling reader
+                // mode off cleanly reverts the narrowing.
+                if reader_override {
+                    dom_styles[render_root].max_width_px = reader_prev_mwpx;
+                    dom_styles[render_root].max_width_pct = reader_prev_mwpct;
+                    dom_styles[render_root].center_block = reader_prev_center;
+                };
                 doc_height = y_ptr[0];
                 max_scroll = max_i32(doc_height - (canvas_height() - CHROME_TOP - CHROME_BOT), 0);
 
