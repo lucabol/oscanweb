@@ -21,6 +21,40 @@ let LINE_H: i32 = 12;
 let PAD: i32 = 10;
 let MAX_REDIRECTS: i32 = 5;
 
+// ─── Font rendering helpers ─────────────────────────────
+// Font id constants (FONT_DEFAULT, FONT_PROPORTIONAL, ...) are defined in
+// libs/ui.osc and imported via `use "libs/ui.osc"` above.  All bundled fonts
+// share an 8×8 cell; scale is an integer multiplier applied uniformly.
+
+// Body text defaults.  Headings override scale; <pre>/<code>/<table> override
+// font back to FONT_DEFAULT.
+let BODY_FONT: i32 = FONT_PROPORTIONAL;
+
+fn line_h_of(scale: i32) -> i32 { 8 * scale + 4 }
+fn glyph_h_of(scale: i32) -> i32 { 8 * scale }
+fn text_width_f(s: str, font: i32, scale: i32) -> i32 { gfx_text_width(s, font) * scale }
+
+// Heading scale lookup.  h1 biggest, h2/h3 medium, h4..h6 use color/bold only.
+fn heading_scale(tag: str) -> i32 {
+    if str_eq(tag, "h1") { 3 }
+    else if str_eq(tag, "h2") { 2 }
+    else if str_eq(tag, "h3") { 2 }
+    else { 1 }
+}
+
+fn is_mono_tag(tag: str) -> bool {
+    str_eq(tag, "pre") or str_eq(tag, "code") or str_eq(tag, "kbd") or
+    str_eq(tag, "samp") or str_eq(tag, "tt") or str_eq(tag, "var")
+}
+
+fn! draw_text_f(x: i32, y: i32, s: str, color: i32, font: i32, scale: i32) -> i32 {
+    if scale <= 1 {
+        gfx_draw_text(x, y, s, color, font)
+    } else {
+        gfx_draw_text_scaled(x, y, s, color, scale, scale, font)
+    }
+}
+
 // Colors
 let BG_COLOR: i32 = 30 * 65536 + 30 * 256 + 34;
 let FG_COLOR: i32 = 220 * 65536 + 220 * 256 + 220;
@@ -264,11 +298,18 @@ fn html_is_skip_tag(tag: str) -> bool {
 // ─── Text rendering with word-wrap ──────────────────────
 
 fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
+                font: i32, scale: i32,
                 vp_top: i32, vp_width: i32, underline: bool,
                 links: [LinkInfo], href: str, search_q: str,
                 word_map: [WordInfo], strikethrough: bool, mark_bg: i32) {
     let words: [str] = str_split(text, " ");
     let max_x: i32 = vp_width - PAD;
+    let lh: i32 = line_h_of(scale);
+    let gh: i32 = glyph_h_of(scale);
+    // Word gap: measured space width in current font, with a minimum so
+    // proportional rendering doesn't collapse word boundaries.
+    let raw_gap: i32 = text_width_f(" ", font, scale);
+    let gap: i32 = if raw_gap < 3 * scale { 3 * scale } else { raw_gap };
 
     // Track link bounding box (first word position + accumulated width)
     let mut link_x: i32 = x_ptr[0];
@@ -280,16 +321,16 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
         let word: str = words[word_idx];
         if str_len(word) == 0 { continue; };
 
-        let word_w: i32 = str_len(word) * FONT_W;
+        let word_w: i32 = text_width_f(word, font, scale);
 
         // Word wrap
         if x_ptr[0] + word_w > max_x and x_ptr[0] > PAD {
             // If we wrapped to a new line, emit link for the previous line segment
             if str_len(href) > 0 and link_w > 0 and not link_recorded {
                 let draw_y_check: i32 = link_y;
-                if draw_y_check + FONT_H >= CHROME_TOP and draw_y_check < WIN_H - CHROME_BOT {
+                if draw_y_check + gh >= CHROME_TOP and draw_y_check < WIN_H - CHROME_BOT {
                     let li: LinkInfo = LinkInfo {
-                        x: link_x, y: link_y, w: link_w, h: LINE_H,
+                        x: link_x, y: link_y, w: link_w, h: lh,
                         href: href, label: "",
                     };
                     push(links, li);
@@ -297,28 +338,28 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 };
             };
             x_ptr[0] = PAD;
-            y_ptr[0] = y_ptr[0] + LINE_H;
+            y_ptr[0] = y_ptr[0] + lh;
         };
 
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
 
-        if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+        if draw_y + gh >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
             // Mark background highlight
             if mark_bg >= 0 {
-                gfx_fill_rect(x_ptr[0], draw_y, word_w, LINE_H, mark_bg);
+                gfx_fill_rect(x_ptr[0], draw_y, word_w, lh, mark_bg);
             };
             // Highlight search matches in this word
             if str_len(search_q) > 0 and str_contains(str_to_lower(word), search_q) {
-                gfx_fill_rect(x_ptr[0], draw_y, word_w, LINE_H, SEARCH_HL);
-                gfx_draw_text(x_ptr[0], draw_y, word, HINT_FG);
+                gfx_fill_rect(x_ptr[0], draw_y, word_w, lh, SEARCH_HL);
+                draw_text_f(x_ptr[0], draw_y, word, HINT_FG, font, scale);
             } else {
-                gfx_draw_text(x_ptr[0], draw_y, word, color);
+                draw_text_f(x_ptr[0], draw_y, word, color, font, scale);
             };
             if underline {
-                gfx_line(x_ptr[0], draw_y + FONT_H + 1, x_ptr[0] + word_w, draw_y + FONT_H + 1, color);
+                gfx_line(x_ptr[0], draw_y + gh + 1, x_ptr[0] + word_w, draw_y + gh + 1, color);
             };
             if strikethrough {
-                gfx_line(x_ptr[0], draw_y + FONT_H / 2, x_ptr[0] + word_w, draw_y + FONT_H / 2, color);
+                gfx_line(x_ptr[0], draw_y + gh / 2, x_ptr[0] + word_w, draw_y + gh / 2, color);
             };
             // Record word position for text selection
             let wi: WordInfo = WordInfo { x: x_ptr[0], y: draw_y, w: word_w, text: word };
@@ -330,14 +371,14 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
             link_w = (x_ptr[0] + word_w) - link_x;
         };
 
-        x_ptr[0] = x_ptr[0] + word_w + FONT_W;
+        x_ptr[0] = x_ptr[0] + word_w + gap;
     };
 
     // Emit single LinkInfo for the entire link text
     if str_len(href) > 0 and not link_recorded {
-        if link_y + FONT_H >= CHROME_TOP and link_y < WIN_H - CHROME_BOT {
+        if link_y + gh >= CHROME_TOP and link_y < WIN_H - CHROME_BOT {
             let li: LinkInfo = LinkInfo {
-                x: link_x, y: link_y, w: link_w, h: LINE_H,
+                x: link_x, y: link_y, w: link_w, h: lh,
                 href: href, label: "",
             };
             push(links, li);
@@ -349,7 +390,8 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
 
 fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 vp_top: i32, vp_width: i32, links: [LinkInfo],
-                color: i32, is_link: bool, link_href: str,
+                color: i32, font: i32, scale: i32,
+                is_link: bool, link_href: str,
                 indent: i32, in_pre: bool,
                 img_cache_idx: map, img_cache_data: [[i32]],
                 img_cache_w: [i32], img_cache_h: [i32],
@@ -370,13 +412,13 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
                 if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
                     gfx_fill_rect(PAD, draw_y, vp_width - PAD * 2, LINE_H, PRE_BG);
-                    gfx_draw_text(x_ptr[0], draw_y, lines[li], CODE_FG);
+                    gfx_draw_text(x_ptr[0], draw_y, lines[li], CODE_FG, FONT_DEFAULT);
                 };
                 y_ptr[0] = y_ptr[0] + LINE_H;
                 x_ptr[0] = indent + PAD;
             };
         } else {
-            render_text(text, x_ptr, y_ptr, color, vp_top, vp_width,
+            render_text(text, x_ptr, y_ptr, color, font, scale, vp_top, vp_width,
                         is_link or force_underline, links, link_href, search_q, word_map,
                         strikethrough, mark_bg);
         };
@@ -501,9 +543,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
-            gfx_draw_text(x_ptr[0], draw_y, display, HR_COLOR);
+            draw_text_f(x_ptr[0], draw_y, display, HR_COLOR, font, scale);
         };
-        x_ptr[0] = x_ptr[0] + str_len(display) * FONT_W + FONT_W;
+        x_ptr[0] = x_ptr[0] + text_width_f(display, font, scale) + text_width_f(" ", font, scale);
         return;
     };
 
@@ -585,7 +627,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                                         disp_text = str_concat(str_slice(cell_text, 0, max_chars - 2), "..");
                                     };
                                     let cell_color: i32 = if str_eq(cell_tag, "th") { BOLD_COLOR } else { color };
-                                    gfx_draw_text(cell_x, cell_y, disp_text, cell_color);
+                                    gfx_draw_text(cell_x, cell_y, disp_text, cell_color, FONT_DEFAULT);
                                 };
                                 ci = ci + 1;
                             };
@@ -620,7 +662,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                                 dt = str_concat(str_slice(ct, 0, mc - 2), "..");
                             };
                             let cc: i32 = if str_eq(cw_tag, "th") { BOLD_COLOR } else { color };
-                            gfx_draw_text(cx, cy, dt, cc);
+                            gfx_draw_text(cx, cy, dt, cc, FONT_DEFAULT);
                         };
                         ci2 = ci2 + 1;
                     };
@@ -651,6 +693,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     // Determine child properties
     let mut child_color: i32 = color;
+    let mut child_font: i32 = font;
+    let mut child_scale: i32 = scale;
     let mut child_link: bool = is_link;
     let mut child_href: str = link_href;
     let mut child_indent: i32 = indent;
@@ -660,10 +704,11 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     let mut child_markbg: i32 = mark_bg;
     let mut child_ol: [i32] = ol_counter;
 
-    if str_eq(tag, "h1") { child_color = H1_COLOR; }
-    else if str_eq(tag, "h2") { child_color = H2_COLOR; }
+    if str_eq(tag, "h1") { child_color = H1_COLOR; child_scale = heading_scale(tag); }
+    else if str_eq(tag, "h2") { child_color = H2_COLOR; child_scale = heading_scale(tag); }
     else if str_eq(tag, "h3") or str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
         child_color = H3_COLOR;
+        child_scale = heading_scale(tag);
     }
     else if str_eq(tag, "b") or str_eq(tag, "strong") { child_color = BOLD_COLOR; }
     else if str_eq(tag, "em") or str_eq(tag, "i") or str_eq(tag, "cite") { child_color = EM_COLOR; }
@@ -673,7 +718,10 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         child_href = html_get_attr(node, "href");
     }
     else if str_eq(tag, "pre") or str_eq(tag, "code") {
-        child_color = CODE_FG; child_pre = true;
+        child_color = CODE_FG; child_pre = true; child_font = FONT_DEFAULT; child_scale = 1;
+    }
+    else if is_mono_tag(tag) {
+        child_color = CODE_FG; child_font = FONT_DEFAULT;
     }
     else if str_eq(tag, "ul") {
         child_indent = indent + 20;
@@ -723,16 +771,16 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         if ol_counter[0] > 0 {
             let num_str: str = i32_to_str(ol_counter[0]);
             let li_label: str = str_concat(num_str, ". ");
-            if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
-                gfx_draw_text(x_ptr[0], draw_y, li_label, child_color);
+            if draw_y + glyph_h_of(child_scale) >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                draw_text_f(x_ptr[0], draw_y, li_label, child_color, child_font, child_scale);
             };
-            x_ptr[0] = x_ptr[0] + str_len(li_label) * FONT_W;
+            x_ptr[0] = x_ptr[0] + text_width_f(li_label, child_font, child_scale);
             ol_counter[0] = ol_counter[0] + 1;
         } else {
-            if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
-                gfx_draw_text(x_ptr[0], draw_y, "* ", child_color);
+            if draw_y + glyph_h_of(child_scale) >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                draw_text_f(x_ptr[0], draw_y, "* ", child_color, child_font, child_scale);
             };
-            x_ptr[0] = x_ptr[0] + 2 * FONT_W;
+            x_ptr[0] = x_ptr[0] + text_width_f("* ", child_font, child_scale);
         };
     };
 
@@ -744,7 +792,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     let mut child: i32 = node.first_child;
     while child != -1 {
         render_node(nodes, child, x_ptr, y_ptr, vp_top, vp_width,
-                    links, child_color, child_link, child_href,
+                    links, child_color, child_font, child_scale,
+                    child_link, child_href,
                     child_indent, child_pre,
                     img_cache_idx, img_cache_data,
                     img_cache_w, img_cache_h,
@@ -1088,10 +1137,10 @@ fn! main() {
                 // the app as "Not Responding".
                 canvas_clear(BG_COLOR);
                 gfx_fill_rect(0, 0, WIN_W, CHROME_TOP - 4, STATUS_BG);
-                gfx_draw_text(8, 10, "Loading: {nav_url}", FG_COLOR);
+                gfx_draw_text(8, 10, "Loading: {nav_url}", FG_COLOR, FONT_DEFAULT);
                 let sty0: i32 = WIN_H - CHROME_BOT;
                 gfx_fill_rect(0, sty0, WIN_W, CHROME_BOT, STATUS_BG);
-                gfx_draw_text(4, sty0 + 6, " LOADING | {nav_url}", FG_COLOR);
+                gfx_draw_text(4, sty0 + 6, " LOADING | {nav_url}", FG_COLOR, FONT_DEFAULT);
                 canvas_flush();
 
                 let u: Url = url_parse(nav_url);
@@ -1599,7 +1648,7 @@ fn! main() {
                 while len(word_map) > 0 { pop(word_map); };
                 render_node(dom_nodes, dom_root, x_ptr, y_ptr,
                             scroll_y, WIN_W, page_links,
-                            FG_COLOR, false, "", 0, false,
+                            FG_COLOR, BODY_FONT, 1, false, "", 0, false,
                             img_cache_idx, img_cache_data,
                             img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
@@ -1623,44 +1672,44 @@ fn! main() {
                         // Check if word center is inside selection rectangle
                         if wcx >= sx0 and wcx <= sx1 and wcy >= sy0 and wcy <= sy1 {
                             gfx_fill_rect(hw.x, hw.y, hw.w, LINE_H, SEL_COLOR);
-                            gfx_draw_text(hw.x, hw.y, hw.text, HINT_FG);
+                            gfx_draw_text(hw.x, hw.y, hw.text, HINT_FG, FONT_DEFAULT);
                         };
                     };
                 };
             } else if str_len(error_msg) > 0 {
-                gfx_draw_text(PAD, CHROME_TOP + PAD, "Error loading page:", H1_COLOR);
-                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 2, error_msg, FG_COLOR);
-                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 4, "Press 'o' to enter a new URL", HR_COLOR);
+                gfx_draw_text(PAD, CHROME_TOP + PAD, "Error loading page:", H1_COLOR, FONT_DEFAULT);
+                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 2, error_msg, FG_COLOR, FONT_DEFAULT);
+                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 4, "Press 'o' to enter a new URL", HR_COLOR, FONT_DEFAULT);
             } else {
                 // ASCII art logo
                 let ax: i32 = PAD + 100;
                 let mut ay: i32 = CHROME_TOP + 60;
-                gfx_draw_text(ax, ay, "  ___            __      __   _", H1_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, " / _ \\ ___ ___  \\ \\    / /__| |__", H1_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "| (_) (_-</ __|  \\ \\/\\/ / -_) '_ \\", H1_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, " \\___//__/\\___|   \\_/\\_/\\___|_.__/", H1_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "  ___            __      __   _", H1_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, " / _ \\ ___ ___  \\ \\    / /__| |__", H1_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "| (_) (_-</ __|  \\ \\/\\/ / -_) '_ \\", H1_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, " \\___//__/\\___|   \\_/\\_/\\___|_.__/", H1_COLOR, FONT_DEFAULT); ay += LINE_H;
                 ay += LINE_H;
-                gfx_draw_text(ax, ay, "A minimal Vim-powered browser written in Oscan", FG_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "A minimal Vim-powered browser written in Oscan", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
                 ay += LINE_H * 2;
-                gfx_draw_text(ax, ay, "Press 'o' to open a URL", LINK_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Press '?' for keyboard shortcuts", LINK_COLOR); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Press 'o' to open a URL", LINK_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Press '?' for keyboard shortcuts", LINK_COLOR, FONT_DEFAULT); ay += LINE_H;
                 ay += LINE_H * 2;
-                gfx_draw_text(ax, ay, "Keyboard shortcuts:", H2_COLOR); ay += LINE_H + 4;
-                gfx_draw_text(ax, ay, "j/k       Scroll down/up", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "d/u       Half page down/up", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Space     Full page down", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "gg / G    Top / bottom of page", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "f         Follow link (hint mode)", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "o         Open URL", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "p         Paste URL and go", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "yy        Copy URL to clipboard", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Ctrl+V    Paste in URL bar", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Ctrl+C    Copy URL", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "H / L     Back / forward", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "/         Search in page", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "r         Reload", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Q         Quit browser", FG_COLOR); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Esc       Normal mode", FG_COLOR);
+                gfx_draw_text(ax, ay, "Keyboard shortcuts:", H2_COLOR, FONT_DEFAULT); ay += LINE_H + 4;
+                gfx_draw_text(ax, ay, "j/k       Scroll down/up", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "d/u       Half page down/up", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Space     Full page down", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "gg / G    Top / bottom of page", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "f         Follow link (hint mode)", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "o         Open URL", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "p         Paste URL and go", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "yy        Copy URL to clipboard", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Ctrl+V    Paste in URL bar", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Ctrl+C    Copy URL", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "H / L     Back / forward", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "/         Search in page", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "r         Reload", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Q         Quit browser", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Esc       Normal mode", FG_COLOR, FONT_DEFAULT);
             };
 
             // Follow mode hints
@@ -1671,7 +1720,7 @@ fn! main() {
                         if str_len(fl.label) > 0 {
                             let lw: i32 = str_len(fl.label) * FONT_W + 4;
                             gfx_fill_rect(fl.x - 2, fl.y - 1, lw, FONT_H + 2, HINT_BG);
-                            gfx_draw_text(fl.x, fl.y, fl.label, HINT_FG);
+                            gfx_draw_text(fl.x, fl.y, fl.label, HINT_FG, FONT_DEFAULT);
                         };
                     };
                 },
@@ -1687,9 +1736,9 @@ fn! main() {
                 let sy: i32 = WIN_H - CHROME_BOT - 24;
                 gfx_fill_rect(0, sy, WIN_W, 24, STATUS_BG);
                 gfx_rect(0, sy, WIN_W, 1, UI_BORDER);
-                gfx_draw_text(4, sy + 8, "/", FG_COLOR);
+                gfx_draw_text(4, sy + 8, "/", FG_COLOR, FONT_DEFAULT);
                 let st: str = str_from_chars(search_buf);
-                gfx_draw_text(12, sy + 8, st, FG_COLOR);
+                gfx_draw_text(12, sy + 8, st, FG_COLOR, FONT_DEFAULT);
                 // Cursor
                 gfx_fill_rect(12 + len(search_buf) * FONT_W, sy + 8, 1, FONT_H, FG_COLOR);
             } else if search_active and str_len(search_query) > 0 {
@@ -1702,7 +1751,7 @@ fn! main() {
                     "/{search_query}  [no matches]"
                 };
                 gfx_fill_rect(0, sy, WIN_W, 16, STATUS_BG);
-                gfx_draw_text(4, sy + 4, match_info, SEARCH_HL);
+                gfx_draw_text(4, sy + 4, match_info, SEARCH_HL, FONT_DEFAULT);
             };
 
             // Help overlay
@@ -1711,25 +1760,25 @@ fn! main() {
                 let hy: i32 = 100;
                 gfx_fill_rect(hx, hy, 600, 350, STATUS_BG);
                 gfx_rect(hx, hy, 600, 350, UI_BORDER);
-                gfx_draw_text(hx + 10, hy + 10, "OscaWeb Keyboard Shortcuts", H1_COLOR);
+                gfx_draw_text(hx + 10, hy + 10, "OscaWeb Keyboard Shortcuts", H1_COLOR, FONT_DEFAULT);
                 let mut ky: i32 = hy + 30;
-                gfx_draw_text(hx + 10, ky, "j / k        Scroll down / up", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "d / u        Half page down / up", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "gg / G       Top / bottom", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "f            Follow link (hints)", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "r            Reload page", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "p            Paste URL and go", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "yy           Copy URL to clipboard", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Ctrl+V       Paste in URL bar", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Ctrl+C       Copy URL", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "H / L        Back / forward", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "/            Search in page", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Esc          Normal mode", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Q            Quit browser", FG_COLOR); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "?            Toggle this help", FG_COLOR); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "j / k        Scroll down / up", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "d / u        Half page down / up", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "gg / G       Top / bottom", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "f            Follow link (hints)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "r            Reload page", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "p            Paste URL and go", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "yy           Copy URL to clipboard", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Ctrl+V       Paste in URL bar", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Ctrl+C       Copy URL", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "H / L        Back / forward", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "/            Search in page", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Esc          Normal mode", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Q            Quit browser", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "?            Toggle this help", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Mouse click on links also works!", LINK_COLOR);
+                gfx_draw_text(hx + 10, ky, "Mouse click on links also works!", LINK_COLOR, FONT_DEFAULT);
             };
 
             // Status bar
@@ -1749,7 +1798,7 @@ fn! main() {
             };
             gfx_draw_text(4, sty + 6,
                 " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}",
-                FG_COLOR);
+                FG_COLOR, FONT_DEFAULT);
 
             prev_btn = canvas_mouse_btn();
                 render_dirty = false;
