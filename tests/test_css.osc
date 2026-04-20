@@ -315,5 +315,79 @@ fn! main() {
     assert_eq_i32(ks[1], 0, "second source is <style> (kind 0)");
     assert_true(str_contains(vs[1], "color: red"), "style text captured");
 
+    println("=== CSS Phase 3 — padding / max-width / line-height / margin-auto ===");
+    let mut np3: [HtmlNode] = [];
+    let np3_node: HtmlNode = html_node_element("div", map_new());
+    push(np3, np3_node);
+    np3[0].attrs = map_new();
+    map_set(np3[0].attrs, "style",
+        "padding: 10px 20px; max-width: 720px; line-height: 24px; margin: 0 auto");
+    let mut rp3: [CssRule] = [];
+    let mut sp3: [ComputedStyle] = [];
+    css_compute_all(np3, 0, rp3, sp3);
+    assert_eq_i32(sp3[0].pad_t, 10, "padding shorthand T=10");
+    assert_eq_i32(sp3[0].pad_r, 20, "padding shorthand R=20");
+    assert_eq_i32(sp3[0].pad_b, 10, "padding shorthand B=10");
+    assert_eq_i32(sp3[0].pad_l, 20, "padding shorthand L=20");
+    assert_eq_i32(sp3[0].max_width_px, 720, "max-width px");
+    assert_eq_i32(sp3[0].max_width_pct, -1, "max-width px has no pct");
+    assert_eq_i32(sp3[0].line_height_px, 24, "line-height 24px");
+    assert_eq_i32(sp3[0].center_block, 1, "margin:0 auto centers");
+
+    // max-width percent
+    let mut np3b: [HtmlNode] = [];
+    let np3b_node: HtmlNode = html_node_element("div", map_new());
+    push(np3b, np3b_node);
+    np3b[0].attrs = map_new();
+    map_set(np3b[0].attrs, "style", "max-width: 50%");
+    let mut rp3b: [CssRule] = [];
+    let mut sp3b: [ComputedStyle] = [];
+    css_compute_all(np3b, 0, rp3b, sp3b);
+    assert_eq_i32(sp3b[0].max_width_pct, 50, "max-width 50%");
+
+    // line-height unitless -> multiplier of base (CSS_BASE_LINE_H=12)
+    let mut np3c: [HtmlNode] = [];
+    let np3c_node: HtmlNode = html_node_element("div", map_new());
+    push(np3c, np3c_node);
+    np3c[0].attrs = map_new();
+    map_set(np3c[0].attrs, "style", "line-height: 1.5");
+    let mut rp3c: [CssRule] = [];
+    let mut sp3c: [ComputedStyle] = [];
+    css_compute_all(np3c, 0, rp3c, sp3c);
+    assert_eq_i32(sp3c[0].line_height_px, 18, "line-height 1.5 -> 18");
+
+    // line-height inherits; padding/max-width/center do NOT.
+    let mut dom_in: [HtmlNode] = [];
+    let r_in: i32 = html_parse(dom_in,
+        "<body style=\"line-height: 24px; padding: 10px; max-width: 500px; margin: 0 auto\"><p>x</p></body>");
+    let mut rules_in: [CssRule] = [];
+    let mut styles_in: [ComputedStyle] = [];
+    css_compute_all(dom_in, r_in, rules_in, styles_in);
+    let mut p_in: i32 = -1;
+    for ii in 0..len(dom_in) {
+        if not dom_in[ii].is_text and str_eq(dom_in[ii].tag, "p") { p_in = ii; };
+    };
+    assert_true(p_in >= 0, "found <p> child");
+    assert_eq_i32(styles_in[p_in].line_height_px, 24, "line-height inherits to child");
+    assert_eq_i32(styles_in[p_in].pad_t, -1, "padding does NOT inherit");
+    assert_eq_i32(styles_in[p_in].max_width_px, -1, "max-width does NOT inherit");
+    assert_eq_i32(styles_in[p_in].center_block, -1, "center does NOT inherit");
+
+    println("=== CSS Phase 3 — @media (prefers-color-scheme) ===");
+    // Dark media applies (OscaWeb is always-dark); light media is skipped.
+    let mut dom_m: [HtmlNode] = [];
+    let r_m: i32 = html_parse(dom_m, "<h1>hi</h1>");
+    let mut rules_m: [CssRule] = [];
+    let _om: i32 = css_parse(rules_m,
+        "@media (prefers-color-scheme: dark) {{ h1 {{ color: #ff0000; }} }}\n@media (prefers-color-scheme: light) {{ h1 {{ color: #00ff00; }} }}", 0);
+    let mut styles_m: [ComputedStyle] = [];
+    css_compute_all(dom_m, r_m, rules_m, styles_m);
+    let mut h1_i: i32 = -1;
+    for mi in 0..len(dom_m) {
+        if not dom_m[mi].is_text and str_eq(dom_m[mi].tag, "h1") { h1_i = mi; };
+    };
+    assert_true(h1_i >= 0, "found <h1>");
+    assert_eq_i32(styles_m[h1_i].color, css_parse_color("#ff0000"), "dark media applied");
+
     println("=== CSS Done ===");
 }

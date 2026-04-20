@@ -122,6 +122,45 @@ external stylesheet.</p>
 background.</span></p>
 
 <hr>
+<h2>10. Phase 3 — Padding</h2>
+<section style="padding: 20px; background-color: #222">
+  <p>This section has <code>padding: 20px</code>. The paragraph text should be
+  inset on all four sides and there should be visible space between the dark
+  background edge and the text.</p>
+</section>
+
+<h2>11. Phase 3 — max-width + margin:0 auto</h2>
+<article style="max-width: 480px; margin: 0 auto; background-color: #203040">
+  <p>This article has <code>max-width: 480px; margin: 0 auto</code>. It should
+  be horizontally centered and no wider than ~480 logical pixels, even on
+  a wide window.</p>
+</article>
+
+<h2>12. Phase 3 — line-height</h2>
+<p style="line-height: 1.0">This paragraph has <code>line-height: 1.0</code>
+and should feel tight. Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+<p style="line-height: 2.0">This paragraph has <code>line-height: 2.0</code>
+and should feel airy. Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+
+<h2>13. Phase 3 — content-aware table with wrapping</h2>
+<table border="1">
+  <tr><th>Short</th><th>Long description column that should get more width</th><th>Num</th></tr>
+  <tr><td>A</td><td>This cell contains a longer sentence that is expected to wrap onto multiple lines when the table column is narrow.</td><td>1</td></tr>
+  <tr><td>BB</td><td>Another medium-length string.</td><td>22</td></tr>
+  <tr><td>CCC</td><td>Tiny.</td><td>333</td></tr>
+</table>
+
+<h2>14. Phase 3 — @media (prefers-color-scheme)</h2>
+<style>
+  @media (prefers-color-scheme: dark)  { .ph3-media { color: #66ffcc; font-weight: bold; } }
+  @media (prefers-color-scheme: light) { .ph3-media { color: red; } }
+</style>
+<p>The next line should be teal/bold (dark media applies; light media is skipped):</p>
+<p class="ph3-media">I am styled only by the dark @media block.</p>
+
+<hr>
 <p class="muted">End of CSS test page.</p>
 
 </body>

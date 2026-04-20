@@ -30,6 +30,16 @@ let MAX_REDIRECTS: i32 = 5;
 let BODY_FONT: i32 = FONT_PROPORTIONAL;
 
 fn line_h_of(scale: i32) -> i32 { 8 * scale + 4 }
+
+// CSS line-height override helper: prefer computed style if set,
+// otherwise the scale-derived default.  Kept here so callers stay simple.
+fn effective_line_h(styles: [ComputedStyle], idx: i32, scale: i32) -> i32 {
+    if idx >= 0 and idx < len(styles) and styles[idx].line_height_px > 0 {
+        styles[idx].line_height_px
+    } else {
+        line_h_of(scale)
+    }
+}
 fn glyph_h_of(scale: i32) -> i32 { 8 * scale }
 fn text_width_f(s: str, font: i32, scale: i32) -> i32 { gfx_text_width(s, font) * scale }
 
@@ -436,6 +446,95 @@ fn! measure_inline_text(nodes: [HtmlNode], idx: i32, styles: [ComputedStyle],
     };
 }
 
+// ─── Table helpers (Phase 3) ────────────────────────────
+
+// Normalize HTML whitespace (\n \r \t all collapse to one space, runs of
+// spaces compact to one).  Used for table cell measurement and wrapping.
+fn! normalize_ws(text: str) -> str {
+    let chars: [i32] = str_to_chars(text);
+    let n: i32 = len(chars);
+    let mut out: [i32] = [];
+    let mut last_ws: bool = true;  // leading whitespace trimmed
+    for i in 0..n {
+        let c: i32 = chars[i];
+        let is_ws: bool = c == 32 or c == 9 or c == 10 or c == 13;
+        if is_ws {
+            if not last_ws { push(out, 32); };
+            last_ws = true;
+        } else {
+            push(out, c);
+            last_ws = false;
+        };
+    };
+    // trim trailing space
+    while len(out) > 0 and out[len(out) - 1] == 32 { pop(out); };
+    str_from_chars(out)
+}
+
+// Flatten a <table>'s children (handling tbody/thead/tfoot wrappers) into
+// a flat list of <tr> node indices in document order.
+fn! collect_tr_indices(nodes: [HtmlNode], table_node: HtmlNode) -> [i32] {
+    let mut out: [i32] = [];
+    let mut n: i32 = table_node.first_child;
+    while n != -1 {
+        let t: str = nodes[n].tag;
+        if str_eq(t, "tr") {
+            push(out, n);
+        } else if str_eq(t, "tbody") or str_eq(t, "thead") or str_eq(t, "tfoot") {
+            let mut m: i32 = nodes[n].first_child;
+            while m != -1 {
+                if str_eq(nodes[m].tag, "tr") { push(out, m); };
+                m = nodes[m].next_sibling;
+            };
+        };
+        n = nodes[n].next_sibling;
+    };
+    out
+}
+
+// Collect cell (<td>/<th>) indices for one <tr>.
+fn! collect_cell_indices(nodes: [HtmlNode], tr_node: HtmlNode) -> [i32] {
+    let mut out: [i32] = [];
+    let mut n: i32 = tr_node.first_child;
+    while n != -1 {
+        let t: str = nodes[n].tag;
+        if str_eq(t, "td") or str_eq(t, "th") { push(out, n); };
+        n = nodes[n].next_sibling;
+    };
+    out
+}
+
+// Greedy word-wrap `text` into lines that each fit within max_px at the
+// given font/scale.  Returns at least one (possibly empty) line.
+fn! wrap_text_to_lines(text: str, max_px: i32, font: i32, scale: i32) -> [str] {
+    let flat: str = normalize_ws(text);
+    let mut lines: [str] = [];
+    if str_len(flat) == 0 { push(lines, ""); return lines; };
+    let words: [str] = str_split(flat, " ");
+    let space_w: i32 = text_width_f(" ", font, scale);
+    let mut cur: str = "";
+    let mut cur_w: i32 = 0;
+    for wi in 0..len(words) {
+        let w: str = words[wi];
+        if str_len(w) == 0 { continue; };
+        let ww: i32 = text_width_f(w, font, scale);
+        if str_len(cur) == 0 {
+            cur = w;
+            cur_w = ww;
+        } else if cur_w + space_w + ww <= max_px {
+            cur = str_concat(str_concat(cur, " "), w);
+            cur_w = cur_w + space_w + ww;
+        } else {
+            push(lines, cur);
+            cur = w;
+            cur_w = ww;
+        };
+    };
+    if str_len(cur) > 0 { push(lines, cur); };
+    if len(lines) == 0 { push(lines, ""); };
+    lines
+}
+
 // ─── Render a DOM node (flat-array tree) ────────────────
 
 fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
@@ -506,33 +605,74 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     if idx >= 0 and idx < len(styles) and styles[idx].display_none { return; };
 
     let is_block: bool = html_is_block_tag(tag);
-    if is_block and x_ptr[0] > indent + PAD {
-        x_ptr[0] = indent + PAD;
-        y_ptr[0] = y_ptr[0] + LINE_H;
+
+    // Phase 3: compute effective indent / viewport width and padding
+    // from the node's ComputedStyle.  For non-block elements these
+    // default to the inherited values (no effect).
+    let mut eff_indent: i32 = indent;
+    let mut eff_vp_width: i32 = vp_width;
+    let mut pad_top_px: i32 = 0;
+    let mut pad_bot_px: i32 = 0;
+    if is_block and idx >= 0 and idx < len(styles) {
+        let csp: ComputedStyle = styles[idx];
+        // Max-width: resolve px first, else percent of current vp_width.
+        let mut mw: i32 = -1;
+        if csp.max_width_px >= 0 {
+            mw = csp.max_width_px;
+        } else if csp.max_width_pct > 0 {
+            mw = (vp_width * csp.max_width_pct) / 100;
+        };
+        if mw > 0 {
+            let avail: i32 = vp_width - indent - PAD * 2;
+            if mw < avail {
+                let extra: i32 = if csp.center_block == 1 {
+                    (avail - mw) / 2
+                } else { 0 };
+                eff_indent = indent + extra;
+                eff_vp_width = eff_indent + PAD + mw + PAD;
+                if eff_vp_width > vp_width { eff_vp_width = vp_width; };
+            };
+        };
+        // Padding: shift left/right edges inward.
+        if csp.pad_l > 0 { eff_indent = eff_indent + csp.pad_l; };
+        if csp.pad_r > 0 { eff_vp_width = eff_vp_width - csp.pad_r; };
+        if csp.pad_t > 0 { pad_top_px = csp.pad_t; };
+        if csp.pad_b > 0 { pad_bot_px = csp.pad_b; };
+    };
+
+    let entry_line_h: i32 = effective_line_h(styles, idx, scale);
+
+    if is_block and x_ptr[0] > eff_indent + PAD {
+        x_ptr[0] = eff_indent + PAD;
+        y_ptr[0] = y_ptr[0] + entry_line_h;
+    };
+    if is_block and pad_top_px > 0 {
+        y_ptr[0] = y_ptr[0] + pad_top_px;
+        x_ptr[0] = eff_indent + PAD;
     };
 
     // Heading / paragraph pre-spacing
     if str_eq(tag, "h1") or str_eq(tag, "h2") or str_eq(tag, "h3") {
-        y_ptr[0] = y_ptr[0] + LINE_H;
+        y_ptr[0] = y_ptr[0] + entry_line_h;
     };
-    if str_eq(tag, "p") { y_ptr[0] = y_ptr[0] + LINE_H / 2; };
+    if str_eq(tag, "p") { y_ptr[0] = y_ptr[0] + entry_line_h / 2; };
 
     // HR
     if str_eq(tag, "hr") {
-        y_ptr[0] = y_ptr[0] + LINE_H / 2;
+        y_ptr[0] = y_ptr[0] + entry_line_h / 2;
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if draw_y >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-            gfx_line(PAD, draw_y, vp_width - PAD, draw_y, HR_COLOR);
+            gfx_line(PAD, draw_y, eff_vp_width - PAD, draw_y, HR_COLOR);
         };
-        y_ptr[0] = y_ptr[0] + LINE_H / 2;
-        x_ptr[0] = indent + PAD;
+        y_ptr[0] = y_ptr[0] + entry_line_h / 2;
+        x_ptr[0] = eff_indent + PAD;
         return;
     };
 
     // BR
     if str_eq(tag, "br") {
-        y_ptr[0] = y_ptr[0] + LINE_H;
-        x_ptr[0] = indent + PAD;
+        y_ptr[0] = y_ptr[0] + entry_line_h;
+        x_ptr[0] = eff_indent + PAD;
         return;
     };
 
@@ -624,143 +764,162 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     // TABLE — column-aligned rendering
     if str_eq(tag, "table") {
-        // Measure pass: count max columns across all rows
-        let mut max_cols: i32 = 0;
-        let mut tr_node: i32 = node.first_child;
-        while tr_node != -1 {
-            let tr_tag: str = nodes[tr_node].tag;
-            // Handle tbody/thead/tfoot wrappers
-            if str_eq(tr_tag, "tbody") or str_eq(tr_tag, "thead") or str_eq(tr_tag, "tfoot") {
-                let mut inner_tr: i32 = nodes[tr_node].first_child;
-                while inner_tr != -1 {
-                    if str_eq(nodes[inner_tr].tag, "tr") {
-                        let mut col_count: i32 = 0;
-                        let mut td_node: i32 = nodes[inner_tr].first_child;
-                        while td_node != -1 {
-                            let td_tag: str = nodes[td_node].tag;
-                            if str_eq(td_tag, "td") or str_eq(td_tag, "th") {
-                                col_count = col_count + 1;
-                            };
-                            td_node = nodes[td_node].next_sibling;
-                        };
-                        if col_count > max_cols { max_cols = col_count; };
-                    };
-                    inner_tr = nodes[inner_tr].next_sibling;
-                };
-            } else if str_eq(tr_tag, "tr") {
-                let mut col_count2: i32 = 0;
-                let mut td_node2: i32 = nodes[tr_node].first_child;
-                while td_node2 != -1 {
-                    let td_tag2: str = nodes[td_node2].tag;
-                    if str_eq(td_tag2, "td") or str_eq(td_tag2, "th") {
-                        col_count2 = col_count2 + 1;
-                    };
-                    td_node2 = nodes[td_node2].next_sibling;
-                };
-                if col_count2 > max_cols { max_cols = col_count2; };
-            };
-            tr_node = nodes[tr_node].next_sibling;
+        // Phase 3: two-pass content-based column sizing with word wrap.
+        let tr_idxs: [i32] = collect_tr_indices(nodes, node);
+        if len(tr_idxs) == 0 {
+            // Empty table — skip default block handling.
+            y_ptr[0] = y_ptr[0] + LINE_H;
+            x_ptr[0] = eff_indent + PAD;
+            return;
         };
 
+        // Per-row cell index lists; track max column count.
+        let mut rows_cells: [[i32]] = [];
+        let mut max_cols: i32 = 0;
+        for ri0 in 0..len(tr_idxs) {
+            let rcells: [i32] = collect_cell_indices(nodes, nodes[tr_idxs[ri0]]);
+            if len(rcells) > max_cols { max_cols = len(rcells); };
+            push(rows_cells, rcells);
+        };
         if max_cols == 0 { max_cols = 1; };
-        let avail_w: i32 = vp_width - indent - PAD * 2;
-        let col_w: i32 = avail_w / max_cols;
 
-        // Draw top border
+        let avail_w: i32 = eff_vp_width - eff_indent - PAD * 2;
+        // Cell padding (per cell, split left + right).
+        let cell_pad: i32 = 8;
+
+        // Pass 1: measure.  col_max = natural width of longest line of text;
+        // col_min = width of longest single word (ensures wrapping works).
+        let mut col_max: [i32] = [];
+        let mut col_min: [i32] = [];
+        for c0 in 0..max_cols { push(col_max, 0); push(col_min, 0); };
+        for ri1 in 0..len(rows_cells) {
+            let cells1: [i32] = rows_cells[ri1];
+            for ci1 in 0..len(cells1) {
+                let raw: str = html_get_text_content(nodes, cells1[ci1]);
+                let txt: str = normalize_ws(raw);
+                let w_nat: i32 = text_width_f(txt, FONT_DEFAULT, 1);
+                let ws: [str] = str_split(txt, " ");
+                let mut max_word_w: i32 = 0;
+                for wi in 0..len(ws) {
+                    let ww: i32 = text_width_f(ws[wi], FONT_DEFAULT, 1);
+                    if ww > max_word_w { max_word_w = ww; };
+                };
+                if w_nat > col_max[ci1] { col_max[ci1] = w_nat; };
+                if max_word_w > col_min[ci1] { col_min[ci1] = max_word_w; };
+            };
+        };
+
+        // Distribute avail_w across columns.
+        let mut col_w: [i32] = [];
+        for c1 in 0..max_cols { push(col_w, 0); };
+
+        let mut sum_max: i32 = 0;
+        let mut sum_min: i32 = 0;
+        for c2 in 0..max_cols {
+            sum_max = sum_max + col_max[c2] + cell_pad;
+            sum_min = sum_min + col_min[c2] + cell_pad;
+        };
+
+        if sum_max <= avail_w {
+            // Comfortable fit: natural widths, distribute leftover equally.
+            for c3 in 0..max_cols { col_w[c3] = col_max[c3] + cell_pad; };
+            let leftover: i32 = avail_w - sum_max;
+            if max_cols > 0 and leftover > 0 {
+                let bonus: i32 = leftover / max_cols;
+                for c4 in 0..max_cols { col_w[c4] = col_w[c4] + bonus; };
+                let rem: i32 = leftover - bonus * max_cols;
+                col_w[max_cols - 1] = col_w[max_cols - 1] + rem;
+            };
+        } else if sum_min <= avail_w and sum_max > sum_min {
+            // Squeeze between min and max proportionally.
+            let range_total: i32 = sum_max - sum_min;
+            let avail_range: i32 = avail_w - sum_min;
+            for c5 in 0..max_cols {
+                let col_range: i32 = col_max[c5] - col_min[c5];
+                let give: i32 = if range_total > 0 { (col_range * avail_range) / range_total } else { 0 };
+                col_w[c5] = col_min[c5] + cell_pad + give;
+            };
+            // Fix rounding so columns sum exactly to avail_w.
+            let mut got: i32 = 0;
+            for c6 in 0..max_cols { got = got + col_w[c6]; };
+            let delta: i32 = avail_w - got;
+            if max_cols > 0 { col_w[max_cols - 1] = col_w[max_cols - 1] + delta; };
+        } else {
+            // Too narrow even for minimum widths — fall back to equal split.
+            let eq: i32 = avail_w / max_cols;
+            for c7 in 0..max_cols { col_w[c7] = eq; };
+            if max_cols > 0 {
+                let rem2: i32 = avail_w - eq * max_cols;
+                col_w[max_cols - 1] = col_w[max_cols - 1] + rem2;
+            };
+        };
+
+        // Pre-compute column x-offsets.
+        let mut col_x: [i32] = [];
+        let mut acc: i32 = eff_indent + PAD;
+        for c8 in 0..max_cols {
+            push(col_x, acc);
+            acc = acc + col_w[c8];
+        };
+
+        // Draw top border.
         let tbl_top_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if tbl_top_y >= CHROME_TOP and tbl_top_y < canvas_height() - CHROME_BOT {
-            gfx_line(indent + PAD, tbl_top_y, indent + PAD + avail_w, tbl_top_y, TABLE_BORDER);
+            gfx_line(eff_indent + PAD, tbl_top_y, eff_indent + PAD + avail_w, tbl_top_y, TABLE_BORDER);
         };
         y_ptr[0] = y_ptr[0] + 2;
 
-        let mut is_first_row: bool = true;
+        // Pass 2: render each row with word-wrap; row height = max line count.
+        for ri2 in 0..len(rows_cells) {
+            let cells2: [i32] = rows_cells[ri2];
+            // First compute wrapped lines per cell + row max lines.
+            let mut max_lines: i32 = 1;
+            let mut row_any_th: bool = false;
+            for ci2 in 0..len(cells2) {
+                if str_eq(nodes[cells2[ci2]].tag, "th") { row_any_th = true; };
+            };
+            // Use nested arrays: cell_lines is [[str]].
+            let mut cell_lines: [[str]] = [];
+            for ci3 in 0..len(cells2) {
+                let raw2: str = html_get_text_content(nodes, cells2[ci3]);
+                let inner_w: i32 = col_w[ci3] - cell_pad;
+                let ln: [str] = wrap_text_to_lines(raw2, inner_w, FONT_DEFAULT, 1);
+                if len(ln) > max_lines { max_lines = len(ln); };
+                push(cell_lines, ln);
+            };
 
-        // Render pass: iterate rows and cells
-        let mut tr_walk: i32 = node.first_child;
-        while tr_walk != -1 {
-            let trw_tag: str = nodes[tr_walk].tag;
-            // Handle tbody/thead/tfoot wrappers
-            if str_eq(trw_tag, "tbody") or str_eq(trw_tag, "thead") or str_eq(trw_tag, "tfoot") {
-                let mut inner_row: i32 = nodes[tr_walk].first_child;
-                while inner_row != -1 {
-                    if str_eq(nodes[inner_row].tag, "tr") {
-                        let mut ci: i32 = 0;
-                        let mut cell_node: i32 = nodes[inner_row].first_child;
-                        while cell_node != -1 {
-                            let cell_tag: str = nodes[cell_node].tag;
-                            if str_eq(cell_tag, "td") or str_eq(cell_tag, "th") {
-                                let cell_x: i32 = indent + PAD + ci * col_w + 4;
-                                let cell_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                                if cell_y + FONT_H >= CHROME_TOP and cell_y < canvas_height() - CHROME_BOT {
-                                    let cell_text: str = html_get_text_content(nodes, cell_node);
-                                    // Truncate to fit column
-                                    let max_chars: i32 = (col_w - 8) / FONT_W;
-                                    let mut disp_text: str = cell_text;
-                                    if str_len(cell_text) > max_chars and max_chars > 3 {
-                                        disp_text = str_concat(str_slice(cell_text, 0, max_chars - 2), "..");
-                                    };
-                                    let cell_color: i32 = if str_eq(cell_tag, "th") { BOLD_COLOR } else { color };
-                                    gfx_draw_text(cell_x, cell_y, disp_text, cell_color, FONT_DEFAULT);
-                                };
-                                ci = ci + 1;
-                            };
-                            cell_node = nodes[cell_node].next_sibling;
-                        };
-                        y_ptr[0] = y_ptr[0] + LINE_H;
-                        // Draw separator after first row (header)
-                        if is_first_row {
-                            let sep_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                            if sep_y >= CHROME_TOP and sep_y < canvas_height() - CHROME_BOT {
-                                gfx_line(indent + PAD, sep_y, indent + PAD + avail_w, sep_y, TABLE_BORDER);
-                            };
-                            y_ptr[0] = y_ptr[0] + 2;
-                            is_first_row = false;
-                        };
+            // Draw each cell's lines.
+            for ci4 in 0..len(cells2) {
+                let cx: i32 = col_x[ci4] + 4;
+                let cell_tag: str = nodes[cells2[ci4]].tag;
+                let cc: i32 = if str_eq(cell_tag, "th") { BOLD_COLOR } else { color };
+                let lines: [str] = cell_lines[ci4];
+                for li in 0..len(lines) {
+                    let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP + li * LINE_H;
+                    if cy + FONT_H >= CHROME_TOP and cy < canvas_height() - CHROME_BOT {
+                        gfx_draw_text(cx, cy, lines[li], cc, FONT_DEFAULT);
                     };
-                    inner_row = nodes[inner_row].next_sibling;
-                };
-            } else if str_eq(trw_tag, "tr") {
-                let mut ci2: i32 = 0;
-                let mut cell_walk: i32 = nodes[tr_walk].first_child;
-                while cell_walk != -1 {
-                    let cw_tag: str = nodes[cell_walk].tag;
-                    if str_eq(cw_tag, "td") or str_eq(cw_tag, "th") {
-                        let cx: i32 = indent + PAD + ci2 * col_w + 4;
-                        let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                        if cy + FONT_H >= CHROME_TOP and cy < canvas_height() - CHROME_BOT {
-                            let ct: str = html_get_text_content(nodes, cell_walk);
-                            let mc: i32 = (col_w - 8) / FONT_W;
-                            let mut dt: str = ct;
-                            if str_len(ct) > mc and mc > 3 {
-                                dt = str_concat(str_slice(ct, 0, mc - 2), "..");
-                            };
-                            let cc: i32 = if str_eq(cw_tag, "th") { BOLD_COLOR } else { color };
-                            gfx_draw_text(cx, cy, dt, cc, FONT_DEFAULT);
-                        };
-                        ci2 = ci2 + 1;
-                    };
-                    cell_walk = nodes[cell_walk].next_sibling;
-                };
-                y_ptr[0] = y_ptr[0] + LINE_H;
-                if is_first_row {
-                    let sep_y2: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                    if sep_y2 >= CHROME_TOP and sep_y2 < canvas_height() - CHROME_BOT {
-                        gfx_line(indent + PAD, sep_y2, indent + PAD + avail_w, sep_y2, TABLE_BORDER);
-                    };
-                    y_ptr[0] = y_ptr[0] + 2;
-                    is_first_row = false;
                 };
             };
-            tr_walk = nodes[tr_walk].next_sibling;
+            y_ptr[0] = y_ptr[0] + LINE_H * max_lines;
+
+            // Header separator: draw after the first row if it's all/mostly <th>.
+            if ri2 == 0 and row_any_th {
+                let sep_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+                if sep_y >= CHROME_TOP and sep_y < canvas_height() - CHROME_BOT {
+                    gfx_line(eff_indent + PAD, sep_y, eff_indent + PAD + avail_w, sep_y, TABLE_BORDER);
+                };
+                y_ptr[0] = y_ptr[0] + 2;
+            };
         };
 
-        // Draw bottom border
+        // Draw bottom border.
         let tbl_bot_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if tbl_bot_y >= CHROME_TOP and tbl_bot_y < canvas_height() - CHROME_BOT {
-            gfx_line(indent + PAD, tbl_bot_y, indent + PAD + avail_w, tbl_bot_y, TABLE_BORDER);
+            gfx_line(eff_indent + PAD, tbl_bot_y, eff_indent + PAD + avail_w, tbl_bot_y, TABLE_BORDER);
         };
         y_ptr[0] = y_ptr[0] + LINE_H;
-        x_ptr[0] = indent + PAD;
+        x_ptr[0] = eff_indent + PAD;
         return;
     };
 
@@ -770,7 +929,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     let mut child_scale: i32 = scale;
     let mut child_link: bool = is_link;
     let mut child_href: str = link_href;
-    let mut child_indent: i32 = indent;
+    let mut child_indent: i32 = eff_indent;
     let mut child_pre: bool = in_pre;
     let mut child_strike: bool = strikethrough;
     let mut child_uline: bool = force_underline;
@@ -797,18 +956,18 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         child_color = CODE_FG; child_font = FONT_DEFAULT;
     }
     else if str_eq(tag, "ul") {
-        child_indent = indent + 20;
+        child_indent = eff_indent + 20;
         child_ol = [0];
     }
     else if str_eq(tag, "ol") {
-        child_indent = indent + 20;
+        child_indent = eff_indent + 20;
         child_ol = [1];
     }
     else if str_eq(tag, "blockquote") {
-        child_indent = indent + 30;
+        child_indent = eff_indent + 30;
         child_color = QUOTE_COLOR;
         // Draw left accent bar
-        let bar_x: i32 = indent + PAD + 10;
+        let bar_x: i32 = eff_indent + PAD + 10;
         let bar_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if bar_y >= CHROME_TOP and bar_y < canvas_height() - CHROME_BOT {
             gfx_line(bar_x, bar_y, bar_x, bar_y + LINE_H * 2, QUOTE_BAR);
@@ -818,8 +977,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     else if str_eq(tag, "u") or str_eq(tag, "ins") { child_uline = true; }
     else if str_eq(tag, "mark") { child_markbg = MARK_BG; }
     else if str_eq(tag, "dt") { child_color = DT_COLOR; }
-    else if str_eq(tag, "dd") { child_indent = indent + 30; }
-    else if str_eq(tag, "figure") { child_indent = indent + 20; }
+    else if str_eq(tag, "dd") { child_indent = eff_indent + 30; }
+    else if str_eq(tag, "figure") { child_indent = eff_indent + 20; }
     else if str_eq(tag, "figcaption") { child_color = FIGCAP_COLOR; };
 
     // CSS overrides from stylesheet cascade + inline style="..."
@@ -848,7 +1007,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     // List item: numbered or bulleted
     if str_eq(tag, "li") {
-        x_ptr[0] = indent + PAD;
+        x_ptr[0] = eff_indent + PAD;
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if ol_counter[0] > 0 {
             let num_str: str = i32_to_str(ol_counter[0]);
@@ -876,8 +1035,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             let w_ptr: [i32] = [0];
             measure_inline_text(nodes, idx, styles, child_font, child_scale, w_ptr);
             let measured: i32 = w_ptr[0];
-            let line_start: i32 = indent + PAD;
-            let line_end: i32 = vp_width - PAD;
+            let line_start: i32 = eff_indent + PAD;
+            let line_end: i32 = eff_vp_width - PAD;
             let avail: i32 = line_end - line_start;
             if measured > 0 and measured <= avail {
                 if ta == 1 {
@@ -896,7 +1055,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     // Render children via sibling walk
     let mut child: i32 = node.first_child;
     while child != -1 {
-        render_node(nodes, child, x_ptr, y_ptr, vp_top, vp_width,
+        render_node(nodes, child, x_ptr, y_ptr, vp_top, eff_vp_width,
                     links, child_color, child_font, child_scale,
                     child_link, child_href,
                     child_indent, child_pre,
@@ -918,21 +1077,24 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             onclick_h = LINE_H;
         };
         let cci: ClickInfo = ClickInfo {
-            x: indent + PAD, y: onclick_y_start,
-            w: vp_width - indent - PAD * 2,
+            x: eff_indent + PAD, y: onclick_y_start,
+            w: eff_vp_width - eff_indent - PAD * 2,
             h: onclick_h,
             node_idx: idx,
         };
         push(clickables, cci);
     };
 
-    // Block post-spacing
+    // Block post-spacing (includes CSS padding-bottom).
     if is_block {
-        x_ptr[0] = indent + PAD;
-        y_ptr[0] = y_ptr[0] + line_h_of(child_scale);
+        x_ptr[0] = eff_indent + PAD;
+        y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale);
+        if pad_bot_px > 0 {
+            y_ptr[0] = y_ptr[0] + pad_bot_px;
+        };
     };
-    if str_eq(tag, "h1") or str_eq(tag, "h2") { y_ptr[0] = y_ptr[0] + LINE_H / 2; };
-    if str_eq(tag, "p") { y_ptr[0] = y_ptr[0] + LINE_H / 2; };
+    if str_eq(tag, "h1") or str_eq(tag, "h2") { y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale) / 2; };
+    if str_eq(tag, "p") { y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale) / 2; };
 }
 
 // ─── Hint label generation ──────────────────────────────
