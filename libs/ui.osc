@@ -9,6 +9,17 @@
 // Mouse click detection uses prev_btn parameter to detect
 // button-down transitions (pressed this frame, not last frame).
 
+// ─── Font id constants ──────────────────────────────────
+// Mirror libs/fonts.osc from the Oscan distribution.  Defined here so both
+// libs/ui.osc and browser.osc can reference FONT_DEFAULT / FONT_PROPORTIONAL
+// via a single `use "libs/ui.osc"` import.  All bundled fonts share an 8x8
+// cell; FONT_PROPORTIONAL varies only the per-glyph advance.
+
+let FONT_DEFAULT: i32 = 0;      // ASCII 32..126, fixed 8-px advance
+let FONT_PROPORTIONAL: i32 = 1; // ASCII 32..126, per-glyph advance
+let FONT_LATIN1: i32 = 2;       // default + U+00A0..U+00FF
+let FONT_BOX: i32 = 3;          // default + box-drawing / arrow codepoints
+
 // ─── Theme Colors ────────────────────────────────────────
 // Computed as r * 65536 + g * 256 + b (same as rgb())
 
@@ -37,7 +48,7 @@ fn! ui_panel(x: i32, y: i32, w: i32, h: i32) {
 
 // Label: draws text in foreground color
 fn! ui_label(x: i32, y: i32, text: str) {
-    gfx_draw_text(x, y, text, UI_FG)
+    gfx_draw_text(x, y, text, UI_FG, FONT_DEFAULT);
 }
 
 // Separator: horizontal line in border color
@@ -63,11 +74,12 @@ fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32) -> bool
     gfx_fill_rect(x, y, w, h, bg);
     gfx_rect(x, y, w, h, if hover { UI_ACCENT } else { UI_BORDER });
 
-    // Center the label text (8px per char — matches 8x8 bitmap font)
-    let text_w: i32 = str_len(label) * 8;
+    // Center the label text (UI chrome stays on FONT_DEFAULT so column
+    // alignment in URL/status bars is preserved).
+    let text_w: i32 = gfx_text_width(label, FONT_DEFAULT);
     let tx: i32 = x + (w - text_w) / 2;
     let ty: i32 = y + (h - 8) / 2;
-    gfx_draw_text(tx, ty, label, UI_FG);
+    gfx_draw_text(tx, ty, label, UI_FG, FONT_DEFAULT);
 
     clicked
 }
@@ -94,7 +106,7 @@ fn! ui_checkbox(x: i32, y: i32, label: str, checked: bool, prev_btn: i32) -> boo
     };
 
     // Draw label
-    gfx_draw_text(x + box_size + 6, y + 2, label, UI_FG);
+    gfx_draw_text(x + box_size + 6, y + 2, label, UI_FG, FONT_DEFAULT);
 
     // Toggle on click
     if clicked { not checked } else { checked }
@@ -202,7 +214,7 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32,
         };
     };
 
-    gfx_draw_text(x + pad - scroll_off, text_y, text, UI_FG);
+    gfx_draw_text(x + pad - scroll_off, text_y, text, UI_FG, FONT_DEFAULT);
 
     // Draw cursor when focused (thin rect at cursor position)
     if focused and not select_all {
