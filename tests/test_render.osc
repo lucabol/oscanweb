@@ -27,8 +27,7 @@ fn! walk_node(nodes: [HtmlNode], idx: i32, depth: i32, indent: i32, ol_ctr: [i32
 
     // Skip tags (same as browser)
     if str_eq(tag, "head") or str_eq(tag, "script") or str_eq(tag, "style") or
-       str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title") or
-       str_eq(tag, "noscript") {
+       str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title") {
         return;
     };
 

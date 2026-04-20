@@ -290,8 +290,7 @@ fn html_is_block_tag(tag: str) -> bool {
 
 fn html_is_skip_tag(tag: str) -> bool {
     str_eq(tag, "head") or str_eq(tag, "script") or str_eq(tag, "style") or
-    str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title") or
-    str_eq(tag, "noscript")
+    str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title")
 }
 
 // ─── Text rendering with word-wrap ──────────────────────
@@ -836,6 +835,15 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         if cs.underline == 1 { child_uline = true; };
         if cs.strike == 1 { child_strike = true; };
         if cs.bg_color >= 0 { child_markbg = cs.bg_color; };
+    };
+
+    // Anchors always use the browser's link color.  Many pages ship a
+    // light-mode stylesheet that sets `a { color: #... }` or inherits a
+    // near-black color from body; on our dark chrome that produces
+    // unreadable near-invisible links.  Keeping LINK_COLOR here trades a
+    // bit of per-site styling fidelity for reliably readable links.
+    if str_eq(tag, "a") {
+        child_color = LINK_COLOR;
     };
 
     // List item: numbered or bulleted
@@ -1696,7 +1704,7 @@ fn! main() {
                                 nav_url = str_concat("https://", target);
                             } else {
                                 // Omnibox search: route to DuckDuckGo
-                                nav_url = str_concat("https://duckduckgo.com/?q=", url_encode(target));
+                                nav_url = str_concat("https://html.duckduckgo.com/html/?q=", url_encode(target));
                             };
                             needs_navigate = true;
                             mode = BrowserMode::Normal;
