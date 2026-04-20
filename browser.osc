@@ -2129,6 +2129,19 @@ fn! main() {
                 if reader_on {
                     let main_idx: i32 = find_main_content_idx(dom_nodes, dom_root);
                     if main_idx >= 0 { render_root = main_idx; };
+                    // Reader mode default: narrow the content column to a
+                    // readable ~880 CSS px and center it. Scales with zoom so
+                    // the same character count fits per line at any body_scale.
+                    // Only applies when the page hasn't already set a
+                    // max-width on the render root (we don't want to fight
+                    // pages that already lay themselves out sensibly).
+                    if render_root >= 0 and render_root < len(dom_styles) {
+                        if dom_styles[render_root].max_width_px < 0
+                           and dom_styles[render_root].max_width_pct < 0 {
+                            dom_styles[render_root].max_width_px = 880 * body_scale;
+                            dom_styles[render_root].center_block = 1;
+                        };
+                    };
                 };
                 let fragment_y_out: [i32] = [-1];
                 render_node(dom_nodes, render_root, x_ptr, y_ptr,

@@ -8,7 +8,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 
 - **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
 - **Omnibox search** — type any query in the address bar; non-URL input is sent to DuckDuckGo automatically, with autocomplete from your browsing history
-- **Reader mode** — `gr` strips navigation/header/footer/forms and renders the main content for distraction-free reading
+- **Reader mode** — `gr` strips navigation/header/footer/forms, narrows the content column to a readable ~880px width, and renders the main content for distraction-free reading
 - **Fragment navigation** — `#section` anchors scroll to the matching element; same-page fragment links skip the network round-trip
 - **Persistent history & bookmarks** — history is saved to `%APPDATA%\oscaweb_history.txt` (500 entries); `b` bookmarks the current page, `B` opens the bookmarks panel, `1`–`9` jumps to a saved site
 - **Runtime zoom** — `+`/`-` zoom in/out, `0` resets (1×–4×)
@@ -365,7 +365,11 @@ oscanweb/
 Toggles a distraction-free view. If the page contains a `<main>` or
 `<article>` element, the renderer uses that subtree as the document root.
 Otherwise, `<nav>`, `<header>`, `<footer>`, `<aside>`, and `<form>`
-elements are hidden. Press `gr` again to return to the full page.
+elements are hidden. In addition, the content column is narrowed to a
+readable ~880 CSS px and centered (scales with the current zoom level),
+so wide pages like Wikipedia articles and documentation sites don't run
+edge-to-edge. Pages that already set their own `max-width` are left
+alone. Press `gr` again to return to the full page.
 
 ### Fragment navigation
 
