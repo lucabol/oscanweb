@@ -109,5 +109,26 @@ fn! main() {
     assert_eq_str(url_encode("a+b=c"), "a%2Bb%3Dc", "encode special chars");
     assert_eq_str(url_encode("abc-_.~"), "abc-_.~", "unreserved preserved");
 
+    // url_decode
+    assert_eq_str(url_decode("hello%20world"), "hello world", "decode space");
+    assert_eq_str(url_decode("a%2Bb%3Dc"), "a+b=c", "decode special chars");
+    assert_eq_str(url_decode("plain"), "plain", "decode no-op plain text");
+    assert_eq_str(url_decode("%2F"), "/", "decode slash");
+    assert_eq_str(url_decode("bad%ZZ"), "bad%ZZ", "decode invalid escape passthrough");
+
+    // url_unwrap_tracking - DuckDuckGo redirect
+    let ddg1: str = url_unwrap_tracking("//duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FRust&rut=abc123");
+    assert_eq_str(ddg1, "https://en.wikipedia.org/wiki/Rust", "unwrap DDG protocol-relative");
+
+    let ddg2: str = url_unwrap_tracking("https://duckduckgo.com/l/?uddg=https%3A%2F%2Frust-lang.org%2F");
+    assert_eq_str(ddg2, "https://rust-lang.org/", "unwrap DDG https with no extra params");
+
+    let ddg3: str = url_unwrap_tracking("/l/?uddg=https%3A%2F%2Fexample.com%2F&rut=xyz");
+    assert_eq_str(ddg3, "https://example.com/", "unwrap DDG path-relative");
+
+    // Non-tracking URLs pass through unchanged
+    assert_eq_str(url_unwrap_tracking("https://example.com/page"), "https://example.com/page", "unwrap passthrough normal url");
+    assert_eq_str(url_unwrap_tracking("/local/path"), "/local/path", "unwrap passthrough relative path");
+
     println("=== URL Tests Complete ===");
 }

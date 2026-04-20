@@ -378,6 +378,13 @@ fn! css_parse_simple(s: str) -> CssSimple {
             };
             if str_len(cls_s) == 0 {
                 cls_s = str_from_chars(cbuf);
+            } else {
+                // Multi-class compound like ".a.b" is not supported; mark
+                // as fail so the rule is skipped entirely rather than
+                // silently matching only the first class (which would
+                // over-match, e.g. ".result__body.highlight" mistakenly
+                // matching every ".result__body").
+                return CssSimple { tag: "__fail__", id: "", cls: "" };
             };
         } else if c == 35 {
             i = i + 1;

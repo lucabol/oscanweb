@@ -947,7 +947,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     else if str_eq(tag, "a") {
         child_color = LINK_COLOR;
         child_link = true;
-        child_href = html_get_attr(node, "href");
+        child_href = url_unwrap_tracking(html_get_attr(node, "href"));
     }
     else if str_eq(tag, "pre") or str_eq(tag, "code") {
         child_color = CODE_FG; child_pre = true; child_font = FONT_DEFAULT;
