@@ -12,7 +12,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Reader mode** — `gr` strips navigation/header/footer/forms and renders the main content for distraction-free reading
 - **Fragment navigation** — `#section` anchors scroll to the matching element; same-page fragment links skip the network round-trip
 - **Persistent history & bookmarks** — history is saved to `%APPDATA%\oscaweb_history.txt` (500 entries); `b` bookmarks the current page, `B` opens the bookmarks panel, `1`–`9` jumps to a saved site
-- **Runtime zoom** — `+`/`-` zoom in/out, `0` resets to the 2× default (1×–4×)
+- **Runtime zoom** — `+`/`-` zoom in/out, `0` resets (1×–4×)
 - **HTTP and HTTPS support** — TLS is built into Oscan (zero external dependencies)
 - **JavaScript execution** — inline `<script>` tags and `onclick` handlers via embedded QuickJS-ng
 - **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`, `padding`, `max-width`, `line-height`, `margin: 0 auto` centering, and `@media (prefers-color-scheme)`) with a real cascade, descendant combinator, and inheritance. Tables now auto-size columns to content and wrap long cells.
@@ -412,12 +412,9 @@ nothing is selected).
 
 ### Zoom
 
-`+` / `=` zooms in, `-` zooms out, `0` resets to the 2× default. The
-current zoom factor is shown in the status bar when it differs from the
-default. Zoom is clamped between 1× and 4× and scales headings,
-paragraphs, code blocks, and tables uniformly. The readable article
-column (~640 CSS px) scales with zoom so the same character count fits
-per line at any zoom level.
+`+` / `=` zooms in, `-` zooms out, `0` resets. The current zoom factor
+is shown in the status bar. Zoom is clamped between 1× and 4× and scales
+headings, paragraphs, code blocks, and tables uniformly.
 
 ## Limitations
 

@@ -1201,10 +1201,8 @@ fn! main() {
     // Reader mode
     let mut reader_on: bool = false;
 
-    // Runtime zoom (1..4). Default 2 gives comfortable reading text at
-    // normal canvas sizes; users can press `-` to compact to 1 for more
-    // information density or `+` to enlarge further.
-    let mut body_scale: i32 = 2;
+    // Runtime zoom (1..4)
+    let mut body_scale: i32 = 1;
 
     // Pending scroll target when the URL fragment (#id) matches an element.
     let mut pending_fragment: str = "";
@@ -1832,8 +1830,8 @@ fn! main() {
                         if body_scale > 1 { body_scale = body_scale - 1; };
                         render_dirty = true;
                     } else if key == 48 {
-                        // 0 — reset zoom to the default
-                        body_scale = 2;
+                        // 0 — reset zoom
+                        body_scale = 1;
                         render_dirty = true;
                     };
                     if key > 0 { last_key = key; };
@@ -2403,7 +2401,7 @@ fn! main() {
                 "Top"
             };
             let reader_flag: str = if reader_on { " | READER" } else { "" };
-            let zoom_flag: str = if body_scale != 2 { " | zoom {body_scale}x" } else { "" };
+            let zoom_flag: str = if body_scale > 1 { " | zoom {body_scale}x" } else { "" };
             gfx_draw_text(4, sty + 6,
                 " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}{reader_flag}{zoom_flag}",
                 FG_COLOR, FONT_DEFAULT);
