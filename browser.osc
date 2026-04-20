@@ -837,6 +837,15 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         if cs.bg_color >= 0 { child_markbg = cs.bg_color; };
     };
 
+    // Anchors always use the browser's link color.  Many pages ship a
+    // light-mode stylesheet that sets `a { color: #... }` or inherits a
+    // near-black color from body; on our dark chrome that produces
+    // unreadable near-invisible links.  Keeping LINK_COLOR here trades a
+    // bit of per-site styling fidelity for reliably readable links.
+    if str_eq(tag, "a") {
+        child_color = LINK_COLOR;
+    };
+
     // List item: numbered or bulleted
     if str_eq(tag, "li") {
         x_ptr[0] = indent + PAD;
