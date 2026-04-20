@@ -346,7 +346,8 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 font: i32, scale: i32,
                 vp_top: i32, vp_width: i32, underline: bool,
                 links: [LinkInfo], href: str, search_q: str,
-                word_map: [WordInfo], strikethrough: bool, mark_bg: i32) {
+                word_map: [WordInfo], strikethrough: bool, mark_bg: i32,
+                indent: i32) {
     // Normalize whitespace: collapse \n, \r, \t into spaces so split by space
     // doesn't emit them as visible "words" (which render as missing-glyph ?).
     let raw_chars: [i32] = str_to_chars(text);
@@ -379,7 +380,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
         let word_w: i32 = text_width_f(word, font, scale);
 
         // Word wrap
-        if x_ptr[0] + word_w > max_x and x_ptr[0] > PAD {
+        if x_ptr[0] + word_w > max_x and x_ptr[0] > indent + PAD {
             // If we wrapped to a new line, emit link for the previous line segment
             if str_len(href) > 0 and link_w > 0 and not link_recorded {
                 let draw_y_check: i32 = link_y;
@@ -392,7 +393,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                     link_recorded = true;
                 };
             };
-            x_ptr[0] = PAD;
+            x_ptr[0] = indent + PAD;
             y_ptr[0] = y_ptr[0] + lh;
         };
 
@@ -651,7 +652,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             if str_len(str_trim(text)) == 0 { return; };
             render_text(text, x_ptr, y_ptr, color, font, scale, vp_top, vp_width,
                         is_link or force_underline, links, link_href, search_q, word_map,
-                        strikethrough, mark_bg);
+                        strikethrough, mark_bg, indent);
         };
         return;
     };
@@ -701,9 +702,11 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     let entry_line_h: i32 = effective_line_h(styles, idx, scale);
 
-    if is_block and x_ptr[0] > eff_indent + PAD {
+    if is_block {
+        if x_ptr[0] > eff_indent + PAD {
+            y_ptr[0] = y_ptr[0] + entry_line_h;
+        };
         x_ptr[0] = eff_indent + PAD;
-        y_ptr[0] = y_ptr[0] + entry_line_h;
     };
     if is_block and pad_top_px > 0 {
         y_ptr[0] = y_ptr[0] + pad_top_px;
@@ -2189,13 +2192,44 @@ fn! main() {
                 let y_ptr: [i32] = [0];
                 let pg_u: Url = url_parse(current_url);
                 while len(word_map) > 0 { pop(word_map); };
-                // Reader mode: if <main>/<article> exists, render just that
-                // subtree; otherwise render the full tree with reader_on set
-                // so nav/header/footer/aside are hidden.
+                // Find the main content subtree. Used by both reader mode
+                // (as the render root, after stripping chrome) and by the
+                // default view (to narrow just that subtree to a readable
+                // measure, without touching nav/header/footer).
+                let main_idx: i32 = find_main_content_idx(dom_nodes, dom_root);
                 let mut render_root: i32 = dom_root;
-                if reader_on {
-                    let main_idx: i32 = find_main_content_idx(dom_nodes, dom_root);
-                    if main_idx >= 0 { render_root = main_idx; };
+                if reader_on and main_idx >= 0 { render_root = main_idx; };
+                // Narrow the main content column to a readable ~640 CSS px
+                // (roughly 65-75 characters per line) and center it. Scales
+                // with zoom so the same character count fits per line at any
+                // body_scale. In reader mode this applies to the render root
+                // (which equals <main>/<article> when present, otherwise the
+                // whole tree). Outside reader mode it applies only when
+                // <main>/<article> exists, so utility pages (homepages,
+                // search results, dashboards with no <main>) are left at
+                // full width.
+                // Gated on the target not already having a max-width set by
+                // the page's CSS — we don't want to fight pages that already
+                // lay themselves out sensibly.
+                let mut narrow_idx: i32 = -1;
+                if reader_on { narrow_idx = render_root; }
+                else if main_idx >= 0 { narrow_idx = main_idx; };
+                // Remember any mutation so we can restore it after rendering
+                // (otherwise the page would stay mutated across frames).
+                let mut narrow_override: bool = false;
+                let mut narrow_prev_mwpx: i32 = -1;
+                let mut narrow_prev_mwpct: i32 = -1;
+                let mut narrow_prev_center: i32 = -1;
+                if narrow_idx >= 0 and narrow_idx < len(dom_styles) {
+                    if dom_styles[narrow_idx].max_width_px < 0
+                       and dom_styles[narrow_idx].max_width_pct < 0 {
+                        narrow_prev_mwpx = dom_styles[narrow_idx].max_width_px;
+                        narrow_prev_mwpct = dom_styles[narrow_idx].max_width_pct;
+                        narrow_prev_center = dom_styles[narrow_idx].center_block;
+                        dom_styles[narrow_idx].max_width_px = 640 * body_scale;
+                        dom_styles[narrow_idx].center_block = 1;
+                        narrow_override = true;
+                    };
                 };
                 let fragment_y_out: [i32] = [-1];
                 render_node(dom_nodes, render_root, x_ptr, y_ptr,
@@ -2208,6 +2242,13 @@ fn! main() {
                             false, false, -1, [0], page_clickables,
                             dom_styles,
                             reader_on, pending_fragment, fragment_y_out);
+                // Restore original ComputedStyle fields so toggling reader
+                // mode off (or navigating away) cleanly reverts the narrowing.
+                if narrow_override {
+                    dom_styles[narrow_idx].max_width_px = narrow_prev_mwpx;
+                    dom_styles[narrow_idx].max_width_pct = narrow_prev_mwpct;
+                    dom_styles[narrow_idx].center_block = narrow_prev_center;
+                };
                 doc_height = y_ptr[0];
                 max_scroll = max_i32(doc_height - (canvas_height() - CHROME_TOP - CHROME_BOT), 0);
 

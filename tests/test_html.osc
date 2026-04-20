@@ -254,5 +254,15 @@ fn! main() {
     let ul_ali: i32 = nodes_ali[root_ali].first_child;
     assert_eq_i32(count_children(nodes_ali, ul_ali), 3, "autoclose li: 3 children");
 
+    // 24. Attribute values are HTML-entity decoded (e.g. &amp; in stylesheet URLs).
+    let mut nodes_ae: [HtmlNode] = [];
+    let root_ae: i32 = html_parse(nodes_ae,
+        "<link rel=\"stylesheet\" href=\"/w/load.php?lang=en&amp;modules=site.styles\">");
+    let link_ae: i32 = nodes_ae[root_ae].first_child;
+    assert_eq_str(nodes_ae[link_ae].tag, "link", "attr entity: link tag");
+    assert_eq_str(html_get_attr(nodes_ae[link_ae], "href"),
+        "/w/load.php?lang=en&modules=site.styles",
+        "attr entity: &amp; decoded in href");
+
     println("=== HTML Tests Complete ===");
 }
