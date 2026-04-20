@@ -64,15 +64,15 @@ The renderer walks the flat DOM tree recursively via `render_node()`. It uses `[
 
 `css.osc` provides a minimal cascade engine. After `html_parse` (and after `js_run_scripts` so JS-added nodes/classes participate), the browser:
 
-1. Walks the DOM collecting `<style>` text content via `css_collect_style_texts`.
-2. Parses each stylesheet with `css_parse(rules, source, order)` into `[CssRule]`.
-3. Calls `css_compute_all(nodes, root, rules, styles)` to produce a `[ComputedStyle]` array parallel to `dom_nodes`.
+1. Walks the DOM collecting stylesheet sources via `css_collect_sources` (inline `<style>` text and external `<link rel="stylesheet" href="...">` URLs, in document order).
+2. Fetches each `<link>` href via `http_get` (URL resolved against the current page with `url_resolve_relative`) and parses each source with `css_parse(rules, source, order)` into `[CssRule]`.
+3. Calls `css_compute_all(nodes, root, rules, styles)` to produce a `[ComputedStyle]` array parallel to `dom_nodes`. Internally this threads an `ancestors: [i32]` stack through `css_compute_walk` so descendant combinators can match.
 
-Supported selectors: `tag`, `.class`, `#id`, `*`, compounds (`h1.title`), and comma-separated selector lists. Combinators, pseudo-classes, attribute selectors, and `@media` queries are **not** matched — rules that contain them are parsed and skipped so they never "accidentally" match too broadly.
+Supported selectors: `tag`, `.class`, `#id`, `*`, compounds (`h1.title`), comma-separated selector lists, and the descendant combinator (`nav a`, `#main .title`). Selectors are represented as `CssCompound { parts: [CssSimple] }` where the rightmost part is the subject; specificity is the sum of each part's specificity. Child (`>`), sibling (`+`/`~`), pseudo-classes, attribute selectors, and `@media` queries are **not** matched — rules that contain them are parsed and skipped so they never "accidentally" match too broadly.
 
-Supported properties: `color`, `background-color`/`background`, `font-weight`, `font-style`, `text-decoration`, `display: none`. Inline `style=""` beats stylesheet rules; `!important` beats non-`!important`. `color`, `font-weight`, `font-style`, `text-decoration` inherit.
+Supported properties: `color`, `background-color`/`background`, `font-weight`, `font-style`, `text-decoration`, `text-align` (`left`/`center`/`right`), `display: none`. Inline `style=""` beats stylesheet rules; `!important` beats non-`!important`. `color`, `font-weight`, `font-style`, `text-decoration`, `text-align` inherit.
 
-`render_node` consults `styles[idx]` to: return early on `display_none`; override `child_color` with `cs.color` (falling back to `BOLD_COLOR` / `EM_COLOR` for font-weight / font-style when `color` is unset); set `child_uline`, `child_strike`, `child_markbg` from the computed style. Tag defaults still apply when no CSS matches.
+`render_node` consults `styles[idx]` to: return early on `display_none`; override `child_color` with `cs.color` (falling back to `BOLD_COLOR` / `EM_COLOR` for font-weight / font-style when `color` is unset); set `child_uline`, `child_strike`, `child_markbg` from the computed style; and, for `text_align` center/right, measure the subtree's inline text width via `measure_inline_text` and preposition `x_ptr[0]` before recursing into children (only when the line fits — wrapped content falls back to left alignment). Tag defaults still apply when no CSS matches.
 
 **Supported tags with specific rendering:**
 - **Text styling:** `b`/`strong`, `em`/`i`/`cite`, `del`/`s` (strikethrough), `u`/`ins` (underline), `mark` (yellow background), `code`/`pre`

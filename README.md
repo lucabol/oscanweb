@@ -9,7 +9,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
 - **HTTP and HTTPS support** — TLS is built into Oscan (zero external dependencies)
 - **JavaScript execution** — inline `<script>` tags and `onclick` handlers via embedded QuickJS-ng
-- **Basic CSS styling** — `<style>` blocks and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, `display:none`) with a real cascade and inheritance
+- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`) with a real cascade, descendant combinator, and inheritance
 - **Image rendering** — PNG, JPEG, BMP, GIF, and SVG decoded, cached, and displayed inline
 - **Rich HTML rendering** — headings, lists, tables, blockquotes, code blocks, and 30+ tags
 - **Text selection & copy** — click-and-drag to select text, automatically copied to clipboard
@@ -221,35 +221,41 @@ The bottom bar shows at a glance:
 
 ## CSS
 
-OscaWeb ships a small CSS engine (`css.osc`) that parses `<style>` blocks
-and `style=""` attributes, matches a simple selector subset against the
-DOM, runs the CSS 2.1 cascade, and propagates inheritable properties.
-External `<link rel="stylesheet">` resources are **not** fetched — inline
-stylesheets only.
+OscaWeb ships a small CSS engine (`css.osc`) that parses `<style>` blocks,
+external `<link rel="stylesheet">` resources, and `style=""` attributes,
+matches a simple selector subset against the DOM, runs the CSS 2.1
+cascade, and propagates inheritable properties.
 
 ### Supported
 
 - **Selectors** — `tag`, `.class`, `#id`, `*`, compounds (`h1.title`),
-  comma-separated selector lists
+  comma-separated selector lists, and the descendant combinator
+  (`nav a`, `article .title`)
 - **Properties** — `color`, `background-color` / `background`,
   `font-weight`, `font-style`, `text-decoration`
-  (`underline` / `line-through` / `none`), `display: none`
+  (`underline` / `line-through` / `none`), `text-align`
+  (`left`/`center`/`right`), `display: none`
 - **Values** — named colors (subset), `#rgb`, `#rrggbb`, `rgb(r, g, b)`,
   `bold`/`normal` (and numeric weights), `italic`, `!important`
-- **Cascade** — specificity + source order, inline `style=""` wins over
-  stylesheet rules, `!important` wins over non-`!important`
+- **Cascade** — specificity + source order across inline `<style>` and
+  external `<link rel="stylesheet">` blocks in document order, inline
+  `style=""` wins over stylesheet rules, `!important` wins over
+  non-`!important`
 - **Inheritance** — `color`, `font-weight`, `font-style`,
-  `text-decoration` propagate from parent to child
+  `text-decoration`, `text-align` propagate from parent to child
 
 Because OscaWeb is a terminal-style renderer with a monospace bitmap
 font, `font-weight: bold` and `font-style: italic` are approximated by
 switching to the bold/italic accent color rather than changing glyph
-shape.
+shape. `text-align` is applied by measuring the inline text width of a
+block and prepositioning the cursor before children render; it only
+fires when the content fits on a single line (multi-line wrapping falls
+back to left alignment).
 
 ### Not supported
 
-- Combinators (descendant ` `, child `>`, sibling `+`/`~`) — rules
-  containing them are parsed and skipped
+- Combinators other than descendant (child `>`, sibling `+`/`~`) —
+  rules containing them are parsed and skipped
 - Pseudo-classes / pseudo-elements (`:hover`, `::before`, …)
 - Attribute selectors (`[href]`)
 - Box-model properties (`width`, `height`, `margin`, `padding`, `border`,
@@ -257,7 +263,6 @@ shape.
 - Units other than unitless integers for `rgb()` and bare hex colors
 - `@media`, `@import`, `@font-face` and other at-rules (parsed and
   ignored)
-- External stylesheets via `<link rel="stylesheet">`
 
 ### Try it
 

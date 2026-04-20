@@ -2,6 +2,7 @@
 <html>
 <head>
 <title>OscaWeb CSS Test Page</title>
+<link rel="stylesheet" href="test_page_css.css">
 <style>
   /* Comments are stripped */
   body { color: #c8c8c8; }
@@ -27,10 +28,17 @@
   /* Hide-me */
   .hidden    { display: none; }
 
-  /* Unsupported selectors should be safely ignored. */
-  div > p    { color: magenta; }
-  nav a      { color: lime; }
-  p:hover    { color: cyan; }
+  /* Descendant combinator (now supported). */
+  nav a      { color: lime; font-weight: bold; }
+  article .title { color: #ff66cc; }
+
+  /* text-align */
+  .centered  { text-align: center; }
+  .rightward { text-align: right; }
+  .inherit-align { text-align: center; }
+
+  p:hover    { color: cyan; }  /* pseudo still ignored */
+  div > p    { color: magenta; } /* child combinator still ignored */
 
   @media (min-width: 100px) {
     /* at-rules are ignored */
@@ -70,10 +78,28 @@ background.</p>
 <p class="hidden">YOU SHOULD NOT SEE THIS PARAGRAPH.</p>
 <p>Back to visible content.</p>
 
-<h2>6. Unsupported selectors are safely ignored</h2>
-<p>The following should <em>not</em> be magenta (descendant combinator is
-not supported and the rule is skipped):</p>
+<h2>6. Descendant combinator and a few still-unsupported selectors</h2>
+<p>Link inside <code>&lt;nav&gt;</code> should render <em>lime bold</em>; the
+one outside should use default link color:</p>
+<nav><a href="#">lime link inside nav</a></nav>
+<p><a href="#">plain link outside nav</a></p>
+
+<article>
+  <p>An <span class="title">article .title span</span> should render pink
+  because of the descendant selector.</p>
+</article>
+
+<p>The following should <em>not</em> be magenta (child combinator
+<code>div &gt; p</code> is still skipped):</p>
 <div><p>Plain paragraph inside a div.</p></div>
+
+<h2>6b. text-align</h2>
+<h3 class="centered">This heading should be centered.</h3>
+<p class="rightward">This short line should be right-aligned.</p>
+<div class="inherit-align">
+  <p>This paragraph inherits <code>text-align: center</code> from its
+  parent div.</p>
+</div>
 
 <h2>7. Multiple stylesheets</h2>
 <style>
@@ -86,6 +112,14 @@ not supported and the rule is skipped):</p>
 <p style="background-color: #334; color: #ffcc00">
   Inline style: dark blue background with gold text.
 </p>
+
+<h2>9. External stylesheet via &lt;link rel="stylesheet"&gt;</h2>
+<p>When served over HTTP, the following should pick up styles from
+<code>test_page_css.css</code>:</p>
+<p class="from-external">This line should render bold teal from the
+external stylesheet.</p>
+<p><span class="from-external-bg">This span has an external dark
+background.</span></p>
 
 <hr>
 <p class="muted">End of CSS test page.</p>

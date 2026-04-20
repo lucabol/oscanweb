@@ -394,6 +394,48 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
     };
 }
 
+// Measure the single-line rendered width (in pixels) of all text in the
+// subtree rooted at `idx`.  Used by text-align to preposition x_ptr for
+// centered/right-aligned blocks whose content fits on one line.  Uses
+// proportional font metrics via text_width_f.
+fn! measure_inline_text(nodes: [HtmlNode], idx: i32, styles: [ComputedStyle],
+                        font: i32, scale: i32, out: [i32]) {
+    if idx < 0 or idx >= len(nodes) { return; };
+    if idx < len(styles) and styles[idx].display_none { return; };
+    let node: HtmlNode = nodes[idx];
+    if node.is_text {
+        // Collapse runs of \n / \r / \t / space into a single space so the
+        // measurement matches render_text's word-splitting.
+        let raw: [i32] = str_to_chars(node.text);
+        let mut norm: [i32] = [];
+        let mut in_ws: bool = true;
+        for mi in 0..len(raw) {
+            let c: i32 = raw[mi];
+            if c == 10 or c == 13 or c == 9 or c == 32 {
+                if not in_ws {
+                    push(norm, 32);
+                    in_ws = true;
+                };
+            } else {
+                push(norm, c);
+                in_ws = false;
+            };
+        };
+        // Strip trailing space.
+        while len(norm) > 0 and norm[len(norm) - 1] == 32 { pop(norm); };
+        if len(norm) == 0 { return; };
+        let collapsed: str = str_from_chars(norm);
+        out[0] = out[0] + text_width_f(collapsed, font, scale);
+        return;
+    };
+    if html_is_skip_tag(node.tag) { return; };
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        measure_inline_text(nodes, child, styles, font, scale, out);
+        child = nodes[child].next_sibling;
+    };
+}
+
 // ─── Render a DOM node (flat-array tree) ────────────────
 
 fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
@@ -789,6 +831,29 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 draw_text_f(x_ptr[0], draw_y, "* ", child_color, child_font, child_scale);
             };
             x_ptr[0] = x_ptr[0] + text_width_f("* ", child_font, child_scale);
+        };
+    };
+
+    // CSS: text-align for block elements.  Only applies when the subtree's
+    // inline content fits on a single line; wrapped content falls back to
+    // left alignment (acceptable for the common case of centered headings
+    // and footers).
+    if is_block and idx >= 0 and idx < len(styles) {
+        let ta: i32 = styles[idx].text_align;
+        if ta == 1 or ta == 2 {
+            let w_ptr: [i32] = [0];
+            measure_inline_text(nodes, idx, styles, child_font, child_scale, w_ptr);
+            let measured: i32 = w_ptr[0];
+            let line_start: i32 = indent + PAD;
+            let line_end: i32 = vp_width - PAD;
+            let avail: i32 = line_end - line_start;
+            if measured > 0 and measured <= avail {
+                if ta == 1 {
+                    x_ptr[0] = line_start + (avail - measured) / 2;
+                } else {
+                    x_ptr[0] = line_end - measured;
+                };
+            };
         };
     };
 
@@ -1208,16 +1273,49 @@ fn! main() {
                             js_bridge_clear_dom_dirty();
                         };
 
-                        // CSS: collect <style> contents and inline style=""
+                        // CSS: collect <style> contents, external <link
+                        // rel="stylesheet"> hrefs, and inline style=""
                         // attributes, parse into rules, then compute per-node
                         // ComputedStyle.  Done after JS so dynamically added
                         // nodes/classes participate in the cascade.
                         let mut css_rules: [CssRule] = [];
-                        let mut style_texts: [str] = [];
-                        css_collect_style_texts(dom_nodes, dom_root, style_texts);
+                        let mut css_kinds: [i32] = [];
+                        let mut css_values: [str] = [];
+                        css_collect_sources(dom_nodes, dom_root, css_kinds, css_values);
                         let mut css_order: i32 = 0;
-                        for sti in 0..len(style_texts) {
-                            css_order = css_parse(css_rules, style_texts[sti], css_order);
+                        for sti in 0..len(css_kinds) {
+                            if css_kinds[sti] == 0 {
+                                // Inline <style> text
+                                css_order = css_parse(css_rules, css_values[sti], css_order);
+                            } else {
+                                // External <link rel="stylesheet" href="...">
+                                let href: str = css_values[sti];
+                                let mut link_host: str = fetch_host;
+                                let mut link_port: i32 = fetch_port;
+                                let mut link_path: str = href;
+                                let mut link_tls: bool = fetch_tls;
+                                if str_contains(href, "://") {
+                                    let lu: Url = url_parse(href);
+                                    link_host = lu.host;
+                                    link_port = lu.port;
+                                    link_path = lu.path;
+                                    link_tls = str_eq(lu.scheme, "https");
+                                } else if str_starts_with(href, "//") {
+                                    let scheme: str = if fetch_tls { "https" } else { "http" };
+                                    let lu2: Url = url_parse(str_concat(scheme, ":{href}"));
+                                    link_host = lu2.host;
+                                    link_port = lu2.port;
+                                    link_path = lu2.path;
+                                    link_tls = str_eq(lu2.scheme, "https");
+                                } else {
+                                    link_path = url_resolve_relative(fetch_path, href);
+                                };
+                                vlog_msg("css link fetch", href);
+                                let lresp: HttpResponse = http_get(link_host, link_port, link_path, link_tls);
+                                if lresp.ok and str_len(lresp.body) > 0 {
+                                    css_order = css_parse(css_rules, lresp.body, css_order);
+                                };
+                            };
                         };
                         vlog_int("css rules", len(css_rules));
                         css_compute_all(dom_nodes, dom_root, css_rules, dom_styles);
