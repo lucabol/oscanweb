@@ -36,9 +36,9 @@ fn text_width_f(s: str, font: i32, scale: i32) -> i32 { gfx_text_width(s, font) 
 
 // Heading scale lookup.  h1 biggest, h2/h3 medium, h4..h6 use color/bold only.
 fn heading_scale(tag: str) -> i32 {
-    if str_eq(tag, "h1") { 3 }
+    if str_eq(tag, "h1") { 2 }
     else if str_eq(tag, "h2") { 2 }
-    else if str_eq(tag, "h3") { 2 }
+    else if str_eq(tag, "h3") { 1 }
     else { 1 }
 }
 
@@ -833,7 +833,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     // Block post-spacing
     if is_block {
         x_ptr[0] = indent + PAD;
-        y_ptr[0] = y_ptr[0] + LINE_H;
+        y_ptr[0] = y_ptr[0] + line_h_of(child_scale);
     };
     if str_eq(tag, "h1") or str_eq(tag, "h2") { y_ptr[0] = y_ptr[0] + LINE_H / 2; };
     if str_eq(tag, "p") { y_ptr[0] = y_ptr[0] + LINE_H / 2; };
