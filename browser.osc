@@ -11,8 +11,6 @@ use "libs/ui.osc"
 
 // ─── Constants ───────────────────────────────────────────
 
-let WIN_W: i32 = 1024;
-let WIN_H: i32 = 768;
 let CHROME_TOP: i32 = 30;
 let CHROME_BOT: i32 = 20;
 let FONT_W: i32 = 8;
@@ -338,7 +336,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
             // If we wrapped to a new line, emit link for the previous line segment
             if str_len(href) > 0 and link_w > 0 and not link_recorded {
                 let draw_y_check: i32 = link_y;
-                if draw_y_check + gh >= CHROME_TOP and draw_y_check < WIN_H - CHROME_BOT {
+                if draw_y_check + gh >= CHROME_TOP and draw_y_check < canvas_height() - CHROME_BOT {
                     let li: LinkInfo = LinkInfo {
                         x: link_x, y: link_y, w: link_w, h: lh,
                         href: href, label: "",
@@ -353,7 +351,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
 
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
 
-        if draw_y + gh >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+        if draw_y + gh >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
             // Mark background highlight
             if mark_bg >= 0 {
                 gfx_fill_rect(x_ptr[0], draw_y, word_w, lh, mark_bg);
@@ -386,7 +384,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
 
     // Emit single LinkInfo for the entire link text
     if str_len(href) > 0 and not link_recorded {
-        if link_y + gh >= CHROME_TOP and link_y < WIN_H - CHROME_BOT {
+        if link_y + gh >= CHROME_TOP and link_y < canvas_height() - CHROME_BOT {
             let li: LinkInfo = LinkInfo {
                 x: link_x, y: link_y, w: link_w, h: lh,
                 href: href, label: "",
@@ -420,7 +418,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             let lines: [str] = str_split(text, "\n");
             for li in 0..len(lines) {
                 let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                if draw_y + FONT_H >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
                     gfx_fill_rect(PAD, draw_y, vp_width - PAD * 2, LINE_H, PRE_BG);
                     gfx_draw_text(x_ptr[0], draw_y, lines[li], CODE_FG, FONT_DEFAULT);
                 };
@@ -458,7 +456,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     if str_eq(tag, "hr") {
         y_ptr[0] = y_ptr[0] + LINE_H / 2;
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if draw_y >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+        if draw_y >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
             gfx_line(PAD, draw_y, vp_width - PAD, draw_y, HR_COLOR);
         };
         y_ptr[0] = y_ptr[0] + LINE_H / 2;
@@ -496,7 +494,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             if str_ends_with(attr_h_str, "%") {
                 let pct_h_str: str = str_slice(attr_h_str, 0, str_len(attr_h_str) - 1);
                 let pph: Result<i32, str> = parse_i32(pct_h_str);
-                match pph { Result::Ok(phv) => { attr_h = (WIN_H - CHROME_TOP - CHROME_BOT) * phv / 100; }, Result::Err(_eph) => {}, };
+                match pph { Result::Ok(phv) => { attr_h = (canvas_height() - CHROME_TOP - CHROME_BOT) * phv / 100; }, Result::Err(_eph) => {}, };
             } else {
                 let ph: Result<i32, str> = parse_i32(attr_h_str);
                 match ph { Result::Ok(hv) => { attr_h = hv; }, Result::Err(_eh) => {}, };
@@ -540,7 +538,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 };
 
                 let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                if draw_y + draw_h >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+                if draw_y + draw_h >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
                     gfx_blit(x_ptr[0], draw_y, draw_w, draw_h, draw_px);
                 };
                 y_ptr[0] = y_ptr[0] + draw_h + 4;
@@ -552,7 +550,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         // Fallback: show alt text placeholder
         let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if draw_y + FONT_H >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+        if draw_y + FONT_H >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
             draw_text_f(x_ptr[0], draw_y, display, HR_COLOR, font, scale);
         };
         x_ptr[0] = x_ptr[0] + text_width_f(display, font, scale) + text_width_f(" ", font, scale);
@@ -605,7 +603,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
         // Draw top border
         let tbl_top_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if tbl_top_y >= CHROME_TOP and tbl_top_y < WIN_H - CHROME_BOT {
+        if tbl_top_y >= CHROME_TOP and tbl_top_y < canvas_height() - CHROME_BOT {
             gfx_line(indent + PAD, tbl_top_y, indent + PAD + avail_w, tbl_top_y, TABLE_BORDER);
         };
         y_ptr[0] = y_ptr[0] + 2;
@@ -628,7 +626,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                             if str_eq(cell_tag, "td") or str_eq(cell_tag, "th") {
                                 let cell_x: i32 = indent + PAD + ci * col_w + 4;
                                 let cell_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                                if cell_y + FONT_H >= CHROME_TOP and cell_y < WIN_H - CHROME_BOT {
+                                if cell_y + FONT_H >= CHROME_TOP and cell_y < canvas_height() - CHROME_BOT {
                                     let cell_text: str = html_get_text_content(nodes, cell_node);
                                     // Truncate to fit column
                                     let max_chars: i32 = (col_w - 8) / FONT_W;
@@ -647,7 +645,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                         // Draw separator after first row (header)
                         if is_first_row {
                             let sep_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                            if sep_y >= CHROME_TOP and sep_y < WIN_H - CHROME_BOT {
+                            if sep_y >= CHROME_TOP and sep_y < canvas_height() - CHROME_BOT {
                                 gfx_line(indent + PAD, sep_y, indent + PAD + avail_w, sep_y, TABLE_BORDER);
                             };
                             y_ptr[0] = y_ptr[0] + 2;
@@ -664,7 +662,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     if str_eq(cw_tag, "td") or str_eq(cw_tag, "th") {
                         let cx: i32 = indent + PAD + ci2 * col_w + 4;
                         let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                        if cy + FONT_H >= CHROME_TOP and cy < WIN_H - CHROME_BOT {
+                        if cy + FONT_H >= CHROME_TOP and cy < canvas_height() - CHROME_BOT {
                             let ct: str = html_get_text_content(nodes, cell_walk);
                             let mc: i32 = (col_w - 8) / FONT_W;
                             let mut dt: str = ct;
@@ -681,7 +679,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 y_ptr[0] = y_ptr[0] + LINE_H;
                 if is_first_row {
                     let sep_y2: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                    if sep_y2 >= CHROME_TOP and sep_y2 < WIN_H - CHROME_BOT {
+                    if sep_y2 >= CHROME_TOP and sep_y2 < canvas_height() - CHROME_BOT {
                         gfx_line(indent + PAD, sep_y2, indent + PAD + avail_w, sep_y2, TABLE_BORDER);
                     };
                     y_ptr[0] = y_ptr[0] + 2;
@@ -693,7 +691,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
         // Draw bottom border
         let tbl_bot_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if tbl_bot_y >= CHROME_TOP and tbl_bot_y < WIN_H - CHROME_BOT {
+        if tbl_bot_y >= CHROME_TOP and tbl_bot_y < canvas_height() - CHROME_BOT {
             gfx_line(indent + PAD, tbl_bot_y, indent + PAD + avail_w, tbl_bot_y, TABLE_BORDER);
         };
         y_ptr[0] = y_ptr[0] + LINE_H;
@@ -747,7 +745,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         // Draw left accent bar
         let bar_x: i32 = indent + PAD + 10;
         let bar_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if bar_y >= CHROME_TOP and bar_y < WIN_H - CHROME_BOT {
+        if bar_y >= CHROME_TOP and bar_y < canvas_height() - CHROME_BOT {
             gfx_line(bar_x, bar_y, bar_x, bar_y + LINE_H * 2, QUOTE_BAR);
         };
     }
@@ -781,13 +779,13 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         if ol_counter[0] > 0 {
             let num_str: str = i32_to_str(ol_counter[0]);
             let li_label: str = str_concat(num_str, ". ");
-            if draw_y + glyph_h_of(child_scale) >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+            if draw_y + glyph_h_of(child_scale) >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
                 draw_text_f(x_ptr[0], draw_y, li_label, child_color, child_font, child_scale);
             };
             x_ptr[0] = x_ptr[0] + text_width_f(li_label, child_font, child_scale);
             ol_counter[0] = ol_counter[0] + 1;
         } else {
-            if draw_y + glyph_h_of(child_scale) >= CHROME_TOP and draw_y < WIN_H - CHROME_BOT {
+            if draw_y + glyph_h_of(child_scale) >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
                 draw_text_f(x_ptr[0], draw_y, "* ", child_color, child_font, child_scale);
             };
             x_ptr[0] = x_ptr[0] + text_width_f("* ", child_font, child_scale);
@@ -867,7 +865,7 @@ fn! make_hint_labels(count: i32) -> [str] {
 // ─── Main ────────────────────────────────────────────────
 
 fn! main() {
-    let co: Result<str, str> = canvas_open(WIN_W, WIN_H, "OscaWeb Browser");
+    let co: Result<str, str> = canvas_open(1024, 768, "OscaWeb Browser");
     match co {
         Result::Ok(_s) => {},
         Result::Err(e) => { println("Failed to open window: {e}"); exit(1); },
@@ -1146,10 +1144,10 @@ fn! main() {
                 // recv loop (several seconds on slow hosts) and Windows marks
                 // the app as "Not Responding".
                 canvas_clear(BG_COLOR);
-                gfx_fill_rect(0, 0, WIN_W, CHROME_TOP - 4, STATUS_BG);
+                gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP - 4, STATUS_BG);
                 gfx_draw_text(8, 10, "Loading: {nav_url}", FG_COLOR, FONT_DEFAULT);
-                let sty0: i32 = WIN_H - CHROME_BOT;
-                gfx_fill_rect(0, sty0, WIN_W, CHROME_BOT, STATUS_BG);
+                let sty0: i32 = canvas_height() - CHROME_BOT;
+                gfx_fill_rect(0, sty0, canvas_width(), CHROME_BOT, STATUS_BG);
                 gfx_draw_text(4, sty0 + 6, " LOADING | {nav_url}", FG_COLOR, FONT_DEFAULT);
                 canvas_flush();
 
@@ -1270,14 +1268,14 @@ fn! main() {
                     } else if key == 100 or key == 32 {
                         // d or Space — scroll down one page (Space) / half page (d)
                         let scroll_amount: i32 = if key == 32 {
-                            WIN_H - CHROME_TOP - CHROME_BOT
+                            canvas_height() - CHROME_TOP - CHROME_BOT
                         } else {
-                            (WIN_H - CHROME_TOP - CHROME_BOT) / 2
+                            (canvas_height() - CHROME_TOP - CHROME_BOT) / 2
                         };
                         scroll_y += scroll_amount;
                         if scroll_y > max_scroll { scroll_y = max_scroll; };
                     } else if key == 117 {
-                        scroll_y -= (WIN_H - CHROME_TOP - CHROME_BOT) / 2;
+                        scroll_y -= (canvas_height() - CHROME_TOP - CHROME_BOT) / 2;
                         if scroll_y < 0 { scroll_y = 0; };
                     } else if key == 71 {
                         scroll_y = max_scroll;
@@ -1469,7 +1467,7 @@ fn! main() {
                                 let found: i32 = str_find(str_slice(full_text, search_pos, str_len(full_text)), search_query);
                                 if found < 0 { break; };
                                 // Estimate y position: count chars up to match, divide by chars_per_line
-                                let chars_per_line: i32 = (WIN_W - PAD * 2) / FONT_W;
+                                let chars_per_line: i32 = (canvas_width() - PAD * 2) / FONT_W;
                                 let char_pos: i32 = search_pos + found;
                                 let line_num: i32 = char_pos / max_i32(chars_per_line, 1);
                                 let match_y: i32 = line_num * LINE_H;
@@ -1606,20 +1604,20 @@ fn! main() {
             canvas_clear(BG_COLOR);
 
             // Address bar
-            gfx_fill_rect(0, 0, WIN_W, CHROME_TOP, STATUS_BG);
+            gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP, STATUS_BG);
             // Pass key=0 to ui_textbox — we handle keyboard input outside arena.
             let show_focused: bool = match mode {
                 BrowserMode::Insert => url_focused,
                 _ => false,
             };
-            let mouse_focus: bool = ui_textbox(4, 4, WIN_W - 8, url_buf,
+            let mouse_focus: bool = ui_textbox(4, 4, canvas_width() - 8, url_buf,
                                      show_focused, prev_btn, 0,
                                      url_cursor, url_select_all);
             // Detect actual click (button-down transition) inside the URL bar
             let url_bar_btn: i32 = canvas_mouse_btn();
             let url_bar_mx: i32 = canvas_mouse_x();
             let url_bar_my: i32 = canvas_mouse_y();
-            let url_bar_hover: bool = url_bar_mx >= 4 and url_bar_mx < WIN_W - 4 and url_bar_my >= 4 and url_bar_my < 24;
+            let url_bar_hover: bool = url_bar_mx >= 4 and url_bar_mx < canvas_width() - 4 and url_bar_my >= 4 and url_bar_my < 24;
             let url_bar_clicked: bool = url_bar_hover and band(url_bar_btn, 1) == 1 and band(prev_btn, 1) == 0;
 
             match mode {
@@ -1657,7 +1655,7 @@ fn! main() {
                 let pg_u: Url = url_parse(current_url);
                 while len(word_map) > 0 { pop(word_map); };
                 render_node(dom_nodes, dom_root, x_ptr, y_ptr,
-                            scroll_y, WIN_W, page_links,
+                            scroll_y, canvas_width(), page_links,
                             FG_COLOR, BODY_FONT, 1, false, "", 0, false,
                             img_cache_idx, img_cache_data,
                             img_cache_w, img_cache_h,
@@ -1666,7 +1664,7 @@ fn! main() {
                             false, false, -1, [0], page_clickables,
                             dom_styles);
                 doc_height = y_ptr[0];
-                max_scroll = max_i32(doc_height - (WIN_H - CHROME_TOP - CHROME_BOT), 0);
+                max_scroll = max_i32(doc_height - (canvas_height() - CHROME_TOP - CHROME_BOT), 0);
                 if scroll_y > max_scroll { scroll_y = max_scroll; };
 
                 // Draw text selection highlight
@@ -1743,9 +1741,9 @@ fn! main() {
                 _ => false,
             };
             if show_search_bar {
-                let sy: i32 = WIN_H - CHROME_BOT - 24;
-                gfx_fill_rect(0, sy, WIN_W, 24, STATUS_BG);
-                gfx_rect(0, sy, WIN_W, 1, UI_BORDER);
+                let sy: i32 = canvas_height() - CHROME_BOT - 24;
+                gfx_fill_rect(0, sy, canvas_width(), 24, STATUS_BG);
+                gfx_rect(0, sy, canvas_width(), 1, UI_BORDER);
                 gfx_draw_text(4, sy + 8, "/", FG_COLOR, FONT_DEFAULT);
                 let st: str = str_from_chars(search_buf);
                 gfx_draw_text(12, sy + 8, st, FG_COLOR, FONT_DEFAULT);
@@ -1753,14 +1751,14 @@ fn! main() {
                 gfx_fill_rect(12 + len(search_buf) * FONT_W, sy + 8, 1, FONT_H, FG_COLOR);
             } else if search_active and str_len(search_query) > 0 {
                 // Show match count in status area
-                let sy: i32 = WIN_H - CHROME_BOT - 16;
+                let sy: i32 = canvas_height() - CHROME_BOT - 16;
                 let match_info: str = if len(search_match_y) > 0 {
                     let idx_display: i32 = search_match_idx + 1;
                     "/{search_query}  [{idx_display}/{len(search_match_y)}]  (n/N to navigate, Esc to clear)"
                 } else {
                     "/{search_query}  [no matches]"
                 };
-                gfx_fill_rect(0, sy, WIN_W, 16, STATUS_BG);
+                gfx_fill_rect(0, sy, canvas_width(), 16, STATUS_BG);
                 gfx_draw_text(4, sy + 4, match_info, SEARCH_HL, FONT_DEFAULT);
             };
 
@@ -1792,8 +1790,8 @@ fn! main() {
             };
 
             // Status bar
-            let sty: i32 = WIN_H - CHROME_BOT;
-            gfx_fill_rect(0, sty, WIN_W, CHROME_BOT, STATUS_BG);
+            let sty: i32 = canvas_height() - CHROME_BOT;
+            gfx_fill_rect(0, sty, canvas_width(), CHROME_BOT, STATUS_BG);
             let mode_str: str = match mode {
                 BrowserMode::Normal => "NORMAL",
                 BrowserMode::Insert => "INSERT",
