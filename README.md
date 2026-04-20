@@ -8,7 +8,8 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 
 - **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
 - **Omnibox search** — type any query in the address bar; non-URL input is sent to DuckDuckGo automatically, with autocomplete from your browsing history
-- **Reader mode** — `gr` strips navigation/header/footer/forms, narrows the content column to a readable ~640px width, and renders the main content for distraction-free reading
+- **Readable article column** — when a page has `<main>` or `<article>`, that subtree is automatically narrowed to ~640 CSS px and centered, so long articles don't run edge-to-edge on wide canvases
+- **Reader mode** — `gr` strips navigation/header/footer/forms and renders the main content for distraction-free reading
 - **Fragment navigation** — `#section` anchors scroll to the matching element; same-page fragment links skip the network round-trip
 - **Persistent history & bookmarks** — history is saved to `%APPDATA%\oscaweb_history.txt` (500 entries); `b` bookmarks the current page, `B` opens the bookmarks panel, `1`–`9` jumps to a saved site
 - **Runtime zoom** — `+`/`-` zoom in/out, `0` resets (1×–4×)
@@ -360,16 +361,24 @@ oscanweb/
 
 ## Reader Mode, Bookmarks & Zoom
 
+### Article column (default)
+
+When a page contains a `<main>` or `<article>` element, OscaWeb narrows
+that subtree to a readable ~640 CSS px and centers it (scales with the
+current zoom level), so article pages don't run edge-to-edge on wide
+canvases. Pages that already set their own `max-width` on the main
+content are left alone, as are utility pages with no `<main>` or
+`<article>` (homepages, search results, dashboards) — those keep the
+full viewport width.
+
 ### Reader mode (`gr`)
 
-Toggles a distraction-free view. If the page contains a `<main>` or
-`<article>` element, the renderer uses that subtree as the document root.
-Otherwise, `<nav>`, `<header>`, `<footer>`, `<aside>`, and `<form>`
-elements are hidden. In addition, the content column is narrowed to a
-readable ~640 CSS px and centered (scales with the current zoom level),
-so wide pages like Wikipedia articles and documentation sites don't run
-edge-to-edge. Pages that already set their own `max-width` are left
-alone. Press `gr` again to return to the full page.
+Toggles a distraction-free view on top of the article-column default.
+If the page contains a `<main>` or `<article>` element, the renderer
+uses that subtree as the document root. Otherwise, `<nav>`, `<header>`,
+`<footer>`, `<aside>`, and `<form>` elements are hidden. The same
+~640 CSS px column applies. Press `gr` again to return to the normal
+view.
 
 ### Fragment navigation
 
