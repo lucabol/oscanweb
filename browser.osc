@@ -1590,6 +1590,7 @@ fn! main() {
             // Follow mode hover explicitly asks for re-render below.
             let pos_matters: bool = sel_active;
             if key != 0 or mbtn != prev_btn or wheel != 0 or
+               canvas_resized() or
                (pos_matters and (mx != prev_mx or my != prev_my)) {
                 render_dirty = true;
                 if vlog_is_enabled() != 0 {
