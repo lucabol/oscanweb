@@ -2204,6 +2204,23 @@ fn! main() {
                 BrowserMode::Follow => {
                     if key == KEY_ESC {
                         mode = BrowserMode::Normal;
+                    } else if key == 70 {
+                        // F while in follow-chrome mode — hide chrome again
+                        // and return to normal. Symmetric with the F toggle
+                        // in Normal mode.
+                        mode = BrowserMode::Normal;
+                        while len(follow_input) > 0 { pop(follow_input); };
+                        while len(follow_links) > 0 { pop(follow_links); };
+                        if show_full {
+                            show_full = false;
+                            scroll_y = 0;
+                            pending_follow_chrome = false;
+                            if str_len(current_url) > 0 {
+                                nav_url = current_url;
+                                needs_navigate = true;
+                            };
+                            render_dirty = true;
+                        };
                     } else if key >= 97 and key <= 122 {
                         // push already happened outside arena
                         let typed: str = str_from_chars(follow_input);
