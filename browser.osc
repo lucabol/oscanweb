@@ -15,21 +15,28 @@ use "libs/ui.osc"
 let CHROME_TOP: i32 = 30;
 let CHROME_BOT: i32 = 20;
 let FONT_W: i32 = 8;
-let FONT_H: i32 = 8;
-let LINE_H: i32 = 12;
+// Body text defaults to the 12-row (_L) font variants — glyph advance stays
+// 8 px, but vertical cell is 12 rows.  FONT_H / LINE_H reflect that so the
+// body layout reserves enough vertical room.
+let FONT_H: i32 = 12;
+let LINE_H: i32 = 20;
 let PAD: i32 = 10;
 let MAX_REDIRECTS: i32 = 5;
 
 // ─── Font rendering helpers ─────────────────────────────
-// Font id constants (FONT_DEFAULT, FONT_PROPORTIONAL, ...) are defined in
-// libs/ui.osc and imported via `use "libs/ui.osc"` above.  All bundled fonts
-// share an 8×8 cell; scale is an integer multiplier applied uniformly.
+// Font id constants (FONT_DEFAULT, FONT_PROPORTIONAL, FONT_*_L, ...) are
+// defined in libs/ui.osc and imported via `use "libs/ui.osc"` above.  The
+// bundled fonts come in two cell heights: 8-row (compact) and 12-row (_L).
+// Body text uses the 12-row proportional variant by default; scale is an
+// integer multiplier applied uniformly on top.
 
 // Body text defaults.  Headings override scale; <pre>/<code>/<table> override
-// font back to FONT_DEFAULT.
-let BODY_FONT: i32 = FONT_PROPORTIONAL;
+// font to FONT_DEFAULT_L (the 12-row fixed-width variant) so mono runs keep
+// the same vertical metrics as surrounding body text.
+let BODY_FONT: i32 = FONT_PROPORTIONAL_L;
+let BODY_MONO_FONT: i32 = FONT_DEFAULT_L;
 
-fn line_h_of(scale: i32) -> i32 { 8 * scale + 4 }
+fn line_h_of(scale: i32) -> i32 { FONT_H * scale + 8 }
 
 // CSS line-height override helper: prefer computed style if set,
 // otherwise the scale-derived default.  Kept here so callers stay simple.
@@ -40,7 +47,7 @@ fn effective_line_h(styles: [ComputedStyle], idx: i32, scale: i32) -> i32 {
         line_h_of(scale)
     }
 }
-fn glyph_h_of(scale: i32) -> i32 { 8 * scale }
+fn glyph_h_of(scale: i32) -> i32 { FONT_H * scale }
 fn text_width_f(s: str, font: i32, scale: i32) -> i32 { gfx_text_width(s, font) * scale }
 
 // Heading scale lookup.  h1 biggest, h2/h3 medium, h4..h6 use color/bold only.
@@ -412,7 +419,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 draw_text_f(x_ptr[0], draw_y, word, color, font, scale);
             };
             if underline {
-                gfx_line(x_ptr[0], draw_y + gh + 1, x_ptr[0] + word_w, draw_y + gh + 1, color);
+                gfx_line(x_ptr[0], draw_y + gh - 2, x_ptr[0] + word_w, draw_y + gh - 2, color);
             };
             if strikethrough {
                 gfx_line(x_ptr[0], draw_y + gh / 2, x_ptr[0] + word_w, draw_y + gh / 2, color);
@@ -859,11 +866,11 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             for ci1 in 0..len(cells1) {
                 let raw: str = html_get_text_content(nodes, cells1[ci1]);
                 let txt: str = normalize_ws(raw);
-                let w_nat: i32 = text_width_f(txt, FONT_DEFAULT, 1);
+                let w_nat: i32 = text_width_f(txt, BODY_MONO_FONT, 1);
                 let ws: [str] = str_split(txt, " ");
                 let mut max_word_w: i32 = 0;
                 for wi in 0..len(ws) {
-                    let ww: i32 = text_width_f(ws[wi], FONT_DEFAULT, 1);
+                    let ww: i32 = text_width_f(ws[wi], BODY_MONO_FONT, 1);
                     if ww > max_word_w { max_word_w = ww; };
                 };
                 if w_nat > col_max[ci1] { col_max[ci1] = w_nat; };
@@ -945,7 +952,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             for ci3 in 0..len(cells2) {
                 let raw2: str = html_get_text_content(nodes, cells2[ci3]);
                 let inner_w: i32 = col_w[ci3] - cell_pad;
-                let ln: [str] = wrap_text_to_lines(raw2, inner_w, FONT_DEFAULT, 1);
+                let ln: [str] = wrap_text_to_lines(raw2, inner_w, BODY_MONO_FONT, 1);
                 if len(ln) > max_lines { max_lines = len(ln); };
                 push(cell_lines, ln);
             };
@@ -959,7 +966,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 for li in 0..len(lines) {
                     let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP + li * LINE_H;
                     if cy + FONT_H >= CHROME_TOP and cy < canvas_height() - CHROME_BOT {
-                        gfx_draw_text(cx, cy, lines[li], cc, FONT_DEFAULT);
+                        gfx_draw_text(cx, cy, lines[li], cc, BODY_MONO_FONT);
                     };
                 };
             };
@@ -1012,7 +1019,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         child_href = url_unwrap_tracking(html_get_attr(node, "href"));
     }
     else if str_eq(tag, "pre") {
-        child_color = CODE_FG; child_pre = true; child_font = FONT_DEFAULT;
+        child_color = CODE_FG; child_pre = true; child_font = BODY_MONO_FONT;
     }
     else if str_eq(tag, "code") {
         // Inherit verbatim layout from a parent <pre> (via in_pre), but
@@ -1020,10 +1027,10 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         // word-wrap — just in mono font and CODE_FG.  Forcing the pre
         // layout on inline <code> used to break line flow after every
         // occurrence.
-        child_color = CODE_FG; child_font = FONT_DEFAULT;
+        child_color = CODE_FG; child_font = BODY_MONO_FONT;
     }
     else if is_mono_tag(tag) {
-        child_color = CODE_FG; child_font = FONT_DEFAULT;
+        child_color = CODE_FG; child_font = BODY_MONO_FONT;
     }
     else if str_eq(tag, "ul") {
         child_indent = eff_indent + 20;
