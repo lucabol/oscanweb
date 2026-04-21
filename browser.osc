@@ -116,6 +116,10 @@ struct LinkInfo {
     h: i32,
     href: str,
     label: str,
+    // True when this link is inside site chrome (nav/aside/header/footer,
+    // or a node with a landmark role).  Used by the `F` hint mode to
+    // label only chrome links, complementing `f` which labels all.
+    chrome: bool,
 }
 
 // ─── Word position map (for text selection) ─────────────
@@ -354,7 +358,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 vp_top: i32, vp_width: i32, underline: bool,
                 links: [LinkInfo], href: str, search_q: str,
                 word_map: [WordInfo], strikethrough: bool, mark_bg: i32,
-                indent: i32) {
+                indent: i32, in_chrome: bool) {
     // Normalize whitespace: collapse \n, \r, \t into spaces so split by space
     // doesn't emit them as visible "words" (which render as missing-glyph ?).
     let raw_chars: [i32] = str_to_chars(text);
@@ -394,7 +398,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 if draw_y_check + gh >= CHROME_TOP and draw_y_check < canvas_height() - CHROME_BOT {
                     let li: LinkInfo = LinkInfo {
                         x: link_x, y: link_y, w: link_w, h: lh,
-                        href: href, label: "",
+                        href: href, label: "", chrome: in_chrome,
                     };
                     push(links, li);
                     link_recorded = true;
@@ -442,7 +446,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
         if link_y + gh >= CHROME_TOP and link_y < canvas_height() - CHROME_BOT {
             let li: LinkInfo = LinkInfo {
                 x: link_x, y: link_y, w: link_w, h: lh,
-                href: href, label: "",
+                href: href, label: "", chrome: in_chrome,
             };
             push(links, li);
         };
@@ -594,19 +598,46 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 strikethrough: bool, force_underline: bool, mark_bg: i32,
                 ol_counter: [i32], clickables: [ClickInfo],
                 styles: [ComputedStyle],
-                reader_on: bool,
-                fragment_target: str, fragment_y_out: [i32]) {
+                trim_chrome: bool, in_chrome: bool,
+                fragment_target: str, fragment_y_out: [i32],
+                outline_idx: [i32], outline_y_out: [i32]) {
     let node: HtmlNode = nodes[idx];
 
-    // Reader mode: hide chrome tags at block level.  Main content lives in
-    // <main>/<article>; removing nav/header/footer/aside strips site chrome
-    // without a heavy readability scorer.
-    if reader_on and not node.is_text {
+    // Compute whether this node is itself chrome (nav/aside/header/footer,
+    // or carries a landmark ARIA role).  Used both to skip the subtree
+    // when trim_chrome is set and to mark descendant links so `F` can
+    // label chrome-only hints.
+    let mut node_is_chrome: bool = false;
+    if not node.is_text {
         let rt: str = node.tag;
         if str_eq(rt, "nav") or str_eq(rt, "header") or str_eq(rt, "footer") or
-           str_eq(rt, "aside") or str_eq(rt, "form") {
+           str_eq(rt, "aside") {
+            node_is_chrome = true;
+        } else {
+            let role_attr: str = html_get_attr(node, "role");
+            if str_len(role_attr) > 0 {
+                if str_eq(role_attr, "navigation") or str_eq(role_attr, "banner") or
+                   str_eq(role_attr, "complementary") or str_eq(role_attr, "contentinfo") or
+                   str_eq(role_attr, "search") {
+                    node_is_chrome = true;
+                };
+            };
+        };
+    };
+
+    // Trim chrome: when enabled, drop nav/header/footer/aside/form subtrees,
+    // role-based landmarks (navigation/banner/complementary/contentinfo/search),
+    // aria-hidden="true", and hidden="" elements.  Main content lives in
+    // <main>/<article>; stripping these surfaces it without a heavy
+    // readability scorer.
+    if trim_chrome and not node.is_text {
+        let rt2: str = node.tag;
+        if str_eq(rt2, "form") or node_is_chrome {
             return;
         };
+        let aria_hidden: str = html_get_attr(node, "aria-hidden");
+        if str_eq(aria_hidden, "true") { return; };
+        if map_has(node.attrs, "hidden") { return; };
     };
 
     // Fragment target: record absolute y when we encounter the node whose id
@@ -616,6 +647,18 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         let nid: str = html_get_attr(node, "id");
         if str_len(nid) > 0 and str_eq(nid, fragment_target) {
             fragment_y_out[0] = y_ptr[0];
+        };
+    };
+
+    // Outline: record absolute y for any node whose index appears in
+    // outline_idx.  Populated by the outline-panel builder for H1-H3
+    // elements so `t` can jump to each heading.
+    if not node.is_text and len(outline_idx) > 0 {
+        for oi in 0..len(outline_idx) {
+            if outline_idx[oi] == idx and outline_y_out[oi] < 0 {
+                outline_y_out[oi] = y_ptr[0];
+                break;
+            };
         };
     };
 
@@ -659,7 +702,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             if str_len(str_trim(text)) == 0 { return; };
             render_text(text, x_ptr, y_ptr, color, font, scale, vp_top, vp_width,
                         is_link or force_underline, links, link_href, search_q, word_map,
-                        strikethrough, mark_bg, indent);
+                        strikethrough, mark_bg, indent, in_chrome);
         };
         return;
     };
@@ -1130,6 +1173,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     let onclick_y_start: i32 = y_ptr[0] - vp_top + CHROME_TOP;
 
     // Render children via sibling walk
+    let child_in_chrome: bool = in_chrome or node_is_chrome;
     let mut child: i32 = node.first_child;
     while child != -1 {
         render_node(nodes, child, x_ptr, y_ptr, vp_top, eff_vp_width,
@@ -1142,7 +1186,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     search_q, word_map,
                     child_strike, child_uline, child_markbg, child_ol,
                     clickables, styles,
-                    reader_on, fragment_target, fragment_y_out);
+                    trim_chrome, child_in_chrome,
+                    fragment_target, fragment_y_out,
+                    outline_idx, outline_y_out);
         child = nodes[child].next_sibling;
     };
 
@@ -1220,6 +1266,54 @@ fn! find_main_content_idx(nodes: [HtmlNode], start_idx: i32) -> i32 {
     -1
 }
 
+// ─── Outline (table of contents) builder ────────────────
+// Walks the DOM under `start_idx` and records every H1/H2/H3 element's
+// node index, its heading level, and a short text label.  The y
+// coordinate is filled later by render_node via outline_y_out.
+fn! build_outline(nodes: [HtmlNode], start_idx: i32,
+                  o_idx: [i32], o_level: [i32], o_text: [str]) {
+    if start_idx < 0 or start_idx >= len(nodes) { return; };
+    let node: HtmlNode = nodes[start_idx];
+    if not node.is_text {
+        let tg: str = node.tag;
+        let mut lvl: i32 = 0;
+        if str_eq(tg, "h1") { lvl = 1; }
+        else if str_eq(tg, "h2") { lvl = 2; }
+        else if str_eq(tg, "h3") { lvl = 3; };
+        if lvl > 0 {
+            let txt: str = str_trim(html_get_text_content(nodes, start_idx));
+            if str_len(txt) > 0 {
+                push(o_idx, start_idx);
+                push(o_level, lvl);
+                let disp: str = if str_len(txt) > 60 {
+                    str_concat(str_slice(txt, 0, 60), "…")
+                } else {
+                    txt
+                };
+                push(o_text, disp);
+            };
+        };
+    };
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        build_outline(nodes, child, o_idx, o_level, o_text);
+        child = nodes[child].next_sibling;
+    };
+}
+
+// ─── User stylesheet ────────────────────────────────────
+// A small author-loses-to-user cascade overlay that hides common site
+// chrome selectors on the major CMSes.  Applied after page stylesheets
+// so source order breaks ties in its favour; every declaration is
+// marked !important to beat inline style="" and author !important of
+// equal specificity that happens to come earlier.  Skipped when the
+// user toggles `gR` (show_full), so "show me the whole page" still
+// works as an escape hatch.
+fn user_stylesheet() -> str {
+    "nav {{ display: none !important; }} aside {{ display: none !important; }} .sidebar {{ display: none !important; }} .site-header {{ display: none !important; }} .global-nav {{ display: none !important; }} .skip-link {{ display: none !important; }} .cookie-banner {{ display: none !important; }} .cookie-notice {{ display: none !important; }} .hamburger {{ display: none !important; }} .menu-toggle {{ display: none !important; }} #mw-navigation {{ display: none !important; }} #mw-panel {{ display: none !important; }} .mw-panel {{ display: none !important; }} .mw-jump-link {{ display: none !important; }} .vector-main-menu {{ display: none !important; }} .vector-pinned-container {{ display: none !important; }} .vector-header-container {{ display: none !important; }} .vector-sticky-header {{ display: none !important; }} .vector-toc {{ display: none !important; }} .mw-footer {{ display: none !important; }} #p-lang {{ display: none !important; }} .navbox {{ display: none !important; }} .sister-project {{ display: none !important; }} .interlanguage-link {{ display: none !important; }}"
+}
+
+
 // ─── Main ────────────────────────────────────────────────
 
 fn! main() {
@@ -1274,6 +1368,20 @@ fn! main() {
 
     // Reader mode
     let mut reader_on: bool = false;
+
+    // Show-full override: `gR` toggles.  When true, renders the whole
+    // DOM from dom_root and disables chrome trimming (role/aria/hidden
+    // and nav/aside/etc filters).  Default is false so pages with a
+    // <main>/<article> landmark get rendered from that subtree and
+    // site chrome is hidden automatically.
+    let mut show_full: bool = false;
+
+    // Outline overlay (table of contents)
+    let mut show_outline: bool = false;
+    let mut outline_idx: [i32] = [];
+    let mut outline_y: [i32] = [];
+    let mut outline_text: [str] = [];
+    let mut outline_level: [i32] = [];
 
     // Runtime zoom (1..4)
     let mut body_scale: i32 = 1;
@@ -1654,6 +1762,21 @@ fn! main() {
                             };
                         };
                         vlog_int("css rules", len(css_rules));
+                        // Rebuild outline from the page's headings so `t`
+                        // can jump between them.  Populated now; y values
+                        // are filled in during render_node.
+                        while len(outline_idx) > 0 { pop(outline_idx); };
+                        while len(outline_y) > 0 { pop(outline_y); };
+                        while len(outline_text) > 0 { pop(outline_text); };
+                        while len(outline_level) > 0 { pop(outline_level); };
+                        build_outline(dom_nodes, dom_root,
+                                      outline_idx, outline_level, outline_text);
+                        for _oy in 0..len(outline_idx) { push(outline_y, -1); };
+                        // Inject user stylesheet (site-chrome hiders) last,
+                        // unless the user has toggled show_full.
+                        if not show_full {
+                            css_order = css_parse(css_rules, user_stylesheet(), css_order);
+                        };
                         css_compute_all(dom_nodes, dom_root, css_rules, dom_styles);
 
                         done = true;
@@ -1751,6 +1874,7 @@ fn! main() {
                                     x: lk.x, y: lk.y, w: lk.w, h: lk.h,
                                     href: lk.href,
                                     label: if li < len(labels) { labels[li] } else { "" },
+                                    chrome: lk.chrome,
                                 };
                                 push(follow_links, labeled);
                             };
@@ -1765,6 +1889,70 @@ fn! main() {
                             nav_url = current_url;
                             needs_navigate = true;
                         };
+                    } else if key == 82 and last_key == 103 {
+                        // gR — toggle show_full (show whole page / re-enable
+                        // auto chrome trim).  Reloads so the user stylesheet
+                        // and CSS cascade are rebuilt with the new flag.
+                        show_full = not show_full;
+                        scroll_y = 0;
+                        if str_len(current_url) > 0 {
+                            nav_url = current_url;
+                            needs_navigate = true;
+                        };
+                        render_dirty = true;
+                    } else if key == 109 and last_key == 103 {
+                        // gm — jump to main content landmark.  Uses the
+                        // existing fragment machinery by scanning the
+                        // outline's y values (populated by the last render).
+                        if page_loaded and dom_root >= 0 {
+                            let main_jx: i32 = find_main_content_idx(dom_nodes, dom_root);
+                            if main_jx >= 0 {
+                                // A subsequent render pass is the cheapest
+                                // way to resolve the y coordinate of the
+                                // landmark — reuse fragment_y_out with an
+                                // idx-synthesized id.  Fallback: scroll to
+                                // first outline item.
+                                if len(outline_y) > 0 and outline_y[0] >= 0 {
+                                    scroll_y = outline_y[0];
+                                    if scroll_y > max_scroll { scroll_y = max_scroll; };
+                                } else {
+                                    scroll_y = 0;
+                                };
+                                render_dirty = true;
+                            };
+                        };
+                    } else if key == 70 {
+                        // F — follow link in site chrome (nav/header/footer/
+                        // aside or landmark-role'd containers).  Useful
+                        // when chrome is auto-trimmed by default but the
+                        // user needs a menu entry.
+                        if page_loaded {
+                            mode = BrowserMode::Follow;
+                            while len(follow_input) > 0 { pop(follow_input); };
+                            while len(follow_links) > 0 { pop(follow_links); };
+                            // Build the subset first so labels are dense.
+                            let mut chrome_links: [LinkInfo] = [];
+                            for fli in 0..len(page_links) {
+                                if page_links[fli].chrome {
+                                    push(chrome_links, page_links[fli]);
+                                };
+                            };
+                            let labels2: [str] = make_hint_labels(len(chrome_links));
+                            for fli2 in 0..len(chrome_links) {
+                                let lk2: LinkInfo = chrome_links[fli2];
+                                let labeled2: LinkInfo = LinkInfo {
+                                    x: lk2.x, y: lk2.y, w: lk2.w, h: lk2.h,
+                                    href: lk2.href,
+                                    label: if fli2 < len(labels2) { labels2[fli2] } else { "" },
+                                    chrome: lk2.chrome,
+                                };
+                                push(follow_links, labeled2);
+                            };
+                        };
+                    } else if key == 116 {
+                        // t — toggle outline (table of contents) panel
+                        show_outline = not show_outline;
+                        render_dirty = true;
                     } else if key == 112 {
                         // p — paste URL from clipboard and navigate
                         let paste_result: Result<str, str> = clipboard_get();
@@ -1887,6 +2075,16 @@ fn! main() {
                     } else if key == 66 {
                         // B — open bookmarks overlay
                         show_bookmarks = not show_bookmarks;
+                    } else if key >= 49 and key <= 57 and show_outline {
+                        // 1..9 jumps to the Nth outline item (takes
+                        // precedence over bookmarks when outline is open).
+                        let opick: i32 = key - 49;
+                        if opick < len(outline_y) and outline_y[opick] >= 0 {
+                            scroll_y = outline_y[opick];
+                            if scroll_y < 0 { scroll_y = 0; };
+                            if scroll_y > max_scroll { scroll_y = max_scroll; };
+                            render_dirty = true;
+                        };
                     } else if key >= 49 and key <= 57 and show_bookmarks {
                         // 1..9 opens the corresponding bookmark
                         let pick: i32 = key - 49;
@@ -2200,12 +2398,13 @@ fn! main() {
                 let pg_u: Url = url_parse(current_url);
                 while len(word_map) > 0 { pop(word_map); };
                 // Find the main content subtree. Used by both reader mode
-                // (as the render root, after stripping chrome) and by the
-                // default view (to narrow just that subtree to a readable
-                // measure, without touching nav/header/footer).
+                // and the default view: when a landmark (<main>/<article>)
+                // is present, we render from there and skip all the site
+                // chrome that precedes it in the DOM.  The user can force
+                // the full page with `gR` (sets show_full).
                 let main_idx: i32 = find_main_content_idx(dom_nodes, dom_root);
                 let mut render_root: i32 = dom_root;
-                if reader_on and main_idx >= 0 { render_root = main_idx; };
+                if not show_full and main_idx >= 0 { render_root = main_idx; };
                 // Narrow the main content column to a readable ~640 CSS px
                 // (roughly 65-75 characters per line) and center it. Scales
                 // with zoom so the same character count fits per line at any
@@ -2220,7 +2419,7 @@ fn! main() {
                 // lay themselves out sensibly.
                 let mut narrow_idx: i32 = -1;
                 if reader_on { narrow_idx = render_root; }
-                else if main_idx >= 0 { narrow_idx = main_idx; };
+                else if main_idx >= 0 and not show_full { narrow_idx = main_idx; };
                 // Remember any mutation so we can restore it after rendering
                 // (otherwise the page would stay mutated across frames).
                 let mut narrow_override: bool = false;
@@ -2239,6 +2438,7 @@ fn! main() {
                     };
                 };
                 let fragment_y_out: [i32] = [-1];
+                let trim_chrome: bool = reader_on or not show_full;
                 render_node(dom_nodes, render_root, x_ptr, y_ptr,
                             scroll_y, canvas_width(), page_links,
                             FG_COLOR, BODY_FONT, body_scale, false, "", 0, false,
@@ -2248,7 +2448,9 @@ fn! main() {
                             search_query, word_map,
                             false, false, -1, [0], page_clickables,
                             dom_styles,
-                            reader_on, pending_fragment, fragment_y_out);
+                            trim_chrome, false,
+                            pending_fragment, fragment_y_out,
+                            outline_idx, outline_y);
                 // Restore original ComputedStyle fields so toggling reader
                 // mode off (or navigating away) cleanly reverts the narrowing.
                 if narrow_override {
@@ -2407,18 +2609,21 @@ fn! main() {
             // Help overlay
             if show_help {
                 let hx: i32 = 200;
-                let hy: i32 = 100;
-                gfx_fill_rect(hx, hy, 600, 350, STATUS_BG);
-                gfx_rect(hx, hy, 600, 350, UI_BORDER);
+                let hy: i32 = 60;
+                gfx_fill_rect(hx, hy, 600, 440, STATUS_BG);
+                gfx_rect(hx, hy, 600, 440, UI_BORDER);
                 gfx_draw_text(hx + 10, hy + 10, "OscaWeb Keyboard Shortcuts", H1_COLOR, FONT_DEFAULT);
                 let mut ky: i32 = hy + 30;
                 gfx_draw_text(hx + 10, ky, "j / k        Scroll down / up", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "d / u        Half page down / up", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "gg / G       Top / bottom", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "f            Follow link (hints)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "gm           Jump to <main>/<article>", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "f / F        Follow link (all / chrome only)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "t            Toggle outline (ToC); 1-9 jumps", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL  (type to search)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "r            Reload page", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "gr           Toggle reader mode", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "gR           Toggle show-full (disables chrome trim)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "b / B        Bookmark / bookmarks list", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "+ / - / 0    Zoom in / out / reset", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "p            Paste URL and go", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
@@ -2432,6 +2637,38 @@ fn! main() {
                 gfx_draw_text(hx + 10, ky, "?            Toggle this help", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
                 ky += LINE_H;
                 gfx_draw_text(hx + 10, ky, "Mouse click on links also works!", LINK_COLOR, FONT_DEFAULT);
+            };
+
+            // Outline (table of contents) overlay
+            if show_outline {
+                let ox: i32 = 200;
+                let oy0: i32 = 100;
+                let on_cap: i32 = if len(outline_idx) < 9 { len(outline_idx) } else { 9 };
+                let oh: i32 = 40 + max_i32(on_cap, 1) * LINE_H;
+                gfx_fill_rect(ox, oy0, 600, oh, STATUS_BG);
+                gfx_rect(ox, oy0, 600, oh, UI_BORDER);
+                gfx_draw_text(ox + 10, oy0 + 10,
+                    "Outline (press 1-9 to jump, t to close)",
+                    H1_COLOR, FONT_DEFAULT);
+                if len(outline_idx) == 0 {
+                    gfx_draw_text(ox + 10, oy0 + 30,
+                        "No headings on this page.", HR_COLOR, FONT_DEFAULT);
+                } else {
+                    let mut oky: i32 = oy0 + 30;
+                    for oki in 0..on_cap {
+                        let orn: i32 = oki + 1;
+                        let olv: i32 = outline_level[oki];
+                        let indent_str: str = if olv == 1 { "" }
+                                              else if olv == 2 { "  " }
+                                              else { "    " };
+                        let color_h: i32 = if olv == 1 { H1_COLOR }
+                                           else if olv == 2 { H2_COLOR }
+                                           else { H3_COLOR };
+                        let o_row: str = "{orn}. {indent_str}{outline_text[oki]}";
+                        gfx_draw_text(ox + 10, oky, o_row, color_h, FONT_DEFAULT);
+                        oky += LINE_H;
+                    };
+                };
             };
 
             // Bookmarks overlay
@@ -2475,9 +2712,10 @@ fn! main() {
                 "Top"
             };
             let reader_flag: str = if reader_on { " | READER" } else { "" };
+            let full_flag: str = if show_full { " | FULL" } else { "" };
             let zoom_flag: str = if body_scale > 1 { " | zoom {body_scale}x" } else { "" };
             gfx_draw_text(4, sty + 6,
-                " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}{reader_flag}{zoom_flag}",
+                " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}{reader_flag}{full_flag}{zoom_flag}",
                 FG_COLOR, FONT_DEFAULT);
 
             prev_btn = canvas_mouse_btn();
