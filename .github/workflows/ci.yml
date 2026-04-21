@@ -71,6 +71,12 @@ jobs:
 
           OSCAN_DIR=$(dirname "$(realpath "$OSCAN_BIN")")
           chmod +x "$OSCAN_DIR/${{ matrix.oscan_bin }}" 2>/dev/null || true
+          # On Windows, convert to a native path so pwsh in later steps can
+          # find oscan.exe via PATH (bash-style paths like /d/a/... are not
+          # recognized by PowerShell).
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            OSCAN_DIR=$(cygpath -w "$OSCAN_DIR")
+          fi
           echo "$OSCAN_DIR" >> "$GITHUB_PATH"
           echo "Oscan installed from $OSCAN_DIR"
 

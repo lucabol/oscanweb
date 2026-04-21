@@ -115,8 +115,17 @@ $JsBridge = Join-Path $ProjectDir 'js_bridge.c'
 $QuickJs  = Join-Path $ProjectDir 'libs' 'quickjs' 'quickjs.c'
 if ((Test-Path $JsBridge) -and (Test-Path $QuickJs)) {
     $oscanArgs += @('--extra-c', $JsBridge, '--extra-c', $QuickJs,
-                    '--extra-cflags', "-I$ProjectDir",
-                    '--extra-cflags', '-lwinhttp')
+                    '--extra-cflags', "-I$ProjectDir")
+    if ($_isWin) {
+        $oscanArgs += @('--extra-cflags', '-lwinhttp')
+    } elseif ($IsLinux) {
+        # Oscan's freestanding musl toolchain doesn't auto-link libc, but
+        # js_bridge.c/quickjs.c need it. Allow duplicate definitions because
+        # Oscan's runtime provides a few libc symbols that conflict with
+        # musl's libc.a.
+        $oscanArgs += @('--extra-cflags', '-Wl,--allow-multiple-definition',
+                        '--extra-cflags', '-lc')
+    }
 }
 
 if ($Verbose) { $oscanArgs += @('--warnings', '--verbose') }
