@@ -1268,6 +1268,36 @@ fn! find_main_content_idx(nodes: [HtmlNode], start_idx: i32) -> i32 {
     -1
 }
 
+// Return true if the DOM subtree rooted at `start_idx` contains any
+// chrome element (nav/header/footer/aside, or a landmark ARIA role).
+// Used by the main loop to decide whether to draw the floating "F"
+// button that lets mouse users reach trimmed chrome links.
+fn! dom_has_chrome(nodes: [HtmlNode], start_idx: i32) -> bool {
+    if start_idx < 0 or start_idx >= len(nodes) { return false; };
+    let node: HtmlNode = nodes[start_idx];
+    if not node.is_text {
+        let tg: str = node.tag;
+        if str_eq(tg, "nav") or str_eq(tg, "header") or str_eq(tg, "footer") or
+           str_eq(tg, "aside") {
+            return true;
+        };
+        let role_attr: str = html_get_attr(node, "role");
+        if str_len(role_attr) > 0 {
+            if str_eq(role_attr, "navigation") or str_eq(role_attr, "banner") or
+               str_eq(role_attr, "complementary") or str_eq(role_attr, "contentinfo") or
+               str_eq(role_attr, "search") {
+                return true;
+            };
+        };
+    };
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        if dom_has_chrome(nodes, child) { return true; };
+        child = nodes[child].next_sibling;
+    };
+    false
+}
+
 // ─── Outline (table of contents) builder ────────────────
 // Walks the DOM under `start_idx` and records every H1/H2/H3 element's
 // node index, its heading level, and a short text label.  The y
@@ -1389,6 +1419,11 @@ fn! main() {
     // we flip show_full + reload and defer the follow-mode activation
     // until after the next render populates page_links.
     let mut pending_follow_chrome: bool = false;
+
+    // True if the current page contains any chrome element (nav, header,
+    // footer, aside, or landmark-role'd container).  Drives the visibility
+    // of the floating "F" button when chrome is auto-trimmed.
+    let mut has_chrome: bool = false;
 
     // Runtime zoom (1..4)
     let mut body_scale: i32 = 1;
@@ -1783,6 +1818,8 @@ fn! main() {
                         build_outline(dom_nodes, dom_root,
                                       outline_idx, outline_level, outline_text);
                         for _oy in 0..len(outline_idx) { push(outline_y, -1); };
+                        // Detect chrome presence for the floating "F" button.
+                        has_chrome = dom_has_chrome(dom_nodes, dom_root);
                         // Inject user stylesheet (site-chrome hiders) last,
                         // unless the user has toggled show_full.
                         if not show_full {
@@ -2756,9 +2793,42 @@ fn! main() {
                 " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}{reader_flag}{full_flag}{zoom_flag}",
                 FG_COLOR, FONT_DEFAULT);
 
+            // Floating "F" button — visible whenever the page has chrome
+            // (nav/header/footer/aside) that is currently trimmed.  Gives
+            // mouse users a visible affordance equivalent to the F key.
+            let mut f_btn_clicked: bool = false;
+            let is_insert: bool = match mode {
+                BrowserMode::Insert => true,
+                _ => false,
+            };
+            if page_loaded and has_chrome and not show_full and not is_insert {
+                let fb_w: i32 = 24;
+                let fb_h: i32 = 24;
+                let fb_x: i32 = canvas_width() - fb_w - 8;
+                let fb_y: i32 = CHROME_TOP + 8;
+                // Simulated translucency: draw a darker shadow first so the
+                // button blends with page content beneath.
+                gfx_fill_rect(fb_x, fb_y, fb_w, fb_h, STATUS_BG);
+                f_btn_clicked = ui_button(fb_x, fb_y, fb_w, fb_h, "F", prev_btn);
+            };
+
             prev_btn = canvas_mouse_btn();
                 render_dirty = false;
                 vlog_msg("render end", "");
+
+                // Handle floating F-button click — same semantics as F key.
+                if f_btn_clicked and page_loaded {
+                    if not show_full {
+                        show_full = true;
+                        scroll_y = 0;
+                        pending_follow_chrome = true;
+                        if str_len(current_url) > 0 {
+                            nav_url = current_url;
+                            needs_navigate = true;
+                        };
+                        render_dirty = true;
+                    };
+                };
 
                 // If the user pressed F while chrome was trimmed, we
                 // reloaded with show_full=true; now that page_links has
