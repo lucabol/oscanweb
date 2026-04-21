@@ -9,6 +9,8 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
 - **Omnibox search** — type any query in the address bar; non-URL input is sent to DuckDuckGo automatically, with autocomplete from your browsing history
 - **Readable article column** — when a page has `<main>` or `<article>`, that subtree is automatically narrowed to ~640 CSS px and centered, so long articles don't run edge-to-edge on wide canvases
+- **Chrome trimming** — navigation sidebars, hamburger menus, and site chrome (nav/header/footer/aside, `#mw-panel`, `.vector-*`, `.sidebar`, etc.) are hidden by default on heavy pages like Wikipedia; `gR` toggles the full page back on
+- **Outline / table of contents** — `t` opens a heading overlay (H1–H3); `1`–`9` jumps to a section. `gm` jumps straight to the main content.
 - **Reader mode** — `gr` strips navigation/header/footer/forms and renders the main content for distraction-free reading
 - **Fragment navigation** — `#section` anchors scroll to the matching element; same-page fragment links skip the network round-trip
 - **Persistent history & bookmarks** — history is saved to `%APPDATA%\oscaweb_history.txt` (500 entries); `b` bookmarks the current page, `B` opens the bookmarks panel, `1`–`9` jumps to a saved site
@@ -64,14 +66,19 @@ OscaWeb uses Vimium-inspired keybindings. Press `?` in the browser to toggle the
 
 | Key   | Action                            |
 | ----- | --------------------------------- |
-| `f`   | Follow link (hint mode)           |
+| `f`   | Follow link (hint mode, all links)|
+| `F`   | Follow link — chrome links only (nav/header/footer/aside) |
 | `o`   | Open URL / search (clear bar)     |
 | `O`   | Edit current URL                  |
 | `r`   | Reload page                       |
 | `gr`  | Toggle reader mode                |
+| `gR`  | Toggle show-full (disable chrome trim + user stylesheet, reloads) |
+| `gm`  | Jump to `<main>`/`<article>` / first heading |
+| `t`   | Toggle outline (table of contents) |
+| `1`–`9` | Jump to Nth heading (when outline is open) |
 | `b`   | Bookmark / un-bookmark current URL|
 | `B`   | Toggle bookmarks panel            |
-| `1`–`9` | Open Nth bookmark (while panel open) |
+| `1`–`9` | Open Nth bookmark (when bookmarks panel is open) |
 | `p`   | Paste URL from clipboard and go   |
 | `yy`  | Copy current URL to clipboard     |
 | `H`   | Go back in history                |
@@ -370,6 +377,31 @@ canvases. Pages that already set their own `max-width` on the main
 content are left alone, as are utility pages with no `<main>` or
 `<article>` (homepages, search results, dashboards) — those keep the
 full viewport width.
+
+### Chrome trimming (default)
+
+On heavy pages like Wikipedia, the hamburger menus, sidebars, language
+lists, and footer chrome can dominate the viewport. By default OscaWeb:
+
+1. Uses `<main>`/`<article>` as the render root when present, cutting
+   site chrome at the tree level.
+2. Applies a built-in user stylesheet that hides common chrome
+   selectors (`nav`, `aside`, `.sidebar`, `.hamburger`, `#mw-panel`,
+   `.vector-main-menu`, `.navbox`, etc.) with `!important`.
+3. Skips `<form>`, `aria-hidden="true"`, and `hidden` attribute nodes
+   while rendering.
+
+Press `gR` to toggle **show-full** — this disables all three trimming
+layers and reloads the page so you can see the original document.
+The status bar shows `FULL` when this mode is active. Press `F` (capital)
+for follow-mode hints on **chrome-only** links (useful to jump to
+"edit", "talk", or site-nav items that were hidden).
+
+### Outline / table of contents (`t`)
+
+Press `t` to toggle an outline panel listing H1/H2/H3 headings in
+document order. `1`–`9` jumps to the Nth heading. `gm` jumps straight
+to the first heading (handy on pages that have no `<main>`).
 
 ### Reader mode (`gr`)
 
