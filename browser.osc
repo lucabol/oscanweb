@@ -1970,11 +1970,11 @@ fn! main() {
                             };
                         };
                     } else if key == 70 {
-                        // F — follow link in site chrome (nav/header/footer/
-                        // aside or landmark-role'd containers).  If chrome is
-                        // currently trimmed (show_full == false), flip it on
-                        // and reload so chrome links appear in page_links;
-                        // the pending flag activates follow mode after render.
+                        // F — toggle chrome visibility.  When chrome is
+                        // trimmed, reveal it and enter follow-hint mode on
+                        // the freshly-populated chrome links.  When chrome
+                        // is already visible, hide it again (returning to
+                        // the trimmed view).
                         if page_loaded {
                             if not show_full {
                                 show_full = true;
@@ -1986,26 +1986,17 @@ fn! main() {
                                 };
                                 render_dirty = true;
                             } else {
-                                mode = BrowserMode::Follow;
+                                show_full = false;
+                                scroll_y = 0;
+                                pending_follow_chrome = false;
+                                mode = BrowserMode::Normal;
                                 while len(follow_input) > 0 { pop(follow_input); };
                                 while len(follow_links) > 0 { pop(follow_links); };
-                                let mut chrome_links: [LinkInfo] = [];
-                                for fli in 0..len(page_links) {
-                                    if page_links[fli].chrome {
-                                        push(chrome_links, page_links[fli]);
-                                    };
+                                if str_len(current_url) > 0 {
+                                    nav_url = current_url;
+                                    needs_navigate = true;
                                 };
-                                let labels2: [str] = make_hint_labels(len(chrome_links));
-                                for fli2 in 0..len(chrome_links) {
-                                    let lk2: LinkInfo = chrome_links[fli2];
-                                    let labeled2: LinkInfo = LinkInfo {
-                                        x: lk2.x, y: lk2.y, w: lk2.w, h: lk2.h,
-                                        href: lk2.href,
-                                        label: if fli2 < len(labels2) { labels2[fli2] } else { "" },
-                                        chrome: lk2.chrome,
-                                    };
-                                    push(follow_links, labeled2);
-                                };
+                                render_dirty = true;
                             };
                         };
                     } else if key == 116 {
@@ -2793,23 +2784,25 @@ fn! main() {
                 " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}{reader_flag}{full_flag}{zoom_flag}",
                 FG_COLOR, FONT_DEFAULT);
 
-            // Floating "F" button — visible whenever the page has chrome
-            // (nav/header/footer/aside) that is currently trimmed.  Gives
-            // mouse users a visible affordance equivalent to the F key.
+            // Floating "F for Nav" button — visible whenever the page has
+            // chrome (nav/header/footer/aside) that is currently trimmed.
+            // Gives mouse users a visible affordance equivalent to the F
+            // key toggle.
             let mut f_btn_clicked: bool = false;
             let is_insert: bool = match mode {
                 BrowserMode::Insert => true,
                 _ => false,
             };
             if page_loaded and has_chrome and not show_full and not is_insert {
-                let fb_w: i32 = 24;
-                let fb_h: i32 = 24;
-                let fb_x: i32 = canvas_width() - fb_w - 8;
+                let fb_label: str = "'F' for Nav";
+                let fb_w: i32 = gfx_text_width(fb_label, FONT_DEFAULT) + 16;
+                let fb_h: i32 = 22;
+                let fb_x: i32 = 8;
                 let fb_y: i32 = CHROME_TOP + 8;
                 // Simulated translucency: draw a darker shadow first so the
                 // button blends with page content beneath.
                 gfx_fill_rect(fb_x, fb_y, fb_w, fb_h, STATUS_BG);
-                f_btn_clicked = ui_button(fb_x, fb_y, fb_w, fb_h, "F", prev_btn);
+                f_btn_clicked = ui_button(fb_x, fb_y, fb_w, fb_h, fb_label, prev_btn);
             };
 
             prev_btn = canvas_mouse_btn();
