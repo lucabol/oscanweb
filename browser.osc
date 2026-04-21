@@ -2404,12 +2404,38 @@ fn! main() {
             let fs_btn_h: i32 = 20;
             let fs_btn_x: i32 = canvas_width() - fs_btn_w - 4;
             let fs_btn_y: i32 = 4;
-            let fs_label: str = if small_font { "8pt" } else { "12pt" };
+            // Label: bitmap mode shows 8pt/12pt; TT mode shows the live
+            // body pixel size so the user can see what each click produced.
+            let fs_label: str = if tt_cfg[TTC_ENABLED] != 0 {
+                str_concat(i32_to_str(tt_cfg[TTC_BASE_BODY_PX]), "pt")
+            } else if small_font { "8pt" } else { "12pt" };
             let fs_clicked: bool = ui_button(fs_btn_x, fs_btn_y, fs_btn_w, fs_btn_h,
                                              fs_label, prev_btn);
             if fs_clicked {
-                small_font = not small_font;
-                tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
+                if tt_cfg[TTC_ENABLED] != 0 {
+                    // Cycle body size through 8→12→16→20→24→28→8.  Mono
+                    // tracks 2 px below body (readable code without looking
+                    // oversized).
+                    let sizes: [i32] = [8, 12, 16, 20, 24, 28];
+                    let mut cur_idx: i32 = -1;
+                    for si in 0..len(sizes) {
+                        if sizes[si] == tt_cfg[TTC_BASE_BODY_PX] { cur_idx = si; };
+                    };
+                    let next_idx: i32 = if cur_idx < 0 { 1 } else { (cur_idx + 1) % len(sizes) };
+                    tt_cfg[TTC_BASE_BODY_PX] = sizes[next_idx];
+                    tt_cfg[TTC_BASE_MONO_PX] = sizes[next_idx] - 2;
+                    if tt_cfg[TTC_BASE_MONO_PX] < 8 { tt_cfg[TTC_BASE_MONO_PX] = 8; };
+                    tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
+                    // Persist.
+                    let mut pl3: [str] = [];
+                    push(pl3, i32_to_str(tt_cfg[TTC_ENABLED]));
+                    push(pl3, i32_to_str(tt_cfg[TTC_BASE_BODY_PX]));
+                    push(pl3, i32_to_str(tt_cfg[TTC_BASE_MONO_PX]));
+                    storage_save_lines("font.cfg", pl3);
+                } else {
+                    small_font = not small_font;
+                    tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
+                };
             };
             // TrueType toggle button just to the left of the font-size button.
             // Disabled (greyed label) when no regular TT font loaded.
