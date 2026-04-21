@@ -1385,6 +1385,11 @@ fn! main() {
     let mut outline_text: [str] = [];
     let mut outline_level: [i32] = [];
 
+    // When `F` is pressed on a page whose chrome is currently hidden,
+    // we flip show_full + reload and defer the follow-mode activation
+    // until after the next render populates page_links.
+    let mut pending_follow_chrome: bool = false;
+
     // Runtime zoom (1..4)
     let mut body_scale: i32 = 1;
 
@@ -1929,30 +1934,41 @@ fn! main() {
                         };
                     } else if key == 70 {
                         // F — follow link in site chrome (nav/header/footer/
-                        // aside or landmark-role'd containers).  Useful
-                        // when chrome is auto-trimmed by default but the
-                        // user needs a menu entry.
+                        // aside or landmark-role'd containers).  If chrome is
+                        // currently trimmed (show_full == false), flip it on
+                        // and reload so chrome links appear in page_links;
+                        // the pending flag activates follow mode after render.
                         if page_loaded {
-                            mode = BrowserMode::Follow;
-                            while len(follow_input) > 0 { pop(follow_input); };
-                            while len(follow_links) > 0 { pop(follow_links); };
-                            // Build the subset first so labels are dense.
-                            let mut chrome_links: [LinkInfo] = [];
-                            for fli in 0..len(page_links) {
-                                if page_links[fli].chrome {
-                                    push(chrome_links, page_links[fli]);
+                            if not show_full {
+                                show_full = true;
+                                scroll_y = 0;
+                                pending_follow_chrome = true;
+                                if str_len(current_url) > 0 {
+                                    nav_url = current_url;
+                                    needs_navigate = true;
                                 };
-                            };
-                            let labels2: [str] = make_hint_labels(len(chrome_links));
-                            for fli2 in 0..len(chrome_links) {
-                                let lk2: LinkInfo = chrome_links[fli2];
-                                let labeled2: LinkInfo = LinkInfo {
-                                    x: lk2.x, y: lk2.y, w: lk2.w, h: lk2.h,
-                                    href: lk2.href,
-                                    label: if fli2 < len(labels2) { labels2[fli2] } else { "" },
-                                    chrome: lk2.chrome,
+                                render_dirty = true;
+                            } else {
+                                mode = BrowserMode::Follow;
+                                while len(follow_input) > 0 { pop(follow_input); };
+                                while len(follow_links) > 0 { pop(follow_links); };
+                                let mut chrome_links: [LinkInfo] = [];
+                                for fli in 0..len(page_links) {
+                                    if page_links[fli].chrome {
+                                        push(chrome_links, page_links[fli]);
+                                    };
                                 };
-                                push(follow_links, labeled2);
+                                let labels2: [str] = make_hint_labels(len(chrome_links));
+                                for fli2 in 0..len(chrome_links) {
+                                    let lk2: LinkInfo = chrome_links[fli2];
+                                    let labeled2: LinkInfo = LinkInfo {
+                                        x: lk2.x, y: lk2.y, w: lk2.w, h: lk2.h,
+                                        href: lk2.href,
+                                        label: if fli2 < len(labels2) { labels2[fli2] } else { "" },
+                                        chrome: lk2.chrome,
+                                    };
+                                    push(follow_links, labeled2);
+                                };
                             };
                         };
                     } else if key == 116 {
@@ -2743,6 +2759,34 @@ fn! main() {
             prev_btn = canvas_mouse_btn();
                 render_dirty = false;
                 vlog_msg("render end", "");
+
+                // If the user pressed F while chrome was trimmed, we
+                // reloaded with show_full=true; now that page_links has
+                // been populated by this render, activate follow-chrome
+                // mode automatically.
+                if pending_follow_chrome and page_loaded {
+                    pending_follow_chrome = false;
+                    mode = BrowserMode::Follow;
+                    while len(follow_input) > 0 { pop(follow_input); };
+                    while len(follow_links) > 0 { pop(follow_links); };
+                    let mut pfc_chrome: [LinkInfo] = [];
+                    for pfi in 0..len(page_links) {
+                        if page_links[pfi].chrome {
+                            push(pfc_chrome, page_links[pfi]);
+                        };
+                    };
+                    let pfc_labels: [str] = make_hint_labels(len(pfc_chrome));
+                    for pfi2 in 0..len(pfc_chrome) {
+                        let pfc_lk: LinkInfo = pfc_chrome[pfi2];
+                        let pfc_labeled: LinkInfo = LinkInfo {
+                            x: pfc_lk.x, y: pfc_lk.y, w: pfc_lk.w, h: pfc_lk.h,
+                            href: pfc_lk.href,
+                            label: if pfi2 < len(pfc_labels) { pfc_labels[pfi2] } else { "" },
+                            chrome: pfc_lk.chrome,
+                        };
+                        push(follow_links, pfc_labeled);
+                    };
+                };
             };
             prev_mx = canvas_mouse_x();
             prev_my = canvas_mouse_y();
