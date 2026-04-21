@@ -1653,6 +1653,14 @@ fn! main() {
         };
 
         // Main frame body (no arena block — avoids array realloc corruption)
+        //
+        // `nav_pass` lets us re-execute the navigate block once if input
+        // dispatch sets `needs_navigate=true` (e.g. the F key reveals chrome
+        // by reloading with show_full).  Without this retry the reload
+        // would be deferred to the next frame and any follow-up key press
+        // would race with it.
+        let mut nav_pass: i32 = 0;
+        while nav_pass < 2 {
 
             // ── Navigation ──────────────────────────
             if needs_navigate {
@@ -1881,6 +1889,7 @@ fn! main() {
             };
 
             // ── Input handling ──────────────────────
+            if nav_pass == 0 {
             match mode {
                 BrowserMode::Normal => {
                     if key == KEY_ESC {
@@ -2294,6 +2303,11 @@ fn! main() {
                     // push/pop for search_buf handled outside arena
                 },
             };
+            };  // end if nav_pass == 0
+
+            nav_pass += 1;
+            if not needs_navigate { break; };
+        };  // end while nav_pass
 
             // ── Mouse: selection and link clicks ──────
             let mx: i32 = canvas_mouse_x();
@@ -2843,28 +2857,36 @@ fn! main() {
                 // If the user pressed F while chrome was trimmed, we
                 // reloaded with show_full=true; now that page_links has
                 // been populated by this render, activate follow-chrome
-                // mode automatically.
-                if pending_follow_chrome and page_loaded {
-                    pending_follow_chrome = false;
-                    mode = BrowserMode::Follow;
-                    while len(follow_input) > 0 { pop(follow_input); };
-                    while len(follow_links) > 0 { pop(follow_links); };
+                // mode automatically.  Wait until the reload has actually
+                // rendered chrome links — the very first render after F is
+                // still the trimmed view, and activating then would leave
+                // follow_links empty and any keypress would immediately
+                // exit Follow mode.
+                if pending_follow_chrome and page_loaded and show_full and
+                   not needs_navigate {
                     let mut pfc_chrome: [LinkInfo] = [];
                     for pfi in 0..len(page_links) {
                         if page_links[pfi].chrome {
                             push(pfc_chrome, page_links[pfi]);
                         };
                     };
-                    let pfc_labels: [str] = make_hint_labels(len(pfc_chrome));
-                    for pfi2 in 0..len(pfc_chrome) {
-                        let pfc_lk: LinkInfo = pfc_chrome[pfi2];
-                        let pfc_labeled: LinkInfo = LinkInfo {
-                            x: pfc_lk.x, y: pfc_lk.y, w: pfc_lk.w, h: pfc_lk.h,
-                            href: pfc_lk.href,
-                            label: if pfi2 < len(pfc_labels) { pfc_labels[pfi2] } else { "" },
-                            chrome: pfc_lk.chrome,
+                    if len(pfc_chrome) > 0 {
+                        pending_follow_chrome = false;
+                        mode = BrowserMode::Follow;
+                        while len(follow_input) > 0 { pop(follow_input); };
+                        while len(follow_links) > 0 { pop(follow_links); };
+                        let pfc_labels: [str] = make_hint_labels(len(pfc_chrome));
+                        for pfi2 in 0..len(pfc_chrome) {
+                            let pfc_lk: LinkInfo = pfc_chrome[pfi2];
+                            let pfc_labeled: LinkInfo = LinkInfo {
+                                x: pfc_lk.x, y: pfc_lk.y, w: pfc_lk.w, h: pfc_lk.h,
+                                href: pfc_lk.href,
+                                label: if pfi2 < len(pfc_labels) { pfc_labels[pfi2] } else { "" },
+                                chrome: pfc_lk.chrome,
+                            };
+                            push(follow_links, pfc_labeled);
                         };
-                        push(follow_links, pfc_labeled);
+                        render_dirty = true;
                     };
                 };
             };
