@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x86_64
+            oscan_archive: oscan-v{OSCAN_VER}-windows-x86_64-full.zip
+            oscan_bin: oscan.exe
+          - os: ubuntu-latest
+            name: linux-x86_64
+            oscan_archive: oscan-v{OSCAN_VER}-linux-x86_64-full.tar.xz
+            oscan_bin: oscan
+          - os: macos-15
+            name: macos-x86_64
+            oscan_archive: oscan-v{OSCAN_VER}-macos-x86_64.tar.gz
+            oscan_bin: oscan
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Oscan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          OSCAN_TAG=$(gh release view --repo lucabol/Oscan --json tagName --jq .tagName)
+          OSCAN_VER="${OSCAN_TAG#v}"
+          echo "Installing Oscan $OSCAN_TAG"
+
+          ARCHIVE_TEMPLATE="${{ matrix.oscan_archive }}"
+          ARCHIVE_NAME="${ARCHIVE_TEMPLATE//\{OSCAN_VER\}/$OSCAN_VER}"
+
+          gh release download "$OSCAN_TAG" \
+            --repo lucabol/Oscan \
+            --pattern "$ARCHIVE_NAME" \
+            --dir /tmp/oscan-dl
+
+          cd /tmp/oscan-dl
+          case "$ARCHIVE_NAME" in
+            *.zip)     unzip -q "$ARCHIVE_NAME" ;;
+            *.tar.xz)  tar xf "$ARCHIVE_NAME" ;;
+            *.tar.gz)  tar xf "$ARCHIVE_NAME" ;;
+          esac
+
+          OSCAN_BIN=$(find . -name "${{ matrix.oscan_bin }}" -type f | head -1)
+          if [ -z "$OSCAN_BIN" ]; then
+            echo "ERROR: Could not find ${{ matrix.oscan_bin }}"
+            find . -type f
+            exit 1
+          fi
+
+          OSCAN_DIR=$(dirname "$(realpath "$OSCAN_BIN")")
+          chmod +x "$OSCAN_DIR/${{ matrix.oscan_bin }}" 2>/dev/null || true
+          echo "$OSCAN_DIR" >> "$GITHUB_PATH"
+          echo "Oscan installed from $OSCAN_DIR"
+
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1 -V
+
+      - name: Tests
+        shell: pwsh
+        run: ./build.ps1 -Test -V

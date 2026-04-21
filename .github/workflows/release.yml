@@ -115,10 +115,8 @@ jobs:
           ls -la "build/${{ matrix.output }}"
 
       - name: Run tests
-        shell: bash
-        run: |
-          oscan tests/test_url.osc --run
-          oscan tests/test_html.osc --run
+        shell: pwsh
+        run: ./build.ps1 -Test -V
 
       - name: Upload binary
         uses: actions/upload-artifact@v4

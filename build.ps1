@@ -71,9 +71,20 @@ if ($Test) {
                            '--extra-cflags', "-I$ProjectDir")
             if ($_isWin) {
                 $testArgs += @('--extra-cflags', '-lwinhttp')
+            } elseif ($IsLinux) {
+                # Match release.yml: Oscan's freestanding musl toolchain doesn't
+                # auto-link libc, but js_bridge.c/quickjs.c need it. Allow
+                # duplicate definitions because Oscan's runtime provides a few
+                # libc symbols that conflict with musl's libc.a.
+                $testArgs += @('--extra-cflags', '-Wl,--allow-multiple-definition',
+                               '--extra-cflags', '-lc')
             }
         }
-        & oscan @testArgs 2>&1 | Out-Null
+        if ($Verbose) {
+            & oscan @testArgs
+        } else {
+            & oscan @testArgs 2>&1 | Out-Null
+        }
         if ($LASTEXITCODE -eq 0) {
             Write-Host 'PASS' -ForegroundColor Green
         } else {
