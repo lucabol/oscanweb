@@ -158,7 +158,11 @@ fn! draw_text_f(x: i32, y: i32, s: str, color: i32, font: i32, scale: i32,
             // baseline lands where the bitmap font's baseline would.
             let ascent: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_ASCENT] } else { tt_cfg[TTC_REG_ASCENT] };
             let baseline: i32 = y + ascent * scale + 2;
-            tt_draw_text(x, baseline, s, h, (px * scale) as f64, color)
+            // OscaWeb colors are packed as 0x00RRGGBB (alpha byte = 0).
+            // tt_draw_text uses the alpha channel as coverage weight, so
+            // we must force full alpha or the glyph renders invisibly.
+            let tt_color: i32 = bor(color, bshl(255, 24));
+            tt_draw_text(x, baseline, s, h, (px * scale) as f64, tt_color)
         } else {
             if scale <= 1 {
                 gfx_draw_text(x, y, s, color, font)
