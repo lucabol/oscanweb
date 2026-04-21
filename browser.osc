@@ -556,10 +556,26 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 draw_text_f(x_ptr[0], draw_y, word, color, font, scale, tt_reg, tt_mono, tt_cfg);
             };
             if underline {
-                gfx_line(x_ptr[0], draw_y + gh - 2, x_ptr[0] + word_w, draw_y + gh - 2, color);
+                // TT: draw just below the baseline (ascent + a few px of
+                // leading).  Bitmap: near the bottom of the glyph cell.
+                let ul_y: i32 = if tt_on(tt_reg, tt_cfg) {
+                    let asc: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_ASCENT] } else { tt_cfg[TTC_REG_ASCENT] };
+                    draw_y + asc * scale + 5
+                } else {
+                    draw_y + gh - 2
+                };
+                gfx_line(x_ptr[0], ul_y, x_ptr[0] + word_w, ul_y, color);
             };
             if strikethrough {
-                gfx_line(x_ptr[0], draw_y + gh / 2, x_ptr[0] + word_w, draw_y + gh / 2, color);
+                // TT: run through the x-height (roughly 0.35 of ascent
+                // below the baseline, negative y).
+                let sk_y: i32 = if tt_on(tt_reg, tt_cfg) {
+                    let asc2: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_ASCENT] } else { tt_cfg[TTC_REG_ASCENT] };
+                    draw_y + asc2 * scale + 2 - (asc2 * scale * 35) / 100
+                } else {
+                    draw_y + gh / 2
+                };
+                gfx_line(x_ptr[0], sk_y, x_ptr[0] + word_w, sk_y, color);
             };
             // Record word position for text selection
             let wi: WordInfo = WordInfo { x: x_ptr[0], y: draw_y, w: word_w, text: word };
