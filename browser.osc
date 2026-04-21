@@ -595,7 +595,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 ol_counter: [i32], clickables: [ClickInfo],
                 styles: [ComputedStyle],
                 reader_on: bool,
-                fragment_target: str, fragment_y_out: [i32]) {
+                fragment_target: str, fragment_y_out: [i32],
+                body_mono_font: i32) {
     let node: HtmlNode = nodes[idx];
 
     // Reader mode: hide chrome tags at block level.  Main content lives in
@@ -866,11 +867,11 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             for ci1 in 0..len(cells1) {
                 let raw: str = html_get_text_content(nodes, cells1[ci1]);
                 let txt: str = normalize_ws(raw);
-                let w_nat: i32 = text_width_f(txt, BODY_MONO_FONT, 1);
+                let w_nat: i32 = text_width_f(txt, body_mono_font, 1);
                 let ws: [str] = str_split(txt, " ");
                 let mut max_word_w: i32 = 0;
                 for wi in 0..len(ws) {
-                    let ww: i32 = text_width_f(ws[wi], BODY_MONO_FONT, 1);
+                    let ww: i32 = text_width_f(ws[wi], body_mono_font, 1);
                     if ww > max_word_w { max_word_w = ww; };
                 };
                 if w_nat > col_max[ci1] { col_max[ci1] = w_nat; };
@@ -952,7 +953,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             for ci3 in 0..len(cells2) {
                 let raw2: str = html_get_text_content(nodes, cells2[ci3]);
                 let inner_w: i32 = col_w[ci3] - cell_pad;
-                let ln: [str] = wrap_text_to_lines(raw2, inner_w, BODY_MONO_FONT, 1);
+                let ln: [str] = wrap_text_to_lines(raw2, inner_w, body_mono_font, 1);
                 if len(ln) > max_lines { max_lines = len(ln); };
                 push(cell_lines, ln);
             };
@@ -966,7 +967,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 for li in 0..len(lines) {
                     let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP + li * LINE_H;
                     if cy + FONT_H >= CHROME_TOP and cy < canvas_height() - CHROME_BOT {
-                        gfx_draw_text(cx, cy, lines[li], cc, BODY_MONO_FONT);
+                        gfx_draw_text(cx, cy, lines[li], cc, body_mono_font);
                     };
                 };
             };
@@ -1019,7 +1020,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         child_href = url_unwrap_tracking(html_get_attr(node, "href"));
     }
     else if str_eq(tag, "pre") {
-        child_color = CODE_FG; child_pre = true; child_font = BODY_MONO_FONT;
+        child_color = CODE_FG; child_pre = true; child_font = body_mono_font;
     }
     else if str_eq(tag, "code") {
         // Inherit verbatim layout from a parent <pre> (via in_pre), but
@@ -1027,10 +1028,10 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         // word-wrap — just in mono font and CODE_FG.  Forcing the pre
         // layout on inline <code> used to break line flow after every
         // occurrence.
-        child_color = CODE_FG; child_font = BODY_MONO_FONT;
+        child_color = CODE_FG; child_font = body_mono_font;
     }
     else if is_mono_tag(tag) {
-        child_color = CODE_FG; child_font = BODY_MONO_FONT;
+        child_color = CODE_FG; child_font = body_mono_font;
     }
     else if str_eq(tag, "ul") {
         child_indent = eff_indent + 20;
@@ -1142,7 +1143,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     search_q, word_map,
                     child_strike, child_uline, child_markbg, child_ol,
                     clickables, styles,
-                    reader_on, fragment_target, fragment_y_out);
+                    reader_on, fragment_target, fragment_y_out,
+                    body_mono_font);
         child = nodes[child].next_sibling;
     };
 
@@ -1277,6 +1279,10 @@ fn! main() {
 
     // Runtime zoom (1..4)
     let mut body_scale: i32 = 1;
+
+    // Body font size toggle: false = 12pt (12-row cell), true = 8pt (8-row cell).
+    // Flipped by the "12pt"/"8pt" button in the top chrome.
+    let mut small_font: bool = false;
 
     // Pending scroll target when the URL fragment (#id) matches an element.
     let mut pending_fragment: str = "";
@@ -2150,19 +2156,32 @@ fn! main() {
 
             // Address bar
             gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP, STATUS_BG);
+            // Font-size toggle button on the right edge of the chrome.
+            // Label shows the *current* size; clicking flips to the other.
+            let fs_btn_w: i32 = 44;
+            let fs_btn_h: i32 = 20;
+            let fs_btn_x: i32 = canvas_width() - fs_btn_w - 4;
+            let fs_btn_y: i32 = 4;
+            let fs_label: str = if small_font { "8pt" } else { "12pt" };
+            let fs_clicked: bool = ui_button(fs_btn_x, fs_btn_y, fs_btn_w, fs_btn_h,
+                                             fs_label, prev_btn);
+            if fs_clicked {
+                small_font = not small_font;
+            };
             // Pass key=0 to ui_textbox — we handle keyboard input outside arena.
             let show_focused: bool = match mode {
                 BrowserMode::Insert => url_focused,
                 _ => false,
             };
-            let mouse_focus: bool = ui_textbox(4, 4, canvas_width() - 8, url_buf,
+            let url_bar_w: i32 = canvas_width() - 8 - fs_btn_w - 4;
+            let mouse_focus: bool = ui_textbox(4, 4, url_bar_w, url_buf,
                                      show_focused, prev_btn, 0,
                                      url_cursor, url_select_all);
             // Detect actual click (button-down transition) inside the URL bar
             let url_bar_btn: i32 = canvas_mouse_btn();
             let url_bar_mx: i32 = canvas_mouse_x();
             let url_bar_my: i32 = canvas_mouse_y();
-            let url_bar_hover: bool = url_bar_mx >= 4 and url_bar_mx < canvas_width() - 4 and url_bar_my >= 4 and url_bar_my < 24;
+            let url_bar_hover: bool = url_bar_mx >= 4 and url_bar_mx < 4 + url_bar_w and url_bar_my >= 4 and url_bar_my < 24;
             let url_bar_clicked: bool = url_bar_hover and band(url_bar_btn, 1) == 1 and band(prev_btn, 1) == 0;
 
             match mode {
@@ -2239,16 +2258,19 @@ fn! main() {
                     };
                 };
                 let fragment_y_out: [i32] = [-1];
+                let body_font_eff: i32 = if small_font { FONT_PROPORTIONAL } else { BODY_FONT };
+                let body_mono_eff: i32 = if small_font { FONT_DEFAULT } else { BODY_MONO_FONT };
                 render_node(dom_nodes, render_root, x_ptr, y_ptr,
                             scroll_y, canvas_width(), page_links,
-                            FG_COLOR, BODY_FONT, body_scale, false, "", 0, false,
+                            FG_COLOR, body_font_eff, body_scale, false, "", 0, false,
                             img_cache_idx, img_cache_data,
                             img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
                             search_query, word_map,
                             false, false, -1, [0], page_clickables,
                             dom_styles,
-                            reader_on, pending_fragment, fragment_y_out);
+                            reader_on, pending_fragment, fragment_y_out,
+                            body_mono_eff);
                 // Restore original ComputedStyle fields so toggling reader
                 // mode off (or navigating away) cleanly reverts the narrowing.
                 if narrow_override {
