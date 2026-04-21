@@ -238,7 +238,7 @@ fn! css_parse_color(raw: str) -> i32 {
 
 // Base line height in pixels, matching browser.osc LINE_H.  Kept here so
 // css.osc doesn't depend on browser.osc.  Update both together.
-let CSS_BASE_LINE_H: i32 = 12;
+let CSS_BASE_LINE_H: i32 = 20;
 
 // Parse a single length token.  Returns (px, pct) pair encoded as two ints:
 //   px >= 0 : concrete pixel value
