@@ -55,7 +55,7 @@ let BODY_MONO_FONT: i32 = FONT_DEFAULT_L;
 
 // TT config array indices.
 let TTC_ENABLED: i32 = 0;
-let TTC_BODY_PX: i32 = 1;
+let TTC_BODY_PX: i32 = 1;        // Effective (possibly scaled by small_font)
 let TTC_MONO_PX: i32 = 2;
 let TTC_REG_ASCENT: i32 = 3;
 let TTC_REG_LINEH: i32 = 4;
@@ -63,7 +63,34 @@ let TTC_REG_SPACEW: i32 = 5;
 let TTC_MONO_ASCENT: i32 = 6;
 let TTC_MONO_LINEH: i32 = 7;
 let TTC_MONO_SPACEW: i32 = 8;
-let TTC_LEN: i32 = 9;
+let TTC_BASE_BODY_PX: i32 = 9;   // "12pt" size, what Ctrl+/- adjusts
+let TTC_BASE_MONO_PX: i32 = 10;
+let TTC_LEN: i32 = 11;
+
+// Recompute effective sizes + cached metrics.  Called whenever the TT
+// state changes (toggle, size change, small_font flip).  When small
+// mode is on, effective size is ~70% of base so the 8pt/12pt chrome
+// button visibly shrinks TT text too.
+fn! tt_recache(tt_reg: handle, tt_mono: handle, tt_cfg: [i32], small_font: bool) {
+    let body_base: i32 = tt_cfg[TTC_BASE_BODY_PX];
+    let mono_base: i32 = tt_cfg[TTC_BASE_MONO_PX];
+    let mut body_eff: i32 = if small_font { (body_base * 7) / 10 } else { body_base };
+    let mut mono_eff: i32 = if small_font { (mono_base * 7) / 10 } else { mono_base };
+    if body_eff < 8 { body_eff = 8; };
+    if mono_eff < 8 { mono_eff = 8; };
+    tt_cfg[TTC_BODY_PX] = body_eff;
+    tt_cfg[TTC_MONO_PX] = mono_eff;
+    if (tt_reg as i64) != (0 as i64) {
+        tt_cfg[TTC_REG_ASCENT] = tt_ascent(tt_reg, body_eff as f64);
+        tt_cfg[TTC_REG_LINEH] = tt_line_height(tt_reg, body_eff as f64);
+        tt_cfg[TTC_REG_SPACEW] = tt_text_width(tt_reg, " ", body_eff as f64);
+    };
+    if (tt_mono as i64) != (0 as i64) {
+        tt_cfg[TTC_MONO_ASCENT] = tt_ascent(tt_mono, mono_eff as f64);
+        tt_cfg[TTC_MONO_LINEH] = tt_line_height(tt_mono, mono_eff as f64);
+        tt_cfg[TTC_MONO_SPACEW] = tt_text_width(tt_mono, " ", mono_eff as f64);
+    };
+}
 
 // Is TT active for body rendering?  Requires both "enabled" flag and a
 // valid regular handle.
@@ -1408,9 +1435,11 @@ fn! main() {
     let mut tt_reg: handle = (0 as i64) as handle;
     let mut tt_mono: handle = (0 as i64) as handle;
     let mut tt_cfg: [i32] = [];
-    for _tti in 0..9 { push(tt_cfg, 0); };
-    tt_cfg[TTC_BODY_PX] = 14;
-    tt_cfg[TTC_MONO_PX] = 13;
+    for _tti in 0..11 { push(tt_cfg, 0); };
+    tt_cfg[TTC_BASE_BODY_PX] = 20;
+    tt_cfg[TTC_BASE_MONO_PX] = 18;
+    tt_cfg[TTC_BODY_PX] = 20;
+    tt_cfg[TTC_MONO_PX] = 18;
 
     // Try loading system fonts.  If unavailable, TT stays disabled and
     // the renderer falls back silently to bitmap.
@@ -1445,29 +1474,19 @@ fn! main() {
     };
     if len(tt_persist) >= 2 {
         match parse_i32(str_trim(tt_persist[1])) {
-            Result::Ok(bp) => { if bp >= 8 and bp <= 48 { tt_cfg[TTC_BODY_PX] = bp; }; },
+            Result::Ok(bp) => { if bp >= 8 and bp <= 48 { tt_cfg[TTC_BASE_BODY_PX] = bp; }; },
             Result::Err(_) => {},
         };
     };
     if len(tt_persist) >= 3 {
         match parse_i32(str_trim(tt_persist[2])) {
-            Result::Ok(mp) => { if mp >= 8 and mp <= 48 { tt_cfg[TTC_MONO_PX] = mp; }; },
+            Result::Ok(mp) => { if mp >= 8 and mp <= 48 { tt_cfg[TTC_BASE_MONO_PX] = mp; }; },
             Result::Err(_) => {},
         };
     };
     // If user had TT enabled but fonts failed to load, turn it off.
     if (tt_reg as i64) == (0 as i64) { tt_cfg[TTC_ENABLED] = 0; };
-    // Cache per-size metrics (ascent + line height + space width).
-    if (tt_reg as i64) != (0 as i64) {
-        tt_cfg[TTC_REG_ASCENT] = tt_ascent(tt_reg, tt_cfg[TTC_BODY_PX] as f64);
-        tt_cfg[TTC_REG_LINEH] = tt_line_height(tt_reg, tt_cfg[TTC_BODY_PX] as f64);
-        tt_cfg[TTC_REG_SPACEW] = tt_text_width(tt_reg, " ", tt_cfg[TTC_BODY_PX] as f64);
-    };
-    if (tt_mono as i64) != (0 as i64) {
-        tt_cfg[TTC_MONO_ASCENT] = tt_ascent(tt_mono, tt_cfg[TTC_MONO_PX] as f64);
-        tt_cfg[TTC_MONO_LINEH] = tt_line_height(tt_mono, tt_cfg[TTC_MONO_PX] as f64);
-        tt_cfg[TTC_MONO_SPACEW] = tt_text_width(tt_mono, " ", tt_cfg[TTC_MONO_PX] as f64);
-    };
+    tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
 
     // Pending scroll target when the URL fragment (#id) matches an element.
     let mut pending_fragment: str = "";
@@ -1572,31 +1591,21 @@ fn! main() {
                 // 45 '-', 61 '=' are the raw ASCII; without Ctrl they'd
                 // type into insert mode, so only fire here in Normal.
                 if key == 43 or key == 61 {
-                    if tt_cfg[TTC_BODY_PX] < 48 { tt_cfg[TTC_BODY_PX] = tt_cfg[TTC_BODY_PX] + 1; tt_changed = true; };
-                    if tt_cfg[TTC_MONO_PX] < 48 { tt_cfg[TTC_MONO_PX] = tt_cfg[TTC_MONO_PX] + 1; };
+                    if tt_cfg[TTC_BASE_BODY_PX] < 48 { tt_cfg[TTC_BASE_BODY_PX] = tt_cfg[TTC_BASE_BODY_PX] + 1; tt_changed = true; };
+                    if tt_cfg[TTC_BASE_MONO_PX] < 48 { tt_cfg[TTC_BASE_MONO_PX] = tt_cfg[TTC_BASE_MONO_PX] + 1; };
                 };
                 if key == 45 {
-                    if tt_cfg[TTC_BODY_PX] > 8 { tt_cfg[TTC_BODY_PX] = tt_cfg[TTC_BODY_PX] - 1; tt_changed = true; };
-                    if tt_cfg[TTC_MONO_PX] > 8 { tt_cfg[TTC_MONO_PX] = tt_cfg[TTC_MONO_PX] - 1; };
+                    if tt_cfg[TTC_BASE_BODY_PX] > 8 { tt_cfg[TTC_BASE_BODY_PX] = tt_cfg[TTC_BASE_BODY_PX] - 1; tt_changed = true; };
+                    if tt_cfg[TTC_BASE_MONO_PX] > 8 { tt_cfg[TTC_BASE_MONO_PX] = tt_cfg[TTC_BASE_MONO_PX] - 1; };
                 };
             };
             if tt_changed {
-                // Recompute cached metrics for the new size.
-                if (tt_reg as i64) != (0 as i64) {
-                    tt_cfg[TTC_REG_ASCENT] = tt_ascent(tt_reg, tt_cfg[TTC_BODY_PX] as f64);
-                    tt_cfg[TTC_REG_LINEH] = tt_line_height(tt_reg, tt_cfg[TTC_BODY_PX] as f64);
-                    tt_cfg[TTC_REG_SPACEW] = tt_text_width(tt_reg, " ", tt_cfg[TTC_BODY_PX] as f64);
-                };
-                if (tt_mono as i64) != (0 as i64) {
-                    tt_cfg[TTC_MONO_ASCENT] = tt_ascent(tt_mono, tt_cfg[TTC_MONO_PX] as f64);
-                    tt_cfg[TTC_MONO_LINEH] = tt_line_height(tt_mono, tt_cfg[TTC_MONO_PX] as f64);
-                    tt_cfg[TTC_MONO_SPACEW] = tt_text_width(tt_mono, " ", tt_cfg[TTC_MONO_PX] as f64);
-                };
+                tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
                 // Persist.
                 let mut pl2: [str] = [];
                 push(pl2, i32_to_str(tt_cfg[TTC_ENABLED]));
-                push(pl2, i32_to_str(tt_cfg[TTC_BODY_PX]));
-                push(pl2, i32_to_str(tt_cfg[TTC_MONO_PX]));
+                push(pl2, i32_to_str(tt_cfg[TTC_BASE_BODY_PX]));
+                push(pl2, i32_to_str(tt_cfg[TTC_BASE_MONO_PX]));
                 storage_save_lines("font.cfg", pl2);
             };
         };
@@ -2400,6 +2409,7 @@ fn! main() {
                                              fs_label, prev_btn);
             if fs_clicked {
                 small_font = not small_font;
+                tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
             };
             // TrueType toggle button just to the left of the font-size button.
             // Disabled (greyed label) when no regular TT font loaded.
@@ -2410,11 +2420,12 @@ fn! main() {
                                              tt_label, prev_btn);
             if tt_clicked and (tt_reg as i64) != (0 as i64) {
                 tt_cfg[TTC_ENABLED] = if tt_cfg[TTC_ENABLED] != 0 { 0 } else { 1 };
+                tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
                 // Persist new state.
                 let mut pl: [str] = [];
                 push(pl, i32_to_str(tt_cfg[TTC_ENABLED]));
-                push(pl, i32_to_str(tt_cfg[TTC_BODY_PX]));
-                push(pl, i32_to_str(tt_cfg[TTC_MONO_PX]));
+                push(pl, i32_to_str(tt_cfg[TTC_BASE_BODY_PX]));
+                push(pl, i32_to_str(tt_cfg[TTC_BASE_MONO_PX]));
                 storage_save_lines("font.cfg", pl);
             };
             // Pass key=0 to ui_textbox — we handle keyboard input outside arena.
