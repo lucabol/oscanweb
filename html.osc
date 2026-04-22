@@ -86,6 +86,28 @@ fn! html_get_text_content(nodes: [HtmlNode], idx: i32) -> str {
 
 // ─── Entity Decoding ─────────────────────────────────────
 
+// Emit a Unicode codepoint as UTF-8 bytes into `out`.
+// Oscan strings are byte arrays: str_from_chars truncates i32 to its low 8
+// bits, so callers that want non-ASCII characters to render correctly must
+// push the UTF-8 byte sequence, not the raw codepoint.
+fn! utf8_emit(out: [i32], cp: i32) {
+    if cp < 128 {
+        push(out, cp);
+    } else if cp < 2048 {
+        push(out, 192 + (cp / 64));
+        push(out, 128 + (cp % 64));
+    } else if cp < 65536 {
+        push(out, 224 + (cp / 4096));
+        push(out, 128 + ((cp / 64) % 64));
+        push(out, 128 + (cp % 64));
+    } else {
+        push(out, 240 + (cp / 262144));
+        push(out, 128 + ((cp / 4096) % 64));
+        push(out, 128 + ((cp / 64) % 64));
+        push(out, 128 + (cp % 64));
+    };
+}
+
 fn! html_hex_to_i32(s: str) -> i32 {
     let chars: [i32] = str_to_chars(s);
     let mut result: i32 = 0;
@@ -125,65 +147,65 @@ fn! html_entity_decode(s: str) -> str {
                 };
                 let entity: str = str_from_chars(ent_chars);
                 if str_eq(entity, "amp") {
-                    push(out, 38); i = end + 1;
+                    utf8_emit(out, 38); i = end + 1;
                 } else if str_eq(entity, "lt") {
-                    push(out, 60); i = end + 1;
+                    utf8_emit(out, 60); i = end + 1;
                 } else if str_eq(entity, "gt") {
-                    push(out, 62); i = end + 1;
+                    utf8_emit(out, 62); i = end + 1;
                 } else if str_eq(entity, "quot") {
-                    push(out, 34); i = end + 1;
+                    utf8_emit(out, 34); i = end + 1;
                 } else if str_eq(entity, "apos") {
-                    push(out, 39); i = end + 1;
+                    utf8_emit(out, 39); i = end + 1;
                 } else if str_eq(entity, "nbsp") {
-                    push(out, 32); i = end + 1;
+                    utf8_emit(out, 32); i = end + 1;
                 } else if str_eq(entity, "mdash") {
-                    push(out, 8212); i = end + 1;
+                    utf8_emit(out, 8212); i = end + 1;
                 } else if str_eq(entity, "ndash") {
-                    push(out, 8211); i = end + 1;
+                    utf8_emit(out, 8211); i = end + 1;
                 } else if str_eq(entity, "hellip") {
-                    push(out, 8230); i = end + 1;
+                    utf8_emit(out, 8230); i = end + 1;
                 } else if str_eq(entity, "laquo") {
-                    push(out, 171); i = end + 1;
+                    utf8_emit(out, 171); i = end + 1;
                 } else if str_eq(entity, "raquo") {
-                    push(out, 187); i = end + 1;
+                    utf8_emit(out, 187); i = end + 1;
                 } else if str_eq(entity, "copy") {
-                    push(out, 169); i = end + 1;
+                    utf8_emit(out, 169); i = end + 1;
                 } else if str_eq(entity, "reg") {
-                    push(out, 174); i = end + 1;
+                    utf8_emit(out, 174); i = end + 1;
                 } else if str_eq(entity, "trade") {
-                    push(out, 8482); i = end + 1;
+                    utf8_emit(out, 8482); i = end + 1;
                 } else if str_eq(entity, "times") {
-                    push(out, 215); i = end + 1;
+                    utf8_emit(out, 215); i = end + 1;
                 } else if str_eq(entity, "bull") {
-                    push(out, 8226); i = end + 1;
+                    utf8_emit(out, 8226); i = end + 1;
                 } else if str_eq(entity, "larr") {
-                    push(out, 8592); i = end + 1;
+                    utf8_emit(out, 8592); i = end + 1;
                 } else if str_eq(entity, "rarr") {
-                    push(out, 8594); i = end + 1;
+                    utf8_emit(out, 8594); i = end + 1;
                 } else if str_eq(entity, "uarr") {
-                    push(out, 8593); i = end + 1;
+                    utf8_emit(out, 8593); i = end + 1;
                 } else if str_eq(entity, "darr") {
-                    push(out, 8595); i = end + 1;
+                    utf8_emit(out, 8595); i = end + 1;
                 } else if str_eq(entity, "euro") {
-                    push(out, 8364); i = end + 1;
+                    utf8_emit(out, 8364); i = end + 1;
                 } else if str_eq(entity, "lsquo") {
-                    push(out, 8216); i = end + 1;
+                    utf8_emit(out, 8216); i = end + 1;
                 } else if str_eq(entity, "rsquo") {
-                    push(out, 8217); i = end + 1;
+                    utf8_emit(out, 8217); i = end + 1;
                 } else if str_eq(entity, "ldquo") {
-                    push(out, 8220); i = end + 1;
+                    utf8_emit(out, 8220); i = end + 1;
                 } else if str_eq(entity, "rdquo") {
-                    push(out, 8221); i = end + 1;
+                    utf8_emit(out, 8221); i = end + 1;
                 } else if str_starts_with(entity, "#x") {
                     let hex: str = str_slice(entity, 2, str_len(entity));
                     let code: i32 = html_hex_to_i32(hex);
-                    if code > 0 { push(out, code); };
+                    if code > 0 { utf8_emit(out, code); };
                     i = end + 1;
                 } else if str_starts_with(entity, "#") {
                     let num_str: str = str_slice(entity, 1, str_len(entity));
                     let pr: Result<i32, str> = parse_i32(num_str);
                     match pr {
-                        Result::Ok(code) => { push(out, code); },
+                        Result::Ok(code) => { utf8_emit(out, code); },
                         Result::Err(_e) => { push(out, 38); },
                     };
                     i = end + 1;
