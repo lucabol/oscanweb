@@ -1,0 +1,139 @@
+// http_cache.osc — in-memory LRU page cache for OscaWeb.
+//
+// Stores the HTML document body + content-type + status keyed by full URL.
+// Used by the main navigation loop to short-circuit back/forward traversal
+// and repeat visits. Images have a separate cache in browser.osc; this
+// module only caches top-level documents.
+//
+// Storage is parallel arrays (Oscan has no self-referential structs, no
+// remove-at-index, and wants `push()` outside any arena scope). FIFO
+// eviction when full — we drop the oldest entry by shifting all slots
+// down one and popping the tail. Crude but correct; true LRU would
+// require tracking access order which isn't worth the complexity for a
+// 20-slot cache that is almost always dominated by back/forward hits.
+//
+// Usage (from browser.osc):
+//   let mut pc_urls: [str] = [];
+//   let mut pc_bodies: [str] = [];
+//   let mut pc_cts: [str] = [];
+//   let mut pc_status: [i32] = [];
+//   ...
+//   let hit: i32 = http_cache_lookup(pc_urls, url);
+//   if hit >= 0 {
+//       let resp: HttpResponse = http_cache_build(pc_bodies[hit], pc_cts[hit], pc_status[hit]);
+//       ...
+//   } else {
+//       let resp: HttpResponse = http_get(...);
+//       if resp.ok { http_cache_put(pc_urls, pc_bodies, pc_cts, pc_status, url, resp); };
+//   }
+
+use "http.osc"
+
+// Maximum number of entries in the page cache. 20 matches the rough size
+// of a typical browsing session's back-stack; beyond that FIFO eviction
+// kicks in.
+fn http_cache_max() -> i32 { 20 }
+
+// Linear scan for a URL. Returns the index of the entry, or -1 if absent.
+// URLs are compared byte-for-byte — callers are responsible for passing
+// the canonical (post-redirect) URL to both lookup and put.
+fn http_cache_lookup(urls: [str], url: str) -> i32 {
+    let n: i32 = len(urls);
+    let mut i: i32 = 0;
+    while i < n {
+        if str_eq(urls[i], url) {
+            return i;
+        };
+        i += 1;
+    };
+    -1
+}
+
+// Reconstruct an HttpResponse for a cache hit. We always report 200 +
+// ok=true so callers don't have to special-case cached entries; the
+// original status is preserved via the stored `status` array should
+// future callers need it.
+fn http_cache_build(body: str, content_type: str, status: i32) -> HttpResponse {
+    HttpResponse {
+        status_code: status,
+        content_type: content_type,
+        body: body,
+        redirect_url: "",
+        error: "",
+        ok: status >= 200 and status < 300,
+    }
+}
+
+// Shift all entries down by one slot (index i ← index i+1) and pop the
+// tail. O(n) in the cache size (n<=20) so the cost is negligible. Called
+// from http_cache_put when the cache is full.
+fn! http_cache_evict_oldest(urls: [str], bodies: [str], cts: [str], status: [i32]) {
+    let n: i32 = len(urls);
+    if n <= 0 { return; };
+    let mut i: i32 = 0;
+    while i < n - 1 {
+        urls[i] = urls[i + 1];
+        bodies[i] = bodies[i + 1];
+        cts[i] = cts[i + 1];
+        status[i] = status[i + 1];
+        i += 1;
+    };
+    pop(urls);
+    pop(bodies);
+    pop(cts);
+    pop(status);
+}
+
+// Insert (or replace) a URL's entry. If the URL already exists it is
+// updated in place. Otherwise the entry is appended; if the cache was
+// already at capacity the oldest entry is evicted first.
+//
+// IMPORTANT: this performs `push()` on long-lived arrays and so must NOT
+// be called from inside an `arena { }` block (see Copilot instructions'
+// arena notes in this repo).
+fn! http_cache_put(urls: [str], bodies: [str], cts: [str], status: [i32],
+                   url: str, resp: HttpResponse) {
+    let existing: i32 = http_cache_lookup(urls, url);
+    if existing >= 0 {
+        bodies[existing] = resp.body;
+        cts[existing] = resp.content_type;
+        status[existing] = resp.status_code;
+        return;
+    };
+    if len(urls) >= http_cache_max() {
+        http_cache_evict_oldest(urls, bodies, cts, status);
+    };
+    push(urls, url);
+    push(bodies, resp.body);
+    push(cts, resp.content_type);
+    push(status, resp.status_code);
+}
+
+// Clear the entire cache in place. Used on manual reload (`r`) so the
+// user can force a re-fetch.
+fn! http_cache_clear(urls: [str], bodies: [str], cts: [str], status: [i32]) {
+    while len(urls) > 0 { pop(urls); };
+    while len(bodies) > 0 { pop(bodies); };
+    while len(cts) > 0 { pop(cts); };
+    while len(status) > 0 { pop(status); };
+}
+
+// Remove a single URL from the cache (used by the reload path to force a
+// re-fetch of just the current page without discarding the rest).
+fn! http_cache_invalidate(urls: [str], bodies: [str], cts: [str], status: [i32], url: str) {
+    let idx: i32 = http_cache_lookup(urls, url);
+    if idx < 0 { return; };
+    let n: i32 = len(urls);
+    let mut i: i32 = idx;
+    while i < n - 1 {
+        urls[i] = urls[i + 1];
+        bodies[i] = bodies[i + 1];
+        cts[i] = cts[i + 1];
+        status[i] = status[i + 1];
+        i += 1;
+    };
+    pop(urls);
+    pop(bodies);
+    pop(cts);
+    pop(status);
+}

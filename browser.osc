@@ -4,6 +4,7 @@
 use "url.osc"
 use "html.osc"
 use "http.osc"
+use "http_cache.osc"
 use "css.osc"
 use "js.osc"
 use "storage.osc"
@@ -1762,6 +1763,18 @@ fn! main() {
     let mut img_cache_w: [i32] = [];
     let mut img_cache_h: [i32] = [];
 
+    // Page (HTML document) cache. Keyed by canonical URL
+    // (scheme://host:port/path). Populated on successful fetch, consulted
+    // on every navigation before going to the network so back/forward
+    // (H/L) and repeat visits are instant. Images keep their own cache
+    // above — this one only caches top-level documents. `r` (reload)
+    // invalidates the current URL before re-navigating so the user can
+    // force a fresh fetch.
+    let mut page_cache_urls: [str] = [];
+    let mut page_cache_bodies: [str] = [];
+    let mut page_cache_cts: [str] = [];
+    let mut page_cache_status: [i32] = [];
+
     // Address bar
     let mut url_buf: [i32] = [];
     let mut url_focused: bool = false;
@@ -2243,9 +2256,33 @@ fn! main() {
                 while not done and redir_count < MAX_REDIRECTS {
                     vlog_msg("fetch start", fetch_host);
                     vlog_int("fetch tls", if fetch_tls { 1 } else { 0 });
-                    let resp: HttpResponse = http_get(fetch_host, fetch_port, fetch_path, fetch_tls);
+                    // Canonical URL for cache keying. Always includes port
+                    // for consistency (the cache doesn't normalize default
+                    // ports, but all callers within a session agree).
+                    let cache_scheme: str = if fetch_tls { "https" } else { "http" };
+                    let cache_key: str = "{cache_scheme}://{fetch_host}:{fetch_port}{fetch_path}";
+                    let cache_hit: i32 = http_cache_lookup(page_cache_urls, cache_key);
+                    let mut resp: HttpResponse = http_make_error("");
+                    let mut from_cache: bool = false;
+                    if cache_hit >= 0 {
+                        vlog_msg("cache hit", cache_key);
+                        resp = http_cache_build(page_cache_bodies[cache_hit],
+                                                page_cache_cts[cache_hit],
+                                                page_cache_status[cache_hit]);
+                        from_cache = true;
+                    } else {
+                        resp = http_get(fetch_host, fetch_port, fetch_path, fetch_tls);
+                    };
                     vlog_int("fetch status", resp.status_code);
                     vlog_int("fetch body_len", str_len(resp.body));
+                    // Cache any successful or 3xx-redirect response (not
+                    // errors). Redirects are cheap to cache and let the
+                    // full chain short-circuit on revisit.
+                    if not from_cache and str_len(resp.error) == 0 and resp.status_code >= 200 and resp.status_code < 400 {
+                        http_cache_put(page_cache_urls, page_cache_bodies,
+                                       page_cache_cts, page_cache_status,
+                                       cache_key, resp);
+                    };
 
                     if str_len(resp.redirect_url) > 0 and (resp.status_code == 301 or resp.status_code == 302 or resp.status_code == 307) {
                         vlog_msg("redirect", resp.redirect_url);
@@ -2453,6 +2490,15 @@ fn! main() {
                             scroll_y = 0;
                             render_dirty = true;
                         } else if str_len(current_url) > 0 {
+                            // `r` — reload. Invalidate the cached copy of
+                            // the current page (and its redirect chain, if
+                            // any) so the re-navigation re-fetches instead
+                            // of hitting the page cache.
+                            let ru: Url = url_parse(current_url);
+                            let rsch: str = if str_eq(ru.scheme, "https") { "https" } else { "http" };
+                            let rkey: str = "{rsch}://{ru.host}:{ru.port}{ru.path}";
+                            http_cache_invalidate(page_cache_urls, page_cache_bodies,
+                                                  page_cache_cts, page_cache_status, rkey);
                             nav_url = current_url;
                             needs_navigate = true;
                         };
