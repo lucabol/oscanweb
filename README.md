@@ -9,6 +9,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
 - **HTTP page cache** — 20-entry FIFO cache keyed by URL; back/forward and repeat visits are instant. Bypassed on `r` (reload).
 - **Cookie jar** — minimal RFC 6265 subset: `Set-Cookie` parsing (Max-Age, Expires, Secure, Domain, Path), `Cookie:` header injection on main-document fetches, persisted across restarts. Clear with `gC`.
+- **Form submission (GET)** — press `gf` to fill `<form>` text fields sequentially via status-bar prompts, then submit. Supports text, search, email, url, tel, password, number, and textarea inputs; submit buttons and hidden fields are included automatically. POST forms fall back to GET in this version.
 - **Omnibox search** — type any query in the address bar; non-URL input is sent to DuckDuckGo automatically, with autocomplete from your browsing history
 - **Readable article column** — when a page has `<main>` or `<article>`, that subtree is automatically narrowed to ~640 CSS px and centered, so long articles don't run edge-to-edge on wide canvases
 - **Chrome trimming** — navigation sidebars, hamburger menus, and site chrome (nav/header/footer/aside, `#mw-panel`, `.vector-*`, `.sidebar`, etc.) are hidden by default on heavy pages like Wikipedia; `gR` toggles the full page back on
@@ -76,6 +77,7 @@ OscaWeb uses Vimium-inspired keybindings. Press `?` in the browser to toggle the
 | `gr`  | Toggle reader mode                |
 | `gR`  | Toggle show-full (disable chrome trim + user stylesheet, reloads) |
 | `gC`  | Clear all cookies (jar + disk file) |
+| `gf`  | Fill form on the current page (sequential prompts, Enter advances, Esc aborts) |
 | `gm`  | Jump to `<main>`/`<article>` / first heading |
 | `t`   | Toggle outline (table of contents) |
 | `1`–`9` | Jump to Nth heading (when outline is open) |
@@ -462,7 +464,7 @@ headings, paragraphs, code blocks, and tables uniformly.
 - **No external stylesheets** — `<link rel="stylesheet">` is not fetched
   (inline `<style>` blocks and `style=""` attributes are supported)
 - **No external script loading** — `<script src="...">` tags are ignored
-- **No form submission** — `<form>`, `<input>`, `<textarea>` not rendered
+- **Limited form submission** — GET forms only via `gf` (no visual field rendering, no POST, no checkbox/radio/select UI yet)
 - **Fixed viewport** — 1024×768 window with 8×8 monospace bitmap font
 - **Single-threaded** — synchronous page fetching
 

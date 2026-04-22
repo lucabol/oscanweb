@@ -6,6 +6,7 @@ use "html.osc"
 use "http.osc"
 use "http_cache.osc"
 use "cookies.osc"
+use "forms.osc"
 use "css.osc"
 use "js.osc"
 use "storage.osc"
@@ -430,6 +431,7 @@ enum BrowserMode {
     Insert,
     Follow,
     Search,
+    FormFill,
 }
 
 // ─── Link Info ───────────────────────────────────────────
@@ -1733,6 +1735,30 @@ fn user_stylesheet() -> str {
     "nav {{ display: none !important; }} aside {{ display: none !important; }} .sidebar {{ display: none !important; }} .site-header {{ display: none !important; }} .global-nav {{ display: none !important; }} .skip-link {{ display: none !important; }} .cookie-banner {{ display: none !important; }} .cookie-notice {{ display: none !important; }} .hamburger {{ display: none !important; }} .menu-toggle {{ display: none !important; }} #mw-navigation {{ display: none !important; }} #mw-panel {{ display: none !important; }} .mw-panel {{ display: none !important; }} .mw-jump-link {{ display: none !important; }} .vector-main-menu {{ display: none !important; }} .vector-pinned-container {{ display: none !important; }} .vector-header-container {{ display: none !important; }} .vector-sticky-header {{ display: none !important; }} .vector-toc {{ display: none !important; }} .mw-footer {{ display: none !important; }} #p-lang {{ display: none !important; }} .navbox {{ display: none !important; }} .sister-project {{ display: none !important; }} .interlanguage-link {{ display: none !important; }}"
 }
 
+// Returns true if `kind` is an editable text-like field whose value the
+// user types into during FormFill mode. Hidden fields are submitted but
+// not prompted for; checkbox/radio/select/submit/button are skipped.
+fn form_kind_is_editable(kind: str) -> bool {
+    str_eq(kind, "text") or str_eq(kind, "search") or
+    str_eq(kind, "email") or str_eq(kind, "url") or
+    str_eq(kind, "tel") or str_eq(kind, "password") or
+    str_eq(kind, "number") or str_eq(kind, "textarea")
+}
+
+// Resolve a form action string against the current page URL. Handles
+// absolute URLs (http[s]://), origin-relative (/foo), path-relative
+// (foo), and empty (submit to self).
+fn! form_resolve_action(action: str, current_url: str) -> str {
+    if str_len(action) == 0 { return current_url; };
+    if str_contains(action, "://") { return action; };
+    let cu: Url = url_parse(current_url);
+    let rp: str = url_resolve_relative(cu.path, action);
+    url_to_string(Url {
+        scheme: cu.scheme, host: cu.host, port: cu.port,
+        path: rp, fragment: "",
+    })
+}
+
 
 // ─── Main ────────────────────────────────────────────────
 
@@ -1947,6 +1973,19 @@ fn! main() {
     let mut search_query: str = "";
     let mut search_match_y: [i32] = [];
     let mut search_match_idx: i32 = 0;
+
+    // Form fill mode: rebuilt from the DOM on every navigation.  We fill
+    // the editable fields of one form sequentially via a status-bar prompt
+    // (like Search mode), then submit.  v1 targets the FIRST form on the
+    // page; multi-form selection can come later.
+    let mut page_forms: [Form] = [];
+    let mut page_fields: [FormField] = [];
+    // Indices into page_fields that FormFill iterates (submittable,
+    // editable, not disabled, has a name).
+    let mut form_fill_order: [i32] = [];
+    let mut form_fill_target: i32 = -1;   // index into page_forms
+    let mut form_fill_pos: i32 = 0;       // index into form_fill_order
+    let mut form_input_buf: [i32] = [];
 
     // Help
     let mut show_help: bool = false;
@@ -2192,6 +2231,20 @@ fn! main() {
             push(follow_input, key);
         };
 
+        // Form fill: same printable/backspace handling as search.
+        let is_formfill: bool = match mode {
+            BrowserMode::FormFill => true,
+            _ => false,
+        };
+        if is_formfill {
+            if key >= 32 and key <= 126 {
+                push(form_input_buf, key);
+            };
+            if key == 8 and len(form_input_buf) > 0 {
+                pop(form_input_buf);
+            };
+        };
+
         // Main frame body (no arena block — avoids array realloc corruption)
         //
         // `nav_pass` lets us re-execute the navigate block once if input
@@ -2363,6 +2416,23 @@ fn! main() {
                         vlog_msg("js scripts end", "");
                         if js_bridge_is_dom_dirty() > 0 {
                             js_bridge_clear_dom_dirty();
+                        };
+
+                        // Forms: rebuild the page_forms / page_fields lists.
+                        // Done after JS so dynamically inserted fields are
+                        // picked up.  Clearing is in-place (mutating the
+                        // same array) to avoid the realloc-on-child-arena
+                        // bug documented elsewhere.
+                        while len(page_forms) > 0 { pop(page_forms); };
+                        while len(page_fields) > 0 { pop(page_fields); };
+                        while len(form_fill_order) > 0 { pop(form_fill_order); };
+                        form_fill_target = -1;
+                        form_fill_pos = 0;
+                        while len(form_input_buf) > 0 { pop(form_input_buf); };
+                        if dom_root >= 0 {
+                            forms_collect(dom_nodes, dom_root, page_forms, page_fields);
+                            vlog_int("forms", len(page_forms));
+                            vlog_int("fields", len(page_fields));
                         };
 
                         // CSS: collect <style> contents, external <link
@@ -2568,6 +2638,41 @@ fn! main() {
                                           ck_secure, ck_host_only, ck_persistent);
                         status_msg = "Cookies cleared";
                         render_dirty = true;
+                    } else if key == 102 and last_key == 103 {
+                        // gf — enter FormFill mode for the first <form>
+                        // on the current page.  Iterates editable fields
+                        // one at a time via the status bar; Enter commits
+                        // and advances, Esc aborts, final Enter submits.
+                        if len(page_forms) == 0 or len(page_fields) == 0 {
+                            status_msg = "No form on this page";
+                        } else {
+                            form_fill_target = 0;
+                            while len(form_fill_order) > 0 { pop(form_fill_order); };
+                            for ffi in 0..len(page_fields) {
+                                let f: FormField = page_fields[ffi];
+                                if f.form_idx == form_fill_target and
+                                   form_kind_is_editable(f.kind) and
+                                   not f.disabled and
+                                   str_len(f.name) > 0 {
+                                    push(form_fill_order, ffi);
+                                };
+                            };
+                            if len(form_fill_order) == 0 {
+                                status_msg = "Form has no editable fields";
+                            } else {
+                                form_fill_pos = 0;
+                                // Preload current value into buffer so the
+                                // user can edit rather than retype.
+                                while len(form_input_buf) > 0 { pop(form_input_buf); };
+                                let init_f: FormField = page_fields[form_fill_order[0]];
+                                let init_chars: [i32] = str_to_chars(init_f.value);
+                                for ici in 0..len(init_chars) {
+                                    push(form_input_buf, init_chars[ici]);
+                                };
+                                mode = BrowserMode::FormFill;
+                                render_dirty = true;
+                            };
+                        };
                     } else if key == 109 and last_key == 103 {
                         // gm — jump to main content landmark.  Uses the
                         // existing fragment machinery by scanning the
@@ -2912,6 +3017,56 @@ fn! main() {
                         };
                     };
                     // push/pop for search_buf handled outside arena
+                },
+                BrowserMode::FormFill => {
+                    if key == KEY_ESC {
+                        // Abort: leave any previously-committed field
+                        // values in place (they persist in page_fields),
+                        // but drop the in-progress buffer.
+                        mode = BrowserMode::Normal;
+                        while len(form_input_buf) > 0 { pop(form_input_buf); };
+                        status_msg = "Form fill cancelled";
+                    } else if key == KEY_ENTER {
+                        // Commit current input buffer into the active field.
+                        if form_fill_pos >= 0 and form_fill_pos < len(form_fill_order) {
+                            let field_idx: i32 = form_fill_order[form_fill_pos];
+                            page_fields[field_idx].value = str_from_chars(form_input_buf);
+                        };
+                        form_fill_pos = form_fill_pos + 1;
+                        while len(form_input_buf) > 0 { pop(form_input_buf); };
+
+                        if form_fill_pos >= len(form_fill_order) {
+                            // All editable fields filled — build the body
+                            // and submit.  v1 is GET-only via the normal
+                            // nav path.  POST forms fall back to GET with
+                            // a status message; full POST support can come
+                            // after the UX layer settles.
+                            let body: str = forms_build_urlencoded(
+                                page_fields, form_fill_target, -1);
+                            let action: str = page_forms[form_fill_target].action;
+                            let resolved: str = form_resolve_action(action, current_url);
+                            let method: str = page_forms[form_fill_target].method;
+                            if str_eq(method, "post") {
+                                status_msg = "POST form — not wired yet, retrying as GET";
+                            };
+                            let target_url: str = if str_len(body) > 0 {
+                                str_concat(str_concat(resolved, "?"), body)
+                            } else { resolved };
+                            nav_url = target_url;
+                            needs_navigate = true;
+                            mode = BrowserMode::Normal;
+                        } else {
+                            // Preload the next field's current value.
+                            let next_f: FormField = page_fields[
+                                form_fill_order[form_fill_pos]];
+                            let next_chars: [i32] = str_to_chars(next_f.value);
+                            for nci in 0..len(next_chars) {
+                                push(form_input_buf, next_chars[nci]);
+                            };
+                        };
+                        render_dirty = true;
+                    };
+                    // push/pop for form_input_buf handled outside arena
                 },
             };
             };  // end if nav_pass == 0
@@ -3354,7 +3509,29 @@ fn! main() {
                 BrowserMode::Search => true,
                 _ => false,
             };
-            if show_search_bar {
+            let show_form_bar: bool = match mode {
+                BrowserMode::FormFill => true,
+                _ => false,
+            };
+            if show_form_bar {
+                let sy: i32 = canvas_height() - CHROME_BOT - 24;
+                gfx_fill_rect(0, sy, canvas_width(), 24, theme[T_STATUS_BG]);
+                gfx_rect(0, sy, canvas_width(), 1, UI_BORDER);
+                let pos_disp: i32 = form_fill_pos + 1;
+                let total: i32 = len(form_fill_order);
+                let field_name: str = if form_fill_pos >= 0 and
+                                        form_fill_pos < len(form_fill_order) {
+                    page_fields[form_fill_order[form_fill_pos]].name
+                } else { "" };
+                let prompt: str = "Form [{pos_disp}/{total}] {field_name}: ";
+                gfx_draw_text(4, sy + 8, prompt, theme[T_FG], FONT_DEFAULT);
+                let prompt_w: i32 = gfx_text_width(prompt, FONT_DEFAULT);
+                let val: str = str_from_chars(form_input_buf);
+                gfx_draw_text(4 + prompt_w, sy + 8, val, theme[T_FG], FONT_DEFAULT);
+                // Cursor
+                gfx_fill_rect(4 + prompt_w + len(form_input_buf) * FONT_W,
+                              sy + 8, 1, FONT_H, theme[T_FG]);
+            } else if show_search_bar {
                 let sy: i32 = canvas_height() - CHROME_BOT - 24;
                 gfx_fill_rect(0, sy, canvas_width(), 24, theme[T_STATUS_BG]);
                 gfx_rect(0, sy, canvas_width(), 1, UI_BORDER);
@@ -3474,6 +3651,7 @@ fn! main() {
                 BrowserMode::Insert => "INSERT",
                 BrowserMode::Follow => "FOLLOW",
                 BrowserMode::Search => "SEARCH",
+                BrowserMode::FormFill => "FORM",
             };
             let scroll_pct: str = if max_scroll > 0 {
                 let pct: i32 = scroll_y * 100 / max_scroll;

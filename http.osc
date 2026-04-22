@@ -314,6 +314,12 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool, extra_headers: str)
         return http_make_error("Empty response");
     };
 
+    http_parse_raw_response(raw_response)
+}
+
+// Parse a raw wire response (headers + body) into an HttpResponse. Shared
+// between http_get and http_post.
+fn! http_parse_raw_response(raw_response: str) -> HttpResponse {
     // Split headers from body at \r\n\r\n
     let sep_pos: i32 = str_find(raw_response, "\r\n\r\n");
     let mut header_section: str = raw_response;
@@ -375,4 +381,36 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool, extra_headers: str)
         ok: is_ok,
         set_cookie_lines: set_cookies,
     }
+}
+
+// POST a request body. `body` is sent verbatim; `content_type` is the
+// Content-Type header value (e.g. "application/x-www-form-urlencoded").
+// Extra headers follow the same convention as http_get.
+fn! http_post(host: str, port: i32, path: str, use_tls: bool,
+              body: str, content_type: str, extra_headers: str) -> HttpResponse {
+    let body_len: i32 = str_len(body);
+    let request: str = "POST {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{extra_headers}\r\n{body}";
+
+    let mut raw_response: str = "";
+    if use_tls {
+        if host_was_primed(host) == 0 {
+            http_prime_tls(host);
+            mark_host_primed(host);
+        };
+        vlog_msg("tls_connect (POST)", host);
+        let tls_resp: HttpResponse = http_get_tls(host, port, request);
+        vlog_int("tls body_len", str_len(tls_resp.body));
+        if str_len(tls_resp.error) > 0 { return tls_resp; };
+        raw_response = tls_resp.body;
+    } else {
+        let plain_resp: HttpResponse = http_get_plain(host, port, request, 30000);
+        if str_len(plain_resp.error) > 0 { return plain_resp; };
+        raw_response = plain_resp.body;
+    };
+
+    if str_len(raw_response) == 0 {
+        return http_make_error("Empty response");
+    };
+
+    http_parse_raw_response(raw_response)
 }
