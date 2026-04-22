@@ -1,0 +1,207 @@
+// Tests for forms.osc — URL encoding, DOM collection, submission.
+
+use "../forms.osc"
+use "../html.osc"
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! assert_true(actual: bool, test_name: str) {
+    if actual {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected true");
+    };
+}
+
+// ─── URL encoding ────────────────────────────────────────────
+
+fn! test_url_encoding() {
+    assert_eq_str(forms_url_encode(""), "", "encode empty");
+    assert_eq_str(forms_url_encode("hello"), "hello", "encode plain ascii");
+    assert_eq_str(forms_url_encode("hello world"), "hello+world", "encode space -> +");
+    assert_eq_str(forms_url_encode("a&b"), "a%26b", "encode ampersand");
+    assert_eq_str(forms_url_encode("k=v"), "k%3Dv", "encode equals");
+    assert_eq_str(forms_url_encode("a+b"), "a%2Bb", "encode + literal");
+    assert_eq_str(forms_url_encode("a/b"), "a%2Fb", "encode slash");
+    assert_eq_str(forms_url_encode("A-Z.a_z~09"), "A-Z.a_z~09", "encode unreserved set");
+    assert_eq_str(forms_url_encode("a\nb"), "a%0Ab", "encode newline");
+}
+
+// ─── Simple form: inputs + submit button ─────────────────────
+
+fn! test_simple_form() {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, "<html><body><form action=\"/search\" method=\"get\"><input name=\"q\" value=\"cats\"><input type=\"submit\" name=\"go\" value=\"Go\"></form></body></html>");
+
+    let mut forms: [Form] = [];
+    let mut fields: [FormField] = [];
+    forms_collect(nodes, root, forms, fields);
+
+    assert_eq_i32(len(forms), 1, "one form found");
+    assert_eq_str(forms[0].action, "/search", "form action");
+    assert_eq_str(forms[0].method, "get", "form method lowercased");
+    assert_eq_str(forms[0].enctype, "application/x-www-form-urlencoded",
+                  "form default enctype");
+
+    assert_eq_i32(len(fields), 2, "two fields collected");
+    assert_eq_str(fields[0].kind, "text", "field 0 kind default text");
+    assert_eq_str(fields[0].name, "q", "field 0 name");
+    assert_eq_str(fields[0].value, "cats", "field 0 value");
+    assert_eq_i32(fields[0].form_idx, 0, "field 0 form idx");
+    assert_true(not fields[0].disabled, "field 0 not disabled");
+
+    assert_eq_str(fields[1].kind, "submit", "field 1 kind submit");
+
+    let body1: str = forms_build_urlencoded(fields, 0, 1);
+    assert_eq_str(body1, "q=cats&go=Go", "urlencoded body with submitter");
+
+    let body2: str = forms_build_urlencoded(fields, 0, -1);
+    assert_eq_str(body2, "q=cats", "urlencoded body without submitter");
+}
+
+// ─── Disabled and nameless fields skipped ────────────────────
+
+fn! test_disabled_and_nameless() {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, "<form method=\"post\"><input name=\"a\" value=\"1\"><input name=\"b\" value=\"2\" disabled><input value=\"3\"></form>");
+    let mut forms: [Form] = [];
+    let mut fields: [FormField] = [];
+    forms_collect(nodes, root, forms, fields);
+
+    assert_eq_str(forms[0].method, "post", "post method");
+    assert_eq_i32(len(fields), 3, "three fields parsed");
+    assert_true(fields[1].disabled, "field b disabled flag");
+    assert_eq_str(fields[2].name, "", "field c has no name");
+
+    let body: str = forms_build_urlencoded(fields, 0, -1);
+    assert_eq_str(body, "a=1", "disabled + nameless excluded");
+}
+
+// ─── Checkbox / radio toggle semantics ───────────────────────
+
+fn! test_toggle_fields() {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, "<form><input type=\"checkbox\" name=\"subscribe\" checked><input type=\"checkbox\" name=\"spam\"><input type=\"radio\" name=\"size\" value=\"s\"><input type=\"radio\" name=\"size\" value=\"m\" checked></form>");
+    let mut forms: [Form] = [];
+    let mut fields: [FormField] = [];
+    forms_collect(nodes, root, forms, fields);
+
+    assert_eq_i32(len(fields), 4, "four toggles");
+    assert_true(fields[0].checked, "subscribe checked");
+    assert_true(not fields[1].checked, "spam unchecked");
+    assert_true(fields[3].checked, "radio m checked");
+
+    let body: str = forms_build_urlencoded(fields, 0, -1);
+    assert_eq_str(body, "subscribe=on&size=m", "toggle submission");
+}
+
+// ─── Textarea initial value = text content ───────────────────
+
+fn! test_textarea() {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, "<form><textarea name=\"body\">hello world</textarea></form>");
+    let mut forms: [Form] = [];
+    let mut fields: [FormField] = [];
+    forms_collect(nodes, root, forms, fields);
+
+    assert_eq_str(fields[0].kind, "textarea", "textarea kind");
+    assert_eq_str(fields[0].value, "hello world",
+                  "textarea default value from content");
+
+    let body: str = forms_build_urlencoded(fields, 0, -1);
+    assert_eq_str(body, "body=hello+world", "textarea urlencoded with +");
+}
+
+// ─── Select: selected option wins, else first ────────────────
+
+fn! test_select_selected_option() {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, "<form><select name=\"color\"><option value=\"r\">Red</option><option value=\"g\" selected>Green</option><option value=\"b\">Blue</option></select></form>");
+    let mut forms: [Form] = [];
+    let mut fields: [FormField] = [];
+    forms_collect(nodes, root, forms, fields);
+
+    assert_eq_str(fields[0].kind, "select", "select kind");
+    assert_eq_str(fields[0].value, "g", "select picks selected option");
+}
+
+fn! test_select_first_option() {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, "<form><select name=\"color\"><option value=\"r\">Red</option><option value=\"g\">Green</option></select></form>");
+    let mut forms: [Form] = [];
+    let mut fields: [FormField] = [];
+    forms_collect(nodes, root, forms, fields);
+
+    assert_eq_str(fields[0].value, "r", "select falls back to first option");
+}
+
+// ─── No forms at all ─────────────────────────────────────────
+
+fn! test_no_forms() {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, "<html><body><p>no forms here</p></body></html>");
+    let mut forms: [Form] = [];
+    let mut fields: [FormField] = [];
+    forms_collect(nodes, root, forms, fields);
+    assert_eq_i32(len(forms), 0, "no forms");
+    assert_eq_i32(len(fields), 0, "no fields");
+}
+
+// ─── Orphan field outside any form ───────────────────────────
+
+fn! test_orphan_field() {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, "<body><input name=\"x\" value=\"1\"></body>");
+    let mut forms: [Form] = [];
+    let mut fields: [FormField] = [];
+    forms_collect(nodes, root, forms, fields);
+    assert_eq_i32(len(fields), 1, "one orphan field");
+    assert_eq_i32(fields[0].form_idx, -1, "orphan has form_idx -1");
+}
+
+// ─── Multiple forms attribution ──────────────────────────────
+
+fn! test_multiple_forms() {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, "<body><form action=\"/a\"><input name=\"x\" value=\"1\"></form><form action=\"/b\"><input name=\"y\" value=\"2\"></form></body>");
+    let mut forms: [Form] = [];
+    let mut fields: [FormField] = [];
+    forms_collect(nodes, root, forms, fields);
+    assert_eq_i32(len(forms), 2, "two forms");
+    assert_eq_i32(fields[0].form_idx, 0, "field x -> form 0");
+    assert_eq_i32(fields[1].form_idx, 1, "field y -> form 1");
+
+    let a_body: str = forms_build_urlencoded(fields, 0, -1);
+    let b_body: str = forms_build_urlencoded(fields, 1, -1);
+    assert_eq_str(a_body, "x=1", "form 0 body");
+    assert_eq_str(b_body, "y=2", "form 1 body");
+}
+
+fn! main() {
+    println("=== Forms Tests ===");
+    test_url_encoding();
+    test_simple_form();
+    test_disabled_and_nameless();
+    test_toggle_fields();
+    test_textarea();
+    test_select_selected_option();
+    test_select_first_option();
+    test_no_forms();
+    test_orphan_field();
+    test_multiple_forms();
+    println("=== Done ===");
+}
