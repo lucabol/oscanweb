@@ -345,7 +345,7 @@ fn! main() {
     css_compute_all(np3b, 0, rp3b, sp3b);
     assert_eq_i32(sp3b[0].max_width_pct, 50, "max-width 50%");
 
-    // line-height unitless -> multiplier of base (CSS_BASE_LINE_H=20)
+    // line-height unitless -> multiplier stored separately from px
     let mut np3c: [HtmlNode] = [];
     let np3c_node: HtmlNode = html_node_element("div", map_new());
     push(np3c, np3c_node);
@@ -354,7 +354,8 @@ fn! main() {
     let mut rp3c: [CssRule] = [];
     let mut sp3c: [ComputedStyle] = [];
     css_compute_all(np3c, 0, rp3c, sp3c);
-    assert_eq_i32(sp3c[0].line_height_px, 30, "line-height 1.5 -> 30");
+    assert_eq_i32(sp3c[0].line_height_mul_x100, 150, "line-height 1.5 -> mul 150");
+    assert_eq_i32(sp3c[0].line_height_px, -1, "line-height 1.5 leaves px unset");
 
     // line-height inherits; padding/max-width/center do NOT.
     let mut dom_in: [HtmlNode] = [];

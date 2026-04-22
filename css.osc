@@ -79,7 +79,8 @@ struct ComputedStyle {
     pad_r: i32,
     pad_b: i32,
     pad_l: i32,
-    line_height_px: i32,   // -1 unset; positive pixel value; inherits
+    line_height_px: i32,   // -1 unset; positive absolute pixel value; inherits
+    line_height_mul_x100: i32, // -1 unset; multiplier × 100 for unitless / % / normal; inherits
     center_block: i32,     // 1 = margin:auto centering sentinel, -1 unset, 0 explicit non-center
 }
 
@@ -100,6 +101,7 @@ fn! css_empty_style() -> ComputedStyle {
         pad_b: -1,
         pad_l: -1,
         line_height_px: -1,
+        line_height_mul_x100: -1,
         center_block: -1,
     }
 }
@@ -238,7 +240,7 @@ fn! css_parse_color(raw: str) -> i32 {
 
 // Base line height in pixels, matching browser.osc LINE_H.  Kept here so
 // css.osc doesn't depend on browser.osc.  Update both together.
-let CSS_BASE_LINE_H: i32 = 20;
+let CSS_BASE_LINE_H: i32 = 20; // legacy default; now only used as a bitmap-era fallback reference
 
 // Parse a single length token.  Returns (px, pct) pair encoded as two ints:
 //   px >= 0 : concrete pixel value
@@ -876,14 +878,18 @@ fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
     };
 
     // ── Phase 3: line-height ─────────────────────────────────
+    // Relative forms (normal / unitless number / percent) are stored as a
+    // multiplier × 100 so the renderer can resolve against the *current*
+    // font size — this matters because OscaWeb's TT body size is
+    // user-adjustable at runtime and a page's "line-height: 1.5" must
+    // follow the body size, not a hardcoded CSS_BASE_LINE_H reference.
+    // Absolute lengths (px / em / rem / pt) remain in line_height_px.
     if str_eq(prop, "line-height") {
         if str_eq(val, "normal") {
-            styles[idx].line_height_px = CSS_BASE_LINE_H;
+            styles[idx].line_height_mul_x100 = 120;
+            styles[idx].line_height_px = -1;
             return;
         };
-        // Try pure number first (unitless multiplier).  css_parse_length
-        // returns px=N for unitless, but we want the multiplier semantics:
-        // detect by looking for a suffix in the raw value.
         let raw_l: str = str_trim(str_to_lower(d.value));
         let has_pct: bool = str_ends_with(raw_l, "%");
         let has_unit: bool = str_ends_with(raw_l, "px") or str_ends_with(raw_l, "em") or
@@ -892,13 +898,11 @@ fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
         let pct_p: [i32] = [-1];
         css_parse_length(d.value, px_p, pct_p);
         if has_pct and pct_p[0] > 0 {
-            styles[idx].line_height_px = (CSS_BASE_LINE_H * pct_p[0]) / 100;
+            styles[idx].line_height_mul_x100 = pct_p[0];
+            styles[idx].line_height_px = -1;
         } else if not has_unit and px_p[0] >= 0 {
-            // Unitless: raw number is the multiplier.  css_parse_length
-            // already rounded to int.  Re-parse to capture fractional part
-            // by multiplying base * 100 and dividing — we lose fractions,
-            // so handle common case: if "1.5" was sent, px_p[0] would be 2
-            // (rounded).  We want 1.5 * 12 = 18.  Re-scan fractional part.
+            // Unitless: raw number is the multiplier.  Re-scan to recover
+            // the fractional part css_parse_length rounded away.
             let chars: [i32] = str_to_chars(raw_l);
             let nlen: i32 = len(chars);
             let mut int_v: i32 = 0;
@@ -920,9 +924,13 @@ fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
                 };
             };
             let mul_x100: i32 = int_v * 100 + frac_x100;
-            styles[idx].line_height_px = (CSS_BASE_LINE_H * mul_x100 + 50) / 100;
+            if mul_x100 > 0 {
+                styles[idx].line_height_mul_x100 = mul_x100;
+                styles[idx].line_height_px = -1;
+            };
         } else if px_p[0] >= 0 {
             styles[idx].line_height_px = px_p[0];
+            styles[idx].line_height_mul_x100 = -1;
         };
         return;
     };
@@ -1050,6 +1058,7 @@ fn! css_inherit(styles: [ComputedStyle], idx: i32, parent: ComputedStyle) {
     if styles[idx].strike == -1     { styles[idx].strike     = parent.strike; };
     if styles[idx].text_align == -1 { styles[idx].text_align = parent.text_align; };
     if styles[idx].line_height_px == -1 { styles[idx].line_height_px = parent.line_height_px; };
+    if styles[idx].line_height_mul_x100 == -1 { styles[idx].line_height_mul_x100 = parent.line_height_mul_x100; };
     // bg_color, display_none, padding, max_width, center_block do NOT inherit.
 }
 
