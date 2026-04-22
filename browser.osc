@@ -106,14 +106,29 @@ fn is_mono_font_id(font: i32) -> bool {
 fn line_h_of(scale: i32) -> i32 { FONT_H * scale + 8 }
 
 // CSS line-height override helper: prefer computed style if set,
-// otherwise the scale-derived default.  Kept here so callers stay simple.
+// otherwise the scale-derived default.  A multiplier (unitless / %
+// / "normal") is resolved against the current rendered font size so
+// it tracks user-adjustable TT body size.  Absolute px values (set
+// via explicit px/em/pt) are used verbatim.
 fn effective_line_h(styles: [ComputedStyle], idx: i32, scale: i32,
                     tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
-    if idx >= 0 and idx < len(styles) and styles[idx].line_height_px > 0 {
-        styles[idx].line_height_px
-    } else {
-        tt_line_h_of(scale, tt_reg, tt_cfg, font)
-    }
+    if idx >= 0 and idx < len(styles) {
+        let mul: i32 = styles[idx].line_height_mul_x100;
+        if mul > 0 {
+            let em: i32 = if tt_on(tt_reg, tt_cfg) {
+                let px: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_PX] } else { tt_cfg[TTC_BODY_PX] };
+                px * scale
+            } else {
+                FONT_H * scale
+            };
+            let out: i32 = (em * mul + 50) / 100;
+            if out > 0 { return out; };
+        };
+        if styles[idx].line_height_px > 0 {
+            return styles[idx].line_height_px;
+        };
+    };
+    tt_line_h_of(scale, tt_reg, tt_cfg, font)
 }
 fn glyph_h_of(scale: i32) -> i32 { FONT_H * scale }
 
