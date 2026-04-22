@@ -1394,7 +1394,10 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         };
     };
     if str_eq(tag, "h1") or str_eq(tag, "h2") { y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale, tt_reg, tt_cfg, child_font) / 2; };
-    if str_eq(tag, "p") { y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale, tt_reg, tt_cfg, child_font) / 2; };
+    // Paragraph spacing: pre-p already adds half a line (line ~945);
+    // block post-spacing adds a full line.  That's 1.5 lines between
+    // paragraph tops — a visible blank line gap without an extra
+    // half-line bump that felt too airy.
 }
 
 // ─── Hint label generation ──────────────────────────────
