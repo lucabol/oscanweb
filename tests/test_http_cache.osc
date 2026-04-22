@@ -27,6 +27,7 @@ fn! assert_true(actual: bool, test_name: str) {
 }
 
 fn! make_resp(body: str, ct: str, status: i32) -> HttpResponse {
+    let empty: [str] = [];
     HttpResponse {
         status_code: status,
         content_type: ct,
@@ -34,6 +35,7 @@ fn! make_resp(body: str, ct: str, status: i32) -> HttpResponse {
         redirect_url: "",
         error: "",
         ok: status >= 200 and status < 300,
+        set_cookie_lines: empty,
     }
 }
 

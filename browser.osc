@@ -5,6 +5,7 @@ use "url.osc"
 use "html.osc"
 use "http.osc"
 use "http_cache.osc"
+use "cookies.osc"
 use "css.osc"
 use "js.osc"
 use "storage.osc"
@@ -526,8 +527,10 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
         return -1;
     };
 
-    // Fetch image data
-    let resp: HttpResponse = http_get(img_host, img_port, img_path, img_tls);
+    // Fetch image data. Subresources don't carry cookies in v1 — most
+    // image CDNs don't authenticate, and threading the jar through the
+    // image pipeline would materially widen this module's surface.
+    let resp: HttpResponse = http_get(img_host, img_port, img_path, img_tls, "");
     if not resp.ok or str_len(resp.body) == 0 {
         map_set(img_cache_idx, src, "-1");
         return -1;
@@ -1775,6 +1778,20 @@ fn! main() {
     let mut page_cache_cts: [str] = [];
     let mut page_cache_status: [i32] = [];
 
+    // Cookie jar. Parallel arrays per repo convention (see cookies.osc
+    // header for details). Loaded from %APPDATA%/oscaweb_cookies.txt at
+    // startup; saved back after every navigation that sets a persistent
+    // cookie. `gC` clears the whole jar.
+    let mut ck_names: [str] = [];
+    let mut ck_values: [str] = [];
+    let mut ck_domains: [str] = [];
+    let mut ck_paths: [str] = [];
+    let mut ck_secure: [bool] = [];
+    let mut ck_host_only: [bool] = [];
+    let mut ck_persistent: [bool] = [];
+    cookies_load(ck_names, ck_values, ck_domains, ck_paths,
+                 ck_secure, ck_host_only, ck_persistent);
+
     // Address bar
     let mut url_buf: [i32] = [];
     let mut url_focused: bool = false;
@@ -2271,7 +2288,37 @@ fn! main() {
                                                 page_cache_status[cache_hit]);
                         from_cache = true;
                     } else {
-                        resp = http_get(fetch_host, fetch_port, fetch_path, fetch_tls);
+                        // Build Cookie: header (if any jar entries match
+                        // host/path/scheme) and pass to http_get. The
+                        // response may carry Set-Cookie lines which we
+                        // fold back into the jar below.
+                        let ck_hdr: str = cookies_build_header(
+                            ck_names, ck_values, ck_domains, ck_paths,
+                            ck_secure, ck_host_only,
+                            fetch_host, fetch_path, fetch_tls);
+                        let mut extra: str = "";
+                        if str_len(ck_hdr) > 0 {
+                            extra = "Cookie: {ck_hdr}\r\n";
+                        };
+                        resp = http_get(fetch_host, fetch_port, fetch_path, fetch_tls, extra);
+                        // Absorb any Set-Cookie headers from the response
+                        // into the jar. Done before redirect handling so
+                        // cookies set on a 302 response are available on
+                        // the follow-up request (standard browser
+                        // behaviour — login flows depend on this).
+                        let sc_n: i32 = len(resp.set_cookie_lines);
+                        if sc_n > 0 {
+                            let mut sci: i32 = 0;
+                            while sci < sc_n {
+                                cookies_parse_set_cookie(
+                                    ck_names, ck_values, ck_domains, ck_paths,
+                                    ck_secure, ck_host_only, ck_persistent,
+                                    fetch_host, resp.set_cookie_lines[sci]);
+                                sci += 1;
+                            };
+                            cookies_save(ck_names, ck_values, ck_domains, ck_paths,
+                                         ck_secure, ck_host_only, ck_persistent);
+                        };
                     };
                     vlog_int("fetch status", resp.status_code);
                     vlog_int("fetch body_len", str_len(resp.body));
@@ -2356,7 +2403,7 @@ fn! main() {
                                     link_path = url_resolve_relative(fetch_path, href);
                                 };
                                 vlog_msg("css link fetch", href);
-                                let lresp: HttpResponse = http_get(link_host, link_port, link_path, link_tls);
+                                let lresp: HttpResponse = http_get(link_host, link_port, link_path, link_tls, "");
                                 if lresp.ok and str_len(lresp.body) > 0 {
                                     css_order = css_parse(css_rules, lresp.body, css_order);
                                 };
@@ -2512,6 +2559,14 @@ fn! main() {
                             nav_url = current_url;
                             needs_navigate = true;
                         };
+                        render_dirty = true;
+                    } else if key == 67 and last_key == 103 {
+                        // gC — clear the cookie jar (both in-memory and
+                        // on-disk). User-facing escape hatch since we
+                        // don't enforce real-time cookie expiry.
+                        cookies_clear_all(ck_names, ck_values, ck_domains, ck_paths,
+                                          ck_secure, ck_host_only, ck_persistent);
+                        status_msg = "Cookies cleared";
                         render_dirty = true;
                     } else if key == 109 and last_key == 103 {
                         // gm — jump to main content landmark.  Uses the
