@@ -52,7 +52,11 @@ fn! html_append_child(nodes: [HtmlNode], parent_idx: i32, child_idx: i32) {
     };
 }
 
-// Collect all text content under a node (recursive via index walk)
+// Collect all text content under a node (recursive via index walk).
+// Text inside <style>, <script>, <head>, <meta>, <link>, <title> descendants
+// is skipped — it's metadata, not visible content — but if `idx` is itself
+// one of those tags, the text IS returned (used by CSS to read <style>
+// rules).
 fn! html_get_text_content(nodes: [HtmlNode], idx: i32) -> str {
     let node: HtmlNode = nodes[idx];
     if node.is_text {
@@ -61,12 +65,19 @@ fn! html_get_text_content(nodes: [HtmlNode], idx: i32) -> str {
     let mut result: str = "";
     let mut child: i32 = node.first_child;
     while child != -1 {
-        let ct: str = html_get_text_content(nodes, child);
-        if str_len(ct) > 0 {
-            if str_len(result) > 0 {
-                result = str_concat(result, " ");
+        let ch_node: HtmlNode = nodes[child];
+        let skip_child: bool = not ch_node.is_text and (
+            str_eq(ch_node.tag, "style") or str_eq(ch_node.tag, "script") or
+            str_eq(ch_node.tag, "head") or str_eq(ch_node.tag, "meta") or
+            str_eq(ch_node.tag, "link") or str_eq(ch_node.tag, "title"));
+        if not skip_child {
+            let ct: str = html_get_text_content(nodes, child);
+            if str_len(ct) > 0 {
+                if str_len(result) > 0 {
+                    result = str_concat(result, " ");
+                };
+                result = str_concat(result, ct);
             };
-            result = str_concat(result, ct);
         };
         child = nodes[child].next_sibling;
     };
