@@ -63,15 +63,22 @@ let TTC_REG_SPACEW: i32 = 5;
 let TTC_MONO_ASCENT: i32 = 6;
 let TTC_MONO_LINEH: i32 = 7;
 let TTC_MONO_SPACEW: i32 = 8;
-let TTC_BASE_BODY_PX: i32 = 9;   // "12pt" size, what Ctrl+/- adjusts
-let TTC_BASE_MONO_PX: i32 = 10;
-let TTC_LEN: i32 = 11;
+// Heading (Trebuchet / Lucida / Verdana / Tahoma / Arial fallback).
+// Uses the same pixel size as body text; heading tags scale via child_scale.
+// Zero values mean "no head font loaded" — dispatchers then fall back to the
+// body (tt_reg) handle.
+let TTC_HEAD_ASCENT: i32 = 9;
+let TTC_HEAD_LINEH: i32 = 10;
+let TTC_HEAD_SPACEW: i32 = 11;
+let TTC_BASE_BODY_PX: i32 = 12;   // "12pt" size, what Ctrl+/- adjusts
+let TTC_BASE_MONO_PX: i32 = 13;
+let TTC_LEN: i32 = 14;
 
 // Recompute effective sizes + cached metrics.  Called whenever the TT
 // state changes (toggle, size change, small_font flip).  When small
 // mode is on, effective size is ~70% of base so the 8pt/12pt chrome
 // button visibly shrinks TT text too.
-fn! tt_recache(tt_reg: handle, tt_mono: handle, tt_cfg: [i32], small_font: bool) {
+fn! tt_recache(tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32], small_font: bool) {
     let body_base: i32 = tt_cfg[TTC_BASE_BODY_PX];
     let mono_base: i32 = tt_cfg[TTC_BASE_MONO_PX];
     let mut body_eff: i32 = if small_font { (body_base * 7) / 10 } else { body_base };
@@ -90,6 +97,15 @@ fn! tt_recache(tt_reg: handle, tt_mono: handle, tt_cfg: [i32], small_font: bool)
         tt_cfg[TTC_MONO_LINEH] = tt_line_height(tt_mono, mono_eff as f64);
         tt_cfg[TTC_MONO_SPACEW] = tt_text_width(tt_mono, " ", mono_eff as f64);
     };
+    if (tt_head as i64) != (0 as i64) {
+        tt_cfg[TTC_HEAD_ASCENT] = tt_ascent(tt_head, body_eff as f64);
+        tt_cfg[TTC_HEAD_LINEH] = tt_line_height(tt_head, body_eff as f64);
+        tt_cfg[TTC_HEAD_SPACEW] = tt_text_width(tt_head, " ", body_eff as f64);
+    } else {
+        tt_cfg[TTC_HEAD_ASCENT] = 0;
+        tt_cfg[TTC_HEAD_LINEH] = 0;
+        tt_cfg[TTC_HEAD_SPACEW] = 0;
+    };
 }
 
 // Is TT active for body rendering?  Requires both "enabled" flag and a
@@ -98,9 +114,42 @@ fn tt_on(tt_reg: handle, tt_cfg: [i32]) -> bool {
     tt_cfg[TTC_ENABLED] != 0 and (tt_reg as i64) != (0 as i64)
 }
 
+// Try each file path in order and return the first successfully loaded
+// TrueType handle, or 0 if every path fails.  Used to build per-face
+// fallback chains (Georgia→Times→Arial, Trebuchet→Lucida→Verdana→…).
+fn! tt_load_first(paths: [str]) -> handle {
+    let mut out: handle = (0 as i64) as handle;
+    let mut done: bool = false;
+    let n: i32 = len(paths);
+    for pi in 0..n {
+        if not done {
+            match read_file(paths[pi]) {
+                Result::Ok(fb) => {
+                    match tt_load(fb) {
+                        Result::Ok(h) => { out = h; done = true; },
+                        Result::Err(_) => {},
+                    };
+                },
+                Result::Err(_) => {},
+            };
+        };
+    };
+    out
+}
+
 // Mono bitmap font ids that route to the mono TT handle.
 fn is_mono_font_id(font: i32) -> bool {
     font == 0 or font == 4 or font == 2 or font == 6
+}
+
+// Heading virtual font id (no matching bitmap glyph set).
+fn is_heading_font_id(font: i32) -> bool {
+    font == FONT_HEADING_L
+}
+
+// Map virtual heading font id back to a real bitmap id for gfx_* calls.
+fn bitmap_font_of(font: i32) -> i32 {
+    if font == FONT_HEADING_L { FONT_PROPORTIONAL_L } else { font }
 }
 
 fn line_h_of(scale: i32) -> i32 { FONT_H * scale + 8 }
@@ -138,6 +187,8 @@ fn tt_line_h_of(scale: i32, tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
     if tt_on(tt_reg, tt_cfg) {
         if is_mono_font_id(font) {
             tt_cfg[TTC_MONO_LINEH] * scale + 4
+        } else if is_heading_font_id(font) and tt_cfg[TTC_HEAD_LINEH] > 0 {
+            tt_cfg[TTC_HEAD_LINEH] * scale + 4
         } else {
             tt_cfg[TTC_REG_LINEH] * scale + 4
         }
@@ -150,6 +201,8 @@ fn tt_glyph_h_of(scale: i32, tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
     if tt_on(tt_reg, tt_cfg) {
         if is_mono_font_id(font) {
             tt_cfg[TTC_MONO_LINEH] * scale
+        } else if is_heading_font_id(font) and tt_cfg[TTC_HEAD_LINEH] > 0 {
+            tt_cfg[TTC_HEAD_LINEH] * scale
         } else {
             tt_cfg[TTC_REG_LINEH] * scale
         }
@@ -162,17 +215,23 @@ fn tt_glyph_h_of(scale: i32, tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
 // When TT is on it queries tt_text_width, which is impure; hence the
 // whole helper is `fn!`.
 fn! text_width_f(s: str, font: i32, scale: i32,
-                 tt_reg: handle, tt_mono: handle, tt_cfg: [i32]) -> i32 {
+                 tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) -> i32 {
     if tt_on(tt_reg, tt_cfg) {
-        let h: handle = if is_mono_font_id(font) { tt_mono } else { tt_reg };
+        let h: handle = if is_mono_font_id(font) {
+            tt_mono
+        } else if is_heading_font_id(font) and (tt_head as i64) != (0 as i64) {
+            tt_head
+        } else {
+            tt_reg
+        };
         let px: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_PX] } else { tt_cfg[TTC_BODY_PX] };
         if (h as i64) != (0 as i64) {
             tt_text_width(h, s, (px * scale) as f64)
         } else {
-            gfx_text_width(s, font) * scale
+            gfx_text_width(s, bitmap_font_of(font)) * scale
         }
     } else {
-        gfx_text_width(s, font) * scale
+        gfx_text_width(s, bitmap_font_of(font)) * scale
     }
 }
 
@@ -190,15 +249,27 @@ fn is_mono_tag(tag: str) -> bool {
 }
 
 fn! draw_text_f(x: i32, y: i32, s: str, color: i32, font: i32, scale: i32,
-                tt_reg: handle, tt_mono: handle, tt_cfg: [i32]) -> i32 {
+                tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) -> i32 {
     if tt_on(tt_reg, tt_cfg) {
-        let h: handle = if is_mono_font_id(font) { tt_mono } else { tt_reg };
+        let h: handle = if is_mono_font_id(font) {
+            tt_mono
+        } else if is_heading_font_id(font) and (tt_head as i64) != (0 as i64) {
+            tt_head
+        } else {
+            tt_reg
+        };
         let px: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_PX] } else { tt_cfg[TTC_BODY_PX] };
         if (h as i64) != (0 as i64) {
             // `y` is the top-left of a bitmap glyph cell; TT uses
             // baseline.  Add ascent and a small leading fudge so the
             // baseline lands where the bitmap font's baseline would.
-            let ascent: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_ASCENT] } else { tt_cfg[TTC_REG_ASCENT] };
+            let ascent: i32 = if is_mono_font_id(font) {
+                tt_cfg[TTC_MONO_ASCENT]
+            } else if is_heading_font_id(font) and tt_cfg[TTC_HEAD_ASCENT] > 0 {
+                tt_cfg[TTC_HEAD_ASCENT]
+            } else {
+                tt_cfg[TTC_REG_ASCENT]
+            };
             let baseline: i32 = y + ascent * scale + 2;
             // OscaWeb colors are packed as 0x00RRGGBB (alpha byte = 0).
             // tt_draw_text uses the alpha channel as coverage weight, so
@@ -207,16 +278,16 @@ fn! draw_text_f(x: i32, y: i32, s: str, color: i32, font: i32, scale: i32,
             tt_draw_text(x, baseline, s, h, (px * scale) as f64, tt_color)
         } else {
             if scale <= 1 {
-                gfx_draw_text(x, y, s, color, font)
+                gfx_draw_text(x, y, s, color, bitmap_font_of(font))
             } else {
-                gfx_draw_text_scaled(x, y, s, color, scale, scale, font)
+                gfx_draw_text_scaled(x, y, s, color, scale, scale, bitmap_font_of(font))
             }
         }
     } else {
         if scale <= 1 {
-            gfx_draw_text(x, y, s, color, font)
+            gfx_draw_text(x, y, s, color, bitmap_font_of(font))
         } else {
-            gfx_draw_text_scaled(x, y, s, color, scale, scale, font)
+            gfx_draw_text_scaled(x, y, s, color, scale, scale, bitmap_font_of(font))
         }
     }
 }
@@ -475,19 +546,19 @@ fn! flush_pre_segment(segment_chars: [i32], x_ptr: [i32], y_ptr: [i32],
                       vp_top: i32, line_right: i32, line_left: i32,
                       color: i32, font: i32, scale: i32,
                       word_map: [WordInfo],
-                      tt_reg: handle, tt_mono: handle, tt_cfg: [i32]) {
+                      tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
     let gh: i32 = tt_glyph_h_of(scale, tt_reg, tt_cfg, font);
     let lh: i32 = tt_line_h_of(scale, tt_reg, tt_cfg, font);
     let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
     let visible: bool = draw_y + gh >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT;
     if len(segment_chars) > 0 {
         let seg: str = str_from_chars(segment_chars);
-        let seg_w: i32 = text_width_f(seg, font, scale, tt_reg, tt_mono, tt_cfg);
+        let seg_w: i32 = text_width_f(seg, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
         if visible {
             let bg_x: i32 = x_ptr[0];
             let bg_w: i32 = line_right - bg_x;
             if bg_w > 0 { gfx_fill_rect(bg_x, draw_y, bg_w, lh, PRE_BG); };
-            draw_text_f(x_ptr[0], draw_y, seg, color, font, scale, tt_reg, tt_mono, tt_cfg);
+            draw_text_f(x_ptr[0], draw_y, seg, color, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
             let wi: WordInfo = WordInfo { x: x_ptr[0], y: draw_y, w: seg_w, text: seg };
             push(word_map, wi);
         };
@@ -510,7 +581,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 links: [LinkInfo], href: str, search_q: str,
                 word_map: [WordInfo], strikethrough: bool, mark_bg: i32,
                 indent: i32, in_chrome: bool,
-                tt_reg: handle, tt_mono: handle, tt_cfg: [i32]) {
+                tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
     // Normalize whitespace: collapse \n, \r, \t into spaces so split by space
     // doesn't emit them as visible "words" (which render as missing-glyph ?).
     let raw_chars: [i32] = str_to_chars(text);
@@ -527,7 +598,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
     let gh: i32 = tt_glyph_h_of(scale, tt_reg, tt_cfg, font);
     // Word gap: measured space width in current font, with a minimum so
     // proportional rendering doesn't collapse word boundaries.
-    let raw_gap: i32 = text_width_f(" ", font, scale, tt_reg, tt_mono, tt_cfg);
+    let raw_gap: i32 = text_width_f(" ", font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
     let gap: i32 = if raw_gap < 3 * scale { 3 * scale } else { raw_gap };
 
     // Track link bounding box (first word position + accumulated width)
@@ -540,7 +611,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
         let word: str = words[word_idx];
         if str_len(word) == 0 { continue; };
 
-        let word_w: i32 = text_width_f(word, font, scale, tt_reg, tt_mono, tt_cfg);
+        let word_w: i32 = text_width_f(word, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
 
         // Word wrap
         if x_ptr[0] + word_w > max_x and x_ptr[0] > indent + PAD {
@@ -570,15 +641,21 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
             // Highlight search matches in this word
             if str_len(search_q) > 0 and str_contains(str_to_lower(word), search_q) {
                 gfx_fill_rect(x_ptr[0], draw_y, word_w, lh, SEARCH_HL);
-                draw_text_f(x_ptr[0], draw_y, word, HINT_FG, font, scale, tt_reg, tt_mono, tt_cfg);
+                draw_text_f(x_ptr[0], draw_y, word, HINT_FG, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
             } else {
-                draw_text_f(x_ptr[0], draw_y, word, color, font, scale, tt_reg, tt_mono, tt_cfg);
+                draw_text_f(x_ptr[0], draw_y, word, color, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
             };
             if underline {
                 // TT: draw just below the baseline (ascent + a few px of
                 // leading).  Bitmap: near the bottom of the glyph cell.
                 let ul_y: i32 = if tt_on(tt_reg, tt_cfg) {
-                    let asc: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_ASCENT] } else { tt_cfg[TTC_REG_ASCENT] };
+                    let asc: i32 = if is_mono_font_id(font) {
+                        tt_cfg[TTC_MONO_ASCENT]
+                    } else if is_heading_font_id(font) and tt_cfg[TTC_HEAD_ASCENT] > 0 {
+                        tt_cfg[TTC_HEAD_ASCENT]
+                    } else {
+                        tt_cfg[TTC_REG_ASCENT]
+                    };
                     draw_y + asc * scale + 5
                 } else {
                     draw_y + gh - 2
@@ -589,7 +666,13 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 // TT: run through the x-height (roughly 0.35 of ascent
                 // below the baseline, negative y).
                 let sk_y: i32 = if tt_on(tt_reg, tt_cfg) {
-                    let asc2: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_ASCENT] } else { tt_cfg[TTC_REG_ASCENT] };
+                    let asc2: i32 = if is_mono_font_id(font) {
+                        tt_cfg[TTC_MONO_ASCENT]
+                    } else if is_heading_font_id(font) and tt_cfg[TTC_HEAD_ASCENT] > 0 {
+                        tt_cfg[TTC_HEAD_ASCENT]
+                    } else {
+                        tt_cfg[TTC_REG_ASCENT]
+                    };
                     draw_y + asc2 * scale + 2 - (asc2 * scale * 35) / 100
                 } else {
                     draw_y + gh / 2
@@ -627,7 +710,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
 // proportional font metrics via text_width_f.
 fn! measure_inline_text(nodes: [HtmlNode], idx: i32, styles: [ComputedStyle],
                         font: i32, scale: i32, out: [i32],
-                        tt_reg: handle, tt_mono: handle, tt_cfg: [i32]) {
+                        tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
     if idx < 0 or idx >= len(nodes) { return; };
     if idx < len(styles) and styles[idx].display_none { return; };
     let node: HtmlNode = nodes[idx];
@@ -653,13 +736,13 @@ fn! measure_inline_text(nodes: [HtmlNode], idx: i32, styles: [ComputedStyle],
         while len(norm) > 0 and norm[len(norm) - 1] == 32 { pop(norm); };
         if len(norm) == 0 { return; };
         let collapsed: str = str_from_chars(norm);
-        out[0] = out[0] + text_width_f(collapsed, font, scale, tt_reg, tt_mono, tt_cfg);
+        out[0] = out[0] + text_width_f(collapsed, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
         return;
     };
     if html_is_skip_tag(node.tag) { return; };
     let mut child: i32 = node.first_child;
     while child != -1 {
-        measure_inline_text(nodes, child, styles, font, scale, out, tt_reg, tt_mono, tt_cfg);
+        measure_inline_text(nodes, child, styles, font, scale, out, tt_reg, tt_mono, tt_head, tt_cfg);
         child = nodes[child].next_sibling;
     };
 }
@@ -725,18 +808,18 @@ fn! collect_cell_indices(nodes: [HtmlNode], tr_node: HtmlNode) -> [i32] {
 // Greedy word-wrap `text` into lines that each fit within max_px at the
 // given font/scale.  Returns at least one (possibly empty) line.
 fn! wrap_text_to_lines(text: str, max_px: i32, font: i32, scale: i32,
-                       tt_reg: handle, tt_mono: handle, tt_cfg: [i32]) -> [str] {
+                       tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) -> [str] {
     let flat: str = normalize_ws(text);
     let mut lines: [str] = [];
     if str_len(flat) == 0 { push(lines, ""); return lines; };
     let words: [str] = str_split(flat, " ");
-    let space_w: i32 = text_width_f(" ", font, scale, tt_reg, tt_mono, tt_cfg);
+    let space_w: i32 = text_width_f(" ", font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
     let mut cur: str = "";
     let mut cur_w: i32 = 0;
     for wi in 0..len(words) {
         let w: str = words[wi];
         if str_len(w) == 0 { continue; };
-        let ww: i32 = text_width_f(w, font, scale, tt_reg, tt_mono, tt_cfg);
+        let ww: i32 = text_width_f(w, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
         if str_len(cur) == 0 {
             cur = w;
             cur_w = ww;
@@ -772,7 +855,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 fragment_target: str, fragment_y_out: [i32],
                 outline_idx: [i32], outline_y_out: [i32],
                 body_mono_font: i32,
-                tt_reg: handle, tt_mono: handle, tt_cfg: [i32]) {
+                tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
     let node: HtmlNode = nodes[idx];
 
     // Compute whether this node is itself chrome (nav/aside/header/footer,
@@ -855,7 +938,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 if c == 10 {
                     flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
                                       line_right, line_left, color, font, scale, word_map,
-                                      tt_reg, tt_mono, tt_cfg);
+                                      tt_reg, tt_mono, tt_head, tt_cfg);
                     while len(segment_chars) > 0 { pop(segment_chars); };
                     y_ptr[0] = y_ptr[0] + pre_lh;
                     x_ptr[0] = line_left;
@@ -871,13 +954,13 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             };
             flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
                               line_right, line_left, color, font, scale, word_map,
-                              tt_reg, tt_mono, tt_cfg);
+                              tt_reg, tt_mono, tt_head, tt_cfg);
         } else {
             if str_len(str_trim(text)) == 0 { return; };
             render_text(text, x_ptr, y_ptr, color, font, scale, vp_top, vp_width,
                         is_link or force_underline, links, link_href, search_q, word_map,
                         strikethrough, mark_bg, indent, in_chrome,
-                        tt_reg, tt_mono, tt_cfg);
+                        tt_reg, tt_mono, tt_head, tt_cfg);
         };
         return;
     };
@@ -1043,9 +1126,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if draw_y + FONT_H >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-            draw_text_f(x_ptr[0], draw_y, display, HR_COLOR, font, scale, tt_reg, tt_mono, tt_cfg);
+            draw_text_f(x_ptr[0], draw_y, display, HR_COLOR, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
         };
-        x_ptr[0] = x_ptr[0] + text_width_f(display, font, scale, tt_reg, tt_mono, tt_cfg) + text_width_f(" ", font, scale, tt_reg, tt_mono, tt_cfg);
+        x_ptr[0] = x_ptr[0] + text_width_f(display, font, scale, tt_reg, tt_mono, tt_head, tt_cfg) + text_width_f(" ", font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
         return;
     };
 
@@ -1084,11 +1167,11 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             for ci1 in 0..len(cells1) {
                 let raw: str = html_get_text_content(nodes, cells1[ci1]);
                 let txt: str = normalize_ws(raw);
-                let w_nat: i32 = text_width_f(txt, body_mono_font, 1, tt_reg, tt_mono, tt_cfg);
+                let w_nat: i32 = text_width_f(txt, body_mono_font, 1, tt_reg, tt_mono, tt_head, tt_cfg);
                 let ws: [str] = str_split(txt, " ");
                 let mut max_word_w: i32 = 0;
                 for wi in 0..len(ws) {
-                    let ww: i32 = text_width_f(ws[wi], body_mono_font, 1, tt_reg, tt_mono, tt_cfg);
+                    let ww: i32 = text_width_f(ws[wi], body_mono_font, 1, tt_reg, tt_mono, tt_head, tt_cfg);
                     if ww > max_word_w { max_word_w = ww; };
                 };
                 if w_nat > col_max[ci1] { col_max[ci1] = w_nat; };
@@ -1170,7 +1253,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             for ci3 in 0..len(cells2) {
                 let raw2: str = html_get_text_content(nodes, cells2[ci3]);
                 let inner_w: i32 = col_w[ci3] - cell_pad;
-                let ln: [str] = wrap_text_to_lines(raw2, inner_w, body_mono_font, 1, tt_reg, tt_mono, tt_cfg);
+                let ln: [str] = wrap_text_to_lines(raw2, inner_w, body_mono_font, 1, tt_reg, tt_mono, tt_head, tt_cfg);
                 if len(ln) > max_lines { max_lines = len(ln); };
                 push(cell_lines, ln);
             };
@@ -1184,7 +1267,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 for li in 0..len(lines) {
                     let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP + li * LINE_H;
                     if cy + FONT_H >= CHROME_TOP and cy < canvas_height() - CHROME_BOT {
-                        draw_text_f(cx, cy, lines[li], cc, body_mono_font, 1, tt_reg, tt_mono, tt_cfg);
+                        draw_text_f(cx, cy, lines[li], cc, body_mono_font, 1, tt_reg, tt_mono, tt_head, tt_cfg);
                     };
                 };
             };
@@ -1223,11 +1306,12 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     let mut child_markbg: i32 = mark_bg;
     let mut child_ol: [i32] = ol_counter;
 
-    if str_eq(tag, "h1") { child_color = H1_COLOR; child_scale = heading_scale(tag) * scale; }
-    else if str_eq(tag, "h2") { child_color = H2_COLOR; child_scale = heading_scale(tag) * scale; }
+    if str_eq(tag, "h1") { child_color = H1_COLOR; child_scale = heading_scale(tag) * scale; child_font = FONT_HEADING_L; }
+    else if str_eq(tag, "h2") { child_color = H2_COLOR; child_scale = heading_scale(tag) * scale; child_font = FONT_HEADING_L; }
     else if str_eq(tag, "h3") or str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
         child_color = H3_COLOR;
         child_scale = heading_scale(tag) * scale;
+        child_font = FONT_HEADING_L;
     }
     else if str_eq(tag, "b") or str_eq(tag, "strong") { child_color = BOLD_COLOR; }
     else if str_eq(tag, "em") or str_eq(tag, "i") or str_eq(tag, "cite") { child_color = EM_COLOR; }
@@ -1308,15 +1392,15 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             let num_str: str = i32_to_str(ol_counter[0]);
             let li_label: str = str_concat(num_str, ". ");
             if draw_y + tt_glyph_h_of(child_scale, tt_reg, tt_cfg, child_font) >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-                draw_text_f(x_ptr[0], draw_y, li_label, child_color, child_font, child_scale, tt_reg, tt_mono, tt_cfg);
+                draw_text_f(x_ptr[0], draw_y, li_label, child_color, child_font, child_scale, tt_reg, tt_mono, tt_head, tt_cfg);
             };
-            x_ptr[0] = x_ptr[0] + text_width_f(li_label, child_font, child_scale, tt_reg, tt_mono, tt_cfg);
+            x_ptr[0] = x_ptr[0] + text_width_f(li_label, child_font, child_scale, tt_reg, tt_mono, tt_head, tt_cfg);
             ol_counter[0] = ol_counter[0] + 1;
         } else {
             if draw_y + tt_glyph_h_of(child_scale, tt_reg, tt_cfg, child_font) >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-                draw_text_f(x_ptr[0], draw_y, "* ", child_color, child_font, child_scale, tt_reg, tt_mono, tt_cfg);
+                draw_text_f(x_ptr[0], draw_y, "* ", child_color, child_font, child_scale, tt_reg, tt_mono, tt_head, tt_cfg);
             };
-            x_ptr[0] = x_ptr[0] + text_width_f("* ", child_font, child_scale, tt_reg, tt_mono, tt_cfg);
+            x_ptr[0] = x_ptr[0] + text_width_f("* ", child_font, child_scale, tt_reg, tt_mono, tt_head, tt_cfg);
         };
     };
 
@@ -1328,7 +1412,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         let ta: i32 = styles[idx].text_align;
         if ta == 1 or ta == 2 {
             let w_ptr: [i32] = [0];
-            measure_inline_text(nodes, idx, styles, child_font, child_scale, w_ptr, tt_reg, tt_mono, tt_cfg);
+            measure_inline_text(nodes, idx, styles, child_font, child_scale, w_ptr, tt_reg, tt_mono, tt_head, tt_cfg);
             let measured: i32 = w_ptr[0];
             let line_start: i32 = eff_indent + PAD;
             let line_end: i32 = eff_vp_width - PAD;
@@ -1365,7 +1449,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     fragment_target, fragment_y_out,
                     outline_idx, outline_y_out,
                     body_mono_font,
-                    tt_reg, tt_mono, tt_cfg);
+                    tt_reg, tt_mono, tt_head, tt_cfg);
         child = nodes[child].next_sibling;
     };
 
@@ -1611,40 +1695,55 @@ fn! main() {
     let mut small_font: bool = false;
 
     // ─── TrueType font state ───
-    // Two handles (regular + mono) loaded from system fonts at startup.
+    // Three handles loaded from system fonts at startup:
+    //   tt_reg   — proportional body serif (Georgia, with Times New Roman /
+    //              Arial fallbacks so we always get a readable face).
+    //   tt_head  — proportional heading sans (Trebuchet MS, falling through
+    //              Lucida Sans Unicode / Verdana / Tahoma / Arial).  When
+    //              unavailable, heading tags fall back to tt_reg via the
+    //              dispatcher so layout still works.
+    //   tt_mono  — monospace for <pre>/<code> (Consolas, falling through
+    //              Courier New / Lucida Console).
     // Toggled on/off by the "TT"/"Bmp" chrome button and Ctrl+T.  Size
     // adjustable with Ctrl+= / Ctrl+- when active.  Persisted to font.cfg.
     let mut tt_reg: handle = (0 as i64) as handle;
     let mut tt_mono: handle = (0 as i64) as handle;
+    let mut tt_head: handle = (0 as i64) as handle;
     let mut tt_cfg: [i32] = [];
-    for _tti in 0..11 { push(tt_cfg, 0); };
+    for _tti in 0..TTC_LEN { push(tt_cfg, 0); };
     tt_cfg[TTC_BASE_BODY_PX] = 20;
     tt_cfg[TTC_BASE_MONO_PX] = 18;
     tt_cfg[TTC_BODY_PX] = 20;
     tt_cfg[TTC_MONO_PX] = 18;
 
-    // Try loading system fonts.  If unavailable, TT stays disabled and
-    // the renderer falls back silently to bitmap.
-    match read_file("C:\\Windows\\Fonts\\arial.ttf") {
-        Result::Ok(fb) => {
-            match tt_load(fb) {
-                Result::Ok(h) => { tt_reg = h; },
-                Result::Err(_) => {},
-            };
-        },
-        Result::Err(_) => {},
-    };
-    match read_file("C:\\Windows\\Fonts\\consola.ttf") {
-        Result::Ok(fb2) => {
-            match tt_load(fb2) {
-                Result::Ok(h2) => { tt_mono = h2; },
-                Result::Err(_) => {},
-            };
-        },
-        Result::Err(_) => {},
-    };
+    // Try loading system fonts.  Each face uses a fallback chain so that
+    // missing primary fonts (e.g. Georgia disabled, or a stripped system
+    // image without Trebuchet) still yield a usable TT render path.  If
+    // the entire chain fails, that slot stays 0 and the dispatcher falls
+    // back silently to the bitmap font.
+    let body_font_paths: [str] = [
+        "C:\\Windows\\Fonts\\georgia.ttf",
+        "C:\\Windows\\Fonts\\times.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+    ];
+    let head_font_paths: [str] = [
+        "C:\\Windows\\Fonts\\trebuc.ttf",
+        "C:\\Windows\\Fonts\\l_10646.ttf",
+        "C:\\Windows\\Fonts\\verdana.ttf",
+        "C:\\Windows\\Fonts\\tahoma.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+    ];
+    let mono_font_paths: [str] = [
+        "C:\\Windows\\Fonts\\consola.ttf",
+        "C:\\Windows\\Fonts\\cour.ttf",
+        "C:\\Windows\\Fonts\\lucon.ttf",
+    ];
+    tt_reg = tt_load_first(body_font_paths);
+    tt_head = tt_load_first(head_font_paths);
+    tt_mono = tt_load_first(mono_font_paths);
     defer tt_free(tt_reg);
     defer tt_free(tt_mono);
+    defer tt_free(tt_head);
 
     // Persisted TT settings: [enabled, body_px, mono_px].
     let tt_persist: [str] = storage_load_lines("font.cfg");
@@ -1668,7 +1767,7 @@ fn! main() {
     };
     // If user had TT enabled but fonts failed to load, turn it off.
     if (tt_reg as i64) == (0 as i64) { tt_cfg[TTC_ENABLED] = 0; };
-    tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
+    tt_recache(tt_reg, tt_mono, tt_head, tt_cfg, small_font);
 
     // Pending scroll target when the URL fragment (#id) matches an element.
     let mut pending_fragment: str = "";
@@ -1782,7 +1881,7 @@ fn! main() {
                 };
             };
             if tt_changed {
-                tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
+                tt_recache(tt_reg, tt_mono, tt_head, tt_cfg, small_font);
                 // Persist.
                 let mut pl2: [str] = [];
                 push(pl2, i32_to_str(tt_cfg[TTC_ENABLED]));
@@ -2732,7 +2831,7 @@ fn! main() {
                     tt_cfg[TTC_BASE_BODY_PX] = sizes[next_idx];
                     tt_cfg[TTC_BASE_MONO_PX] = sizes[next_idx] - 2;
                     if tt_cfg[TTC_BASE_MONO_PX] < 8 { tt_cfg[TTC_BASE_MONO_PX] = 8; };
-                    tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
+                    tt_recache(tt_reg, tt_mono, tt_head, tt_cfg, small_font);
                     // Persist.
                     let mut pl3: [str] = [];
                     push(pl3, i32_to_str(tt_cfg[TTC_ENABLED]));
@@ -2741,7 +2840,7 @@ fn! main() {
                     storage_save_lines("font.cfg", pl3);
                 } else {
                     small_font = not small_font;
-                    tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
+                    tt_recache(tt_reg, tt_mono, tt_head, tt_cfg, small_font);
                 };
             };
             // TrueType toggle button just to the left of the font-size button.
@@ -2753,7 +2852,7 @@ fn! main() {
                                              tt_label, prev_btn);
             if tt_clicked and (tt_reg as i64) != (0 as i64) {
                 tt_cfg[TTC_ENABLED] = if tt_cfg[TTC_ENABLED] != 0 { 0 } else { 1 };
-                tt_recache(tt_reg, tt_mono, tt_cfg, small_font);
+                tt_recache(tt_reg, tt_mono, tt_head, tt_cfg, small_font);
                 // Persist new state.
                 let mut pl: [str] = [];
                 push(pl, i32_to_str(tt_cfg[TTC_ENABLED]));
@@ -2868,7 +2967,7 @@ fn! main() {
                             pending_fragment, fragment_y_out,
                             outline_idx, outline_y,
                             body_mono_eff,
-                            tt_reg, tt_mono, tt_cfg);
+                            tt_reg, tt_mono, tt_head, tt_cfg);
                 // Restore original ComputedStyle fields so toggling reader
                 // mode off (or navigating away) cleanly reverts the narrowing.
                 if narrow_override {

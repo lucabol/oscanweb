@@ -25,6 +25,12 @@ let FONT_PROPORTIONAL_L: i32 = 5; // FONT_PROPORTIONAL with 12-row cell
 let FONT_LATIN1_L: i32 = 6;       // FONT_LATIN1 with 12-row cell
 let FONT_BOX_L: i32 = 7;          // FONT_BOX with 12-row cell
 
+// Virtual font id used to route headings to a separate TrueType handle
+// (e.g. Trebuchet MS) while keeping body text on its own handle (Georgia).
+// No matching bitmap glyph set exists, so bitmap call sites must map this
+// back to FONT_PROPORTIONAL_L via bitmap_font_of() before calling gfx_*.
+let FONT_HEADING_L: i32 = 8;
+
 // ─── Theme Colors ────────────────────────────────────────
 // Computed as r * 65536 + g * 256 + b (same as rgb())
 
