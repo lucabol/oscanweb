@@ -33,6 +33,12 @@ let FONT_HEADING_L: i32 = 8;
 
 // ─── Theme Colors ────────────────────────────────────────
 // Computed as r * 65536 + g * 256 + b (same as rgb())
+//
+// Defaults below are the "always dark" fallback, used by widgets that
+// don't accept an explicit `ui_colors` array.  Theme-aware widgets
+// (ui_button, ui_textbox) take a `ui_colors: [i32]` parameter indexed
+// by the UI_C_* constants; callers build that array from their own
+// runtime theme.
 
 let UI_BG: i32 = 45 * 65536 + 45 * 256 + 48;
 let UI_BG_HOVER: i32 = 62 * 65536 + 62 * 256 + 66;
@@ -41,6 +47,16 @@ let UI_FG: i32 = 220 * 65536 + 220 * 256 + 220;
 let UI_FG_DIM: i32 = 150 * 65536 + 150 * 256 + 150;
 let UI_BORDER: i32 = 80 * 65536 + 80 * 256 + 85;
 let UI_ACCENT: i32 = 0 * 65536 + 122 * 256 + 204;
+
+// Indices into the `ui_colors` array passed to theme-aware widgets.
+let UI_C_BG: i32 = 0;
+let UI_C_BG_HOVER: i32 = 1;
+let UI_C_BG_ACTIVE: i32 = 2;
+let UI_C_FG: i32 = 3;
+let UI_C_FG_DIM: i32 = 4;
+let UI_C_BORDER: i32 = 5;
+let UI_C_ACCENT: i32 = 6;
+let UI_C_LEN: i32 = 7;
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -69,7 +85,9 @@ fn! ui_separator(x: i32, y: i32, w: i32) {
 
 // Button: clickable rectangle with label.
 // Returns true on the frame the mouse button is first pressed inside.
-fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32) -> bool {
+// `ui_colors` is a UI_C_LEN-element array indexed by UI_C_* constants.
+fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32,
+              ui_colors: [i32]) -> bool {
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
     let btn: i32 = canvas_mouse_btn();
@@ -78,19 +96,19 @@ fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32) -> bool
     let clicked: bool = hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
 
     // Choose background color based on state
-    let bg: i32 = if pressed { UI_BG_ACTIVE }
-                  else if hover { UI_BG_HOVER }
-                  else { UI_BG };
+    let bg: i32 = if pressed { ui_colors[UI_C_BG_ACTIVE] }
+                  else if hover { ui_colors[UI_C_BG_HOVER] }
+                  else { ui_colors[UI_C_BG] };
 
     gfx_fill_rect(x, y, w, h, bg);
-    gfx_rect(x, y, w, h, if hover { UI_ACCENT } else { UI_BORDER });
+    gfx_rect(x, y, w, h, if hover { ui_colors[UI_C_ACCENT] } else { ui_colors[UI_C_BORDER] });
 
     // Center the label text (UI chrome stays on FONT_DEFAULT so column
     // alignment in URL/status bars is preserved).
     let text_w: i32 = gfx_text_width(label, FONT_DEFAULT);
     let tx: i32 = x + (w - text_w) / 2;
     let ty: i32 = y + (h - 8) / 2;
-    gfx_draw_text(tx, ty, label, UI_FG, FONT_DEFAULT);
+    gfx_draw_text(tx, ty, label, ui_colors[UI_C_FG], FONT_DEFAULT);
 
     clicked
 }
@@ -177,7 +195,7 @@ fn! ui_slider(x: i32, y: i32, w: i32, value: i32, min_val: i32, max_val: i32) ->
 // select_all: if true, draw selection highlight over all text.
 // Returns new focused state (true if clicked on this textbox).
 fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32, key: i32,
-               cursor_pos: i32, select_all: bool) -> bool {
+               cursor_pos: i32, select_all: bool, ui_colors: [i32]) -> bool {
     let h: i32 = 20;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
@@ -187,11 +205,11 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32,
     let clicked_outside: bool = not hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
 
     // Draw background (darker when focused)
-    let bg: i32 = if focused { UI_BG_ACTIVE } else { UI_BG };
+    let bg: i32 = if focused { ui_colors[UI_C_BG_ACTIVE] } else { ui_colors[UI_C_BG] };
     gfx_fill_rect(x, y, w, h, bg);
 
     // Draw border (accent when focused)
-    gfx_rect(x, y, w, h, if focused { UI_ACCENT } else { UI_BORDER });
+    gfx_rect(x, y, w, h, if focused { ui_colors[UI_C_ACCENT] } else { ui_colors[UI_C_BORDER] });
 
     // Handle keyboard input when focused (only if caller passes key != 0)
     if focused and key != 0 {
@@ -221,17 +239,17 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32,
         let sel_w: i32 = len(buf) * 8;
         let sel_draw_w: i32 = if sel_w - scroll_off > text_area_w { text_area_w } else { sel_w - scroll_off };
         if sel_draw_w > 0 {
-            gfx_fill_rect(x + pad, text_y, sel_draw_w, 8, UI_ACCENT);
+            gfx_fill_rect(x + pad, text_y, sel_draw_w, 8, ui_colors[UI_C_ACCENT]);
         };
     };
 
-    gfx_draw_text(x + pad - scroll_off, text_y, text, UI_FG, FONT_DEFAULT);
+    gfx_draw_text(x + pad - scroll_off, text_y, text, ui_colors[UI_C_FG], FONT_DEFAULT);
 
     // Draw cursor when focused (thin rect at cursor position)
     if focused and not select_all {
         let cx: i32 = x + pad + cursor_px - scroll_off;
         if cx >= x + pad and cx < x + w - pad {
-            gfx_fill_rect(cx, text_y, 1, 8, UI_FG);
+            gfx_fill_rect(cx, text_y, 1, 8, ui_colors[UI_C_FG]);
         };
     };
 

@@ -292,29 +292,119 @@ fn! draw_text_f(x: i32, y: i32, s: str, color: i32, font: i32, scale: i32,
     }
 }
 
-// Colors
-let BG_COLOR: i32 = 30 * 65536 + 30 * 256 + 34;
-let FG_COLOR: i32 = 220 * 65536 + 220 * 256 + 220;
-let LINK_COLOR: i32 = 100 * 65536 + 149 * 256 + 237;
-let H1_COLOR: i32 = 255 * 65536 + 255 * 256 + 255;
-let H2_COLOR: i32 = 200 * 65536 + 200 * 256 + 200;
-let H3_COLOR: i32 = 170 * 65536 + 180 * 256 + 220;
-let BOLD_COLOR: i32 = 255 * 65536 + 255 * 256 + 220;
-let EM_COLOR: i32 = 255 * 65536 + 230 * 256 + 180;
-let CODE_FG: i32 = 180 * 65536 + 220 * 256 + 180;
-let HINT_BG: i32 = 255 * 65536 + 220 * 256 + 0;
-let HINT_FG: i32 = 0;
-let STATUS_BG: i32 = 40 * 65536 + 40 * 256 + 44;
-let HR_COLOR: i32 = 80 * 65536 + 80 * 256 + 85;
-let PRE_BG: i32 = 45 * 65536 + 45 * 256 + 50;
-let SEARCH_HL: i32 = 255 * 65536 + 255 * 256 + 100;
-let SEL_COLOR: i32 = 80 * 65536 + 140 * 256 + 220;
-let QUOTE_COLOR: i32 = 160 * 65536 + 170 * 256 + 190;
-let QUOTE_BAR: i32 = 80 * 65536 + 120 * 256 + 200;
-let MARK_BG: i32 = 200 * 65536 + 180 * 256 + 50;
-let DT_COLOR: i32 = 240 * 65536 + 240 * 256 + 255;
-let FIGCAP_COLOR: i32 = 140 * 65536 + 140 * 256 + 150;
-let TABLE_BORDER: i32 = 90 * 65536 + 90 * 256 + 100;
+// Colors — themed (dark + light variants, indexed into a runtime theme array)
+// The theme array is built once per frame by theme_make(light_mode) and
+// passed through the render pipeline so light/dark mode can swap without
+// module-level mutable state (which Oscan doesn't support).
+let T_BG: i32 = 0;
+let T_FG: i32 = 1;
+let T_LINK: i32 = 2;
+let T_H1: i32 = 3;
+let T_H2: i32 = 4;
+let T_H3: i32 = 5;
+let T_BOLD: i32 = 6;
+let T_EM: i32 = 7;
+let T_CODE_FG: i32 = 8;
+let T_HINT_BG: i32 = 9;
+let T_HINT_FG: i32 = 10;
+let T_STATUS_BG: i32 = 11;
+let T_HR: i32 = 12;
+let T_PRE_BG: i32 = 13;
+let T_SEARCH_HL: i32 = 14;
+let T_SEL: i32 = 15;
+let T_QUOTE: i32 = 16;
+let T_QUOTE_BAR: i32 = 17;
+let T_MARK_BG: i32 = 18;
+let T_DT: i32 = 19;
+let T_FIGCAP: i32 = 20;
+let T_TABLE_BORDER: i32 = 21;
+let T_TABLE_HEADER_BG: i32 = 22;
+let T_LEN: i32 = 23;
+
+fn! theme_make(light: bool) -> [i32] {
+    let mut t: [i32] = [];
+    for _i in 0..T_LEN { push(t, 0); };
+    if light {
+        // Palette tuned to a printable near-white light theme:
+        //   --color-text: #000; --color-border: #e0e0e0;
+        //   --color-code-bg: #fbfbff; --color-table-header: #f5f5ff;
+        //   --color-muted: #666;
+        t[T_BG]              = 255 * 65536 + 255 * 256 + 255;
+        t[T_FG]              =   0 * 65536 +   0 * 256 +   0;
+        t[T_LINK]            =   0 * 65536 + 102 * 256 + 204;
+        t[T_H1]              =   0 * 65536 +   0 * 256 +   0;
+        t[T_H2]              =   0 * 65536 +   0 * 256 +   0;
+        t[T_H3]              =   0 * 65536 +   0 * 256 +   0;
+        t[T_BOLD]            =   0 * 65536 +   0 * 256 +   0;
+        t[T_EM]              =   0 * 65536 +   0 * 256 +   0;
+        t[T_CODE_FG]         =   0 * 65536 +   0 * 256 +   0;
+        t[T_HINT_BG]         = 255 * 65536 + 220 * 256 +   0;
+        t[T_HINT_FG]         =   0 * 65536 +   0 * 256 +   0;
+        t[T_STATUS_BG]       = 245 * 65536 + 245 * 256 + 255;   // #f5f5ff
+        t[T_HR]              = 224 * 65536 + 224 * 256 + 224;   // #e0e0e0
+        t[T_PRE_BG]          = 251 * 65536 + 251 * 256 + 255;   // #fbfbff
+        t[T_SEARCH_HL]       = 255 * 65536 + 235 * 256 + 100;
+        t[T_SEL]             = 180 * 65536 + 210 * 256 + 250;
+        t[T_QUOTE]           = 102 * 65536 + 102 * 256 + 102;   // #666
+        t[T_QUOTE_BAR]       =   0 * 65536 + 102 * 256 + 204;
+        t[T_MARK_BG]         = 255 * 65536 + 240 * 256 + 120;
+        t[T_DT]              =   0 * 65536 +   0 * 256 +   0;
+        t[T_FIGCAP]          = 102 * 65536 + 102 * 256 + 102;   // #666
+        t[T_TABLE_BORDER]    = 224 * 65536 + 224 * 256 + 224;   // #e0e0e0
+        t[T_TABLE_HEADER_BG] = 245 * 65536 + 245 * 256 + 255;   // #f5f5ff
+    } else {
+        t[T_BG]              =  30 * 65536 +  30 * 256 +  34;
+        t[T_FG]              = 220 * 65536 + 220 * 256 + 220;
+        t[T_LINK]            = 100 * 65536 + 149 * 256 + 237;
+        t[T_H1]              = 255 * 65536 + 255 * 256 + 255;
+        t[T_H2]              = 200 * 65536 + 200 * 256 + 200;
+        t[T_H3]              = 170 * 65536 + 180 * 256 + 220;
+        t[T_BOLD]            = 255 * 65536 + 255 * 256 + 220;
+        t[T_EM]              = 255 * 65536 + 230 * 256 + 180;
+        t[T_CODE_FG]         = 180 * 65536 + 220 * 256 + 180;
+        t[T_HINT_BG]         = 255 * 65536 + 220 * 256 +   0;
+        t[T_HINT_FG]         =   0 * 65536 +   0 * 256 +   0;
+        t[T_STATUS_BG]       =  40 * 65536 +  40 * 256 +  44;
+        t[T_HR]              =  80 * 65536 +  80 * 256 +  85;
+        t[T_PRE_BG]          =  45 * 65536 +  45 * 256 +  50;
+        t[T_SEARCH_HL]       = 255 * 65536 + 255 * 256 + 100;
+        t[T_SEL]             =  80 * 65536 + 140 * 256 + 220;
+        t[T_QUOTE]           = 160 * 65536 + 170 * 256 + 190;
+        t[T_QUOTE_BAR]       =  80 * 65536 + 120 * 256 + 200;
+        t[T_MARK_BG]         = 200 * 65536 + 180 * 256 +  50;
+        t[T_DT]              = 240 * 65536 + 240 * 256 + 255;
+        t[T_FIGCAP]          = 140 * 65536 + 140 * 256 + 150;
+        t[T_TABLE_BORDER]    =  90 * 65536 +  90 * 256 + 100;
+        t[T_TABLE_HEADER_BG] =  50 * 65536 +  50 * 256 +  60;
+    };
+    t
+}
+
+// Build a UI_C_LEN-element array for ui_button / ui_textbox from a theme.
+// Light mode gets a white-on-black button/urlbar palette that matches the
+// --color-text / --color-border CSS pair; dark mode keeps the legacy look.
+fn! theme_make_ui(light: bool) -> [i32] {
+    let mut u: [i32] = [];
+    for _i in 0..UI_C_LEN { push(u, 0); };
+    if light {
+        u[UI_C_BG]        = 255 * 65536 + 255 * 256 + 255;   // #fff
+        u[UI_C_BG_HOVER]  = 240 * 65536 + 240 * 256 + 248;   // #f0f0f8
+        u[UI_C_BG_ACTIVE] = 232 * 65536 + 232 * 256 + 240;   // #e8e8f0
+        u[UI_C_FG]        =   0 * 65536 +   0 * 256 +   0;   // #000
+        u[UI_C_FG_DIM]    = 102 * 65536 + 102 * 256 + 102;   // #666
+        u[UI_C_BORDER]    = 224 * 65536 + 224 * 256 + 224;   // #e0e0e0
+        u[UI_C_ACCENT]    =   0 * 65536 + 102 * 256 + 204;
+    } else {
+        u[UI_C_BG]        =  45 * 65536 +  45 * 256 +  48;
+        u[UI_C_BG_HOVER]  =  62 * 65536 +  62 * 256 +  66;
+        u[UI_C_BG_ACTIVE] =  37 * 65536 +  37 * 256 +  38;
+        u[UI_C_FG]        = 220 * 65536 + 220 * 256 + 220;
+        u[UI_C_FG_DIM]    = 150 * 65536 + 150 * 256 + 150;
+        u[UI_C_BORDER]    =  80 * 65536 +  80 * 256 +  85;
+        u[UI_C_ACCENT]    =   0 * 65536 + 122 * 256 + 204;
+    };
+    u
+}
 
 let KEY_ESC: i32 = 27;
 let KEY_ENTER: i32 = 13;
@@ -538,7 +628,7 @@ fn html_is_skip_tag(tag: str) -> bool {
 // ─── Pre/code verbatim rendering ────────────────────────
 // Flush a run of characters at the current cursor.  Shared between the
 // newline-break path and the end-of-text trailing flush below.  Paints a
-// PRE_BG band from the segment's start to the right edge of the content
+// theme[T_PRE_BG] band from the segment's start to the right edge of the content
 // box (so adjacent inline children on the same line stitch into one
 // contiguous background) and records a WordInfo so text selection works
 // inside verbatim blocks.
@@ -546,6 +636,7 @@ fn! flush_pre_segment(segment_chars: [i32], x_ptr: [i32], y_ptr: [i32],
                       vp_top: i32, line_right: i32, line_left: i32,
                       color: i32, font: i32, scale: i32,
                       word_map: [WordInfo],
+                      theme: [i32],
                       tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
     let gh: i32 = tt_glyph_h_of(scale, tt_reg, tt_cfg, font);
     let lh: i32 = tt_line_h_of(scale, tt_reg, tt_cfg, font);
@@ -557,7 +648,7 @@ fn! flush_pre_segment(segment_chars: [i32], x_ptr: [i32], y_ptr: [i32],
         if visible {
             let bg_x: i32 = x_ptr[0];
             let bg_w: i32 = line_right - bg_x;
-            if bg_w > 0 { gfx_fill_rect(bg_x, draw_y, bg_w, lh, PRE_BG); };
+            if bg_w > 0 { gfx_fill_rect(bg_x, draw_y, bg_w, lh, theme[T_PRE_BG]); };
             draw_text_f(x_ptr[0], draw_y, seg, color, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
             let wi: WordInfo = WordInfo { x: x_ptr[0], y: draw_y, w: seg_w, text: seg };
             push(word_map, wi);
@@ -568,7 +659,7 @@ fn! flush_pre_segment(segment_chars: [i32], x_ptr: [i32], y_ptr: [i32],
         // as one cohesive code rectangle rather than disconnected stripes.
         if visible {
             let bg_w2: i32 = line_right - line_left;
-            if bg_w2 > 0 { gfx_fill_rect(line_left, draw_y, bg_w2, lh, PRE_BG); };
+            if bg_w2 > 0 { gfx_fill_rect(line_left, draw_y, bg_w2, lh, theme[T_PRE_BG]); };
         };
     };
 }
@@ -581,6 +672,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                 links: [LinkInfo], href: str, search_q: str,
                 word_map: [WordInfo], strikethrough: bool, mark_bg: i32,
                 indent: i32, in_chrome: bool,
+                theme: [i32],
                 tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
     // Normalize whitespace: collapse \n, \r, \t into spaces so split by space
     // doesn't emit them as visible "words" (which render as missing-glyph ?).
@@ -640,8 +732,8 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
             };
             // Highlight search matches in this word
             if str_len(search_q) > 0 and str_contains(str_to_lower(word), search_q) {
-                gfx_fill_rect(x_ptr[0], draw_y, word_w, lh, SEARCH_HL);
-                draw_text_f(x_ptr[0], draw_y, word, HINT_FG, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+                gfx_fill_rect(x_ptr[0], draw_y, word_w, lh, theme[T_SEARCH_HL]);
+                draw_text_f(x_ptr[0], draw_y, word, theme[T_HINT_FG], font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
             } else {
                 draw_text_f(x_ptr[0], draw_y, word, color, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
             };
@@ -855,6 +947,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 fragment_target: str, fragment_y_out: [i32],
                 outline_idx: [i32], outline_y_out: [i32],
                 body_mono_font: i32,
+                theme: [i32],
                 tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
     let node: HtmlNode = nodes[idx];
 
@@ -938,6 +1031,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 if c == 10 {
                     flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
                                       line_right, line_left, color, font, scale, word_map,
+                                      theme,
                                       tt_reg, tt_mono, tt_head, tt_cfg);
                     while len(segment_chars) > 0 { pop(segment_chars); };
                     y_ptr[0] = y_ptr[0] + pre_lh;
@@ -954,12 +1048,14 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             };
             flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
                               line_right, line_left, color, font, scale, word_map,
+                              theme,
                               tt_reg, tt_mono, tt_head, tt_cfg);
         } else {
             if str_len(str_trim(text)) == 0 { return; };
             render_text(text, x_ptr, y_ptr, color, font, scale, vp_top, vp_width,
                         is_link or force_underline, links, link_href, search_q, word_map,
                         strikethrough, mark_bg, indent, in_chrome,
+                        theme,
                         tt_reg, tt_mono, tt_head, tt_cfg);
         };
         return;
@@ -1032,7 +1128,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         y_ptr[0] = y_ptr[0] + entry_line_h / 2;
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if draw_y >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-            gfx_line(PAD, draw_y, eff_vp_width - PAD, draw_y, HR_COLOR);
+            gfx_line(PAD, draw_y, eff_vp_width - PAD, draw_y, theme[T_HR]);
         };
         y_ptr[0] = y_ptr[0] + entry_line_h / 2;
         x_ptr[0] = eff_indent + PAD;
@@ -1126,7 +1222,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
         let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if draw_y + FONT_H >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-            draw_text_f(x_ptr[0], draw_y, display, HR_COLOR, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+            draw_text_f(x_ptr[0], draw_y, display, theme[T_HR], font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
         };
         x_ptr[0] = x_ptr[0] + text_width_f(display, font, scale, tt_reg, tt_mono, tt_head, tt_cfg) + text_width_f(" ", font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
         return;
@@ -1235,7 +1331,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         // Draw top border.
         let tbl_top_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if tbl_top_y >= CHROME_TOP and tbl_top_y < canvas_height() - CHROME_BOT {
-            gfx_line(eff_indent + PAD, tbl_top_y, eff_indent + PAD + avail_w, tbl_top_y, TABLE_BORDER);
+            gfx_line(eff_indent + PAD, tbl_top_y, eff_indent + PAD + avail_w, tbl_top_y, theme[T_TABLE_BORDER]);
         };
         y_ptr[0] = y_ptr[0] + 2;
 
@@ -1262,7 +1358,18 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             for ci4 in 0..len(cells2) {
                 let cx: i32 = col_x[ci4] + 4;
                 let cell_tag: str = nodes[cells2[ci4]].tag;
-                let cc: i32 = if str_eq(cell_tag, "th") { BOLD_COLOR } else { color };
+                let cc: i32 = if str_eq(cell_tag, "th") { theme[T_BOLD] } else { color };
+                // Fill header cell background (--color-table-header) behind
+                // the text so the heading row visibly separates from body
+                // rows in light mode.
+                if str_eq(cell_tag, "th") {
+                    let hdr_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+                    let hdr_h: i32 = LINE_H * max_lines;
+                    if hdr_y + hdr_h >= CHROME_TOP and hdr_y < canvas_height() - CHROME_BOT {
+                        gfx_fill_rect(col_x[ci4], hdr_y, col_w[ci4], hdr_h,
+                                      theme[T_TABLE_HEADER_BG]);
+                    };
+                };
                 let lines: [str] = cell_lines[ci4];
                 for li in 0..len(lines) {
                     let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP + li * LINE_H;
@@ -1277,7 +1384,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             if ri2 == 0 and row_any_th {
                 let sep_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
                 if sep_y >= CHROME_TOP and sep_y < canvas_height() - CHROME_BOT {
-                    gfx_line(eff_indent + PAD, sep_y, eff_indent + PAD + avail_w, sep_y, TABLE_BORDER);
+                    gfx_line(eff_indent + PAD, sep_y, eff_indent + PAD + avail_w, sep_y, theme[T_TABLE_BORDER]);
                 };
                 y_ptr[0] = y_ptr[0] + 2;
             };
@@ -1286,7 +1393,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         // Draw bottom border.
         let tbl_bot_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if tbl_bot_y >= CHROME_TOP and tbl_bot_y < canvas_height() - CHROME_BOT {
-            gfx_line(eff_indent + PAD, tbl_bot_y, eff_indent + PAD + avail_w, tbl_bot_y, TABLE_BORDER);
+            gfx_line(eff_indent + PAD, tbl_bot_y, eff_indent + PAD + avail_w, tbl_bot_y, theme[T_TABLE_BORDER]);
         };
         y_ptr[0] = y_ptr[0] + LINE_H;
         x_ptr[0] = eff_indent + PAD;
@@ -1306,33 +1413,33 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     let mut child_markbg: i32 = mark_bg;
     let mut child_ol: [i32] = ol_counter;
 
-    if str_eq(tag, "h1") { child_color = H1_COLOR; child_scale = heading_scale(tag) * scale; child_font = FONT_HEADING_L; }
-    else if str_eq(tag, "h2") { child_color = H2_COLOR; child_scale = heading_scale(tag) * scale; child_font = FONT_HEADING_L; }
+    if str_eq(tag, "h1") { child_color = theme[T_H1]; child_scale = heading_scale(tag) * scale; child_font = FONT_HEADING_L; }
+    else if str_eq(tag, "h2") { child_color = theme[T_H2]; child_scale = heading_scale(tag) * scale; child_font = FONT_HEADING_L; }
     else if str_eq(tag, "h3") or str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
-        child_color = H3_COLOR;
+        child_color = theme[T_H3];
         child_scale = heading_scale(tag) * scale;
         child_font = FONT_HEADING_L;
     }
-    else if str_eq(tag, "b") or str_eq(tag, "strong") { child_color = BOLD_COLOR; }
-    else if str_eq(tag, "em") or str_eq(tag, "i") or str_eq(tag, "cite") { child_color = EM_COLOR; }
+    else if str_eq(tag, "b") or str_eq(tag, "strong") { child_color = theme[T_BOLD]; }
+    else if str_eq(tag, "em") or str_eq(tag, "i") or str_eq(tag, "cite") { child_color = theme[T_EM]; }
     else if str_eq(tag, "a") {
-        child_color = LINK_COLOR;
+        child_color = theme[T_LINK];
         child_link = true;
         child_href = url_unwrap_tracking(html_get_attr(node, "href"));
     }
     else if str_eq(tag, "pre") {
-        child_color = CODE_FG; child_pre = true; child_font = body_mono_font;
+        child_color = theme[T_CODE_FG]; child_pre = true; child_font = body_mono_font;
     }
     else if str_eq(tag, "code") {
         // Inherit verbatim layout from a parent <pre> (via in_pre), but
         // standalone inline <code> in a paragraph renders with normal
-        // word-wrap — just in mono font and CODE_FG.  Forcing the pre
+        // word-wrap — just in mono font and theme[T_CODE_FG].  Forcing the pre
         // layout on inline <code> used to break line flow after every
         // occurrence.
-        child_color = CODE_FG; child_font = body_mono_font;
+        child_color = theme[T_CODE_FG]; child_font = body_mono_font;
     }
     else if is_mono_tag(tag) {
-        child_color = CODE_FG; child_font = body_mono_font;
+        child_color = theme[T_CODE_FG]; child_font = body_mono_font;
     }
     else if str_eq(tag, "ul") {
         child_indent = eff_indent + 20;
@@ -1344,21 +1451,21 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     }
     else if str_eq(tag, "blockquote") {
         child_indent = eff_indent + 30;
-        child_color = QUOTE_COLOR;
+        child_color = theme[T_QUOTE];
         // Draw left accent bar
         let bar_x: i32 = eff_indent + PAD + 10;
         let bar_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
         if bar_y >= CHROME_TOP and bar_y < canvas_height() - CHROME_BOT {
-            gfx_line(bar_x, bar_y, bar_x, bar_y + LINE_H * 2, QUOTE_BAR);
+            gfx_line(bar_x, bar_y, bar_x, bar_y + LINE_H * 2, theme[T_QUOTE_BAR]);
         };
     }
     else if str_eq(tag, "del") or str_eq(tag, "s") { child_strike = true; }
     else if str_eq(tag, "u") or str_eq(tag, "ins") { child_uline = true; }
-    else if str_eq(tag, "mark") { child_markbg = MARK_BG; }
-    else if str_eq(tag, "dt") { child_color = DT_COLOR; }
+    else if str_eq(tag, "mark") { child_markbg = theme[T_MARK_BG]; }
+    else if str_eq(tag, "dt") { child_color = theme[T_DT]; }
     else if str_eq(tag, "dd") { child_indent = eff_indent + 30; }
     else if str_eq(tag, "figure") { child_indent = eff_indent + 20; }
-    else if str_eq(tag, "figcaption") { child_color = FIGCAP_COLOR; };
+    else if str_eq(tag, "figcaption") { child_color = theme[T_FIGCAP]; };
 
     // CSS overrides from stylesheet cascade + inline style="..."
     if idx >= 0 and idx < len(styles) {
@@ -1366,9 +1473,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         if cs.color >= 0 {
             child_color = cs.color;
         } else if cs.bold == 1 {
-            child_color = BOLD_COLOR;
+            child_color = theme[T_BOLD];
         } else if cs.italic == 1 {
-            child_color = EM_COLOR;
+            child_color = theme[T_EM];
         };
         if cs.underline == 1 { child_uline = true; };
         if cs.strike == 1 { child_strike = true; };
@@ -1378,10 +1485,10 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     // Anchors always use the browser's link color.  Many pages ship a
     // light-mode stylesheet that sets `a { color: #... }` or inherits a
     // near-black color from body; on our dark chrome that produces
-    // unreadable near-invisible links.  Keeping LINK_COLOR here trades a
+    // unreadable near-invisible links.  Keeping theme[T_LINK] here trades a
     // bit of per-site styling fidelity for reliably readable links.
     if str_eq(tag, "a") {
-        child_color = LINK_COLOR;
+        child_color = theme[T_LINK];
     };
 
     // List item: numbered or bulleted
@@ -1449,6 +1556,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     fragment_target, fragment_y_out,
                     outline_idx, outline_y_out,
                     body_mono_font,
+                    theme,
                     tt_reg, tt_mono, tt_head, tt_cfg);
         child = nodes[child].next_sibling;
     };
@@ -1693,6 +1801,19 @@ fn! main() {
     // Body font size toggle: false = 12pt (12-row cell), true = 8pt (8-row cell).
     // Flipped by the "12pt"/"8pt" button in the top chrome.
     let mut small_font: bool = false;
+
+    // Theme: light mode is the default.  Flipped by the ☀/☾ button in the
+    // top chrome.  Persisted to theme.cfg so it survives restarts.
+    let mut light_mode: bool = true;
+    let tm_persist: [str] = storage_load_lines("theme.cfg");
+    if len(tm_persist) >= 1 {
+        match parse_i32(str_trim(tm_persist[0])) {
+            Result::Ok(tv) => { light_mode = tv != 0; },
+            Result::Err(_) => {},
+        };
+    };
+    let mut theme: [i32] = theme_make(light_mode);
+    let mut ui_colors: [i32] = theme_make_ui(light_mode);
 
     // ─── TrueType font state ───
     // Three handles loaded from system fonts at startup:
@@ -2081,12 +2202,12 @@ fn! main() {
                 // is blocked for the full duration of the TLS handshake +
                 // recv loop (several seconds on slow hosts) and Windows marks
                 // the app as "Not Responding".
-                canvas_clear(BG_COLOR);
-                gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP - 4, STATUS_BG);
-                gfx_draw_text(8, 10, "Loading: {nav_url}", FG_COLOR, FONT_DEFAULT);
+                canvas_clear(theme[T_BG]);
+                gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP - 4, theme[T_STATUS_BG]);
+                gfx_draw_text(8, 10, "Loading: {nav_url}", theme[T_FG], FONT_DEFAULT);
                 let sty0: i32 = canvas_height() - CHROME_BOT;
-                gfx_fill_rect(0, sty0, canvas_width(), CHROME_BOT, STATUS_BG);
-                gfx_draw_text(4, sty0 + 6, " LOADING | {nav_url}", FG_COLOR, FONT_DEFAULT);
+                gfx_fill_rect(0, sty0, canvas_width(), CHROME_BOT, theme[T_STATUS_BG]);
+                gfx_draw_text(4, sty0 + 6, " LOADING | {nav_url}", theme[T_FG], FONT_DEFAULT);
                 canvas_flush();
 
                 let u: Url = url_parse(nav_url);
@@ -2800,10 +2921,10 @@ fn! main() {
 
             if render_dirty {
             vlog_msg("render start", "");
-            canvas_clear(BG_COLOR);
+            canvas_clear(theme[T_BG]);
 
             // Address bar
-            gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP, STATUS_BG);
+            gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP, theme[T_STATUS_BG]);
             // Font-size toggle button on the right edge of the chrome.
             // Label shows the *current* size; clicking flips to the other.
             let fs_btn_w: i32 = 44;
@@ -2816,7 +2937,7 @@ fn! main() {
                 str_concat(i32_to_str(tt_cfg[TTC_BASE_BODY_PX]), "pt")
             } else if small_font { "8pt" } else { "12pt" };
             let fs_clicked: bool = ui_button(fs_btn_x, fs_btn_y, fs_btn_w, fs_btn_h,
-                                             fs_label, prev_btn);
+                                             fs_label, prev_btn, ui_colors);
             if fs_clicked {
                 if tt_cfg[TTC_ENABLED] != 0 {
                     // Cycle body size through 8→12→16→20→24→28→8.  Mono
@@ -2849,7 +2970,7 @@ fn! main() {
             let tt_btn_x: i32 = fs_btn_x - tt_btn_w - 4;
             let tt_label: str = if tt_cfg[TTC_ENABLED] != 0 { "TT" } else { "Bmp" };
             let tt_clicked: bool = ui_button(tt_btn_x, fs_btn_y, tt_btn_w, fs_btn_h,
-                                             tt_label, prev_btn);
+                                             tt_label, prev_btn, ui_colors);
             if tt_clicked and (tt_reg as i64) != (0 as i64) {
                 tt_cfg[TTC_ENABLED] = if tt_cfg[TTC_ENABLED] != 0 { 0 } else { 1 };
                 tt_recache(tt_reg, tt_mono, tt_head, tt_cfg, small_font);
@@ -2860,15 +2981,31 @@ fn! main() {
                 push(pl, i32_to_str(tt_cfg[TTC_BASE_MONO_PX]));
                 storage_save_lines("font.cfg", pl);
             };
+            // Theme (light/dark) toggle, just left of the TT button.  Label is
+            // the icon representing the *current* state — sun for light, moon
+            // for dark.  Clicking flips it and persists to theme.cfg.
+            let th_btn_w: i32 = 28;
+            let th_btn_x: i32 = tt_btn_x - th_btn_w - 4;
+            let th_label: str = if light_mode { "Sun" } else { "Moon" };
+            let th_clicked: bool = ui_button(th_btn_x, fs_btn_y, th_btn_w, fs_btn_h,
+                                             th_label, prev_btn, ui_colors);
+            if th_clicked {
+                light_mode = not light_mode;
+                theme = theme_make(light_mode);
+                ui_colors = theme_make_ui(light_mode);
+                let mut plth: [str] = [];
+                push(plth, i32_to_str(if light_mode { 1 } else { 0 }));
+                storage_save_lines("theme.cfg", plth);
+            };
             // Pass key=0 to ui_textbox — we handle keyboard input outside arena.
             let show_focused: bool = match mode {
                 BrowserMode::Insert => url_focused,
                 _ => false,
             };
-            let url_bar_w: i32 = canvas_width() - 8 - fs_btn_w - 4 - tt_btn_w - 4;
+            let url_bar_w: i32 = canvas_width() - 8 - fs_btn_w - 4 - tt_btn_w - 4 - th_btn_w - 4;
             let mouse_focus: bool = ui_textbox(4, 4, url_bar_w, url_buf,
                                      show_focused, prev_btn, 0,
-                                     url_cursor, url_select_all);
+                                     url_cursor, url_select_all, ui_colors);
             // Detect actual click (button-down transition) inside the URL bar
             let url_bar_btn: i32 = canvas_mouse_btn();
             let url_bar_mx: i32 = canvas_mouse_x();
@@ -2956,7 +3093,7 @@ fn! main() {
                 let body_mono_eff: i32 = if small_font { FONT_DEFAULT } else { BODY_MONO_FONT };
                 render_node(dom_nodes, render_root, x_ptr, y_ptr,
                             scroll_y, canvas_width(), page_links,
-                            FG_COLOR, body_font_eff, body_scale, false, "", 0, false,
+                            theme[T_FG], body_font_eff, body_scale, false, "", 0, false,
                             img_cache_idx, img_cache_data,
                             img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
@@ -2967,6 +3104,7 @@ fn! main() {
                             pending_fragment, fragment_y_out,
                             outline_idx, outline_y,
                             body_mono_eff,
+                            theme,
                             tt_reg, tt_mono, tt_head, tt_cfg);
                 // Restore original ComputedStyle fields so toggling reader
                 // mode off (or navigating away) cleanly reverts the narrowing.
@@ -3005,45 +3143,45 @@ fn! main() {
                         let wcy: i32 = hw.y + LINE_H / 2;
                         // Check if word center is inside selection rectangle
                         if wcx >= sx0 and wcx <= sx1 and wcy >= sy0 and wcy <= sy1 {
-                            gfx_fill_rect(hw.x, hw.y, hw.w, LINE_H, SEL_COLOR);
-                            gfx_draw_text(hw.x, hw.y, hw.text, HINT_FG, FONT_DEFAULT);
+                            gfx_fill_rect(hw.x, hw.y, hw.w, LINE_H, theme[T_SEL]);
+                            gfx_draw_text(hw.x, hw.y, hw.text, theme[T_HINT_FG], FONT_DEFAULT);
                         };
                     };
                 };
             } else if str_len(error_msg) > 0 {
-                gfx_draw_text(PAD, CHROME_TOP + PAD, "Error loading page:", H1_COLOR, FONT_DEFAULT);
-                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 2, error_msg, FG_COLOR, FONT_DEFAULT);
-                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 4, "Press 'o' to enter a new URL", HR_COLOR, FONT_DEFAULT);
+                gfx_draw_text(PAD, CHROME_TOP + PAD, "Error loading page:", theme[T_H1], FONT_DEFAULT);
+                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 2, error_msg, theme[T_FG], FONT_DEFAULT);
+                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 4, "Press 'o' to enter a new URL", theme[T_HR], FONT_DEFAULT);
             } else {
                 // ASCII art logo
                 let ax: i32 = PAD + 100;
                 let mut ay: i32 = CHROME_TOP + 60;
-                gfx_draw_text(ax, ay, "  ___            __      __   _", H1_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, " / _ \\ ___ ___  \\ \\    / /__| |__", H1_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "| (_) (_-</ __|  \\ \\/\\/ / -_) '_ \\", H1_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, " \\___//__/\\___|   \\_/\\_/\\___|_.__/", H1_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "  ___            __      __   _", theme[T_H1], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, " / _ \\ ___ ___  \\ \\    / /__| |__", theme[T_H1], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "| (_) (_-</ __|  \\ \\/\\/ / -_) '_ \\", theme[T_H1], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, " \\___//__/\\___|   \\_/\\_/\\___|_.__/", theme[T_H1], FONT_DEFAULT); ay += LINE_H;
                 ay += LINE_H;
-                gfx_draw_text(ax, ay, "A minimal Vim-powered browser written in Oscan", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "A minimal Vim-powered browser written in Oscan", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
                 ay += LINE_H * 2;
-                gfx_draw_text(ax, ay, "Press 'o' to open a URL", LINK_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Press '?' for keyboard shortcuts", LINK_COLOR, FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Press 'o' to open a URL", theme[T_LINK], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Press '?' for keyboard shortcuts", theme[T_LINK], FONT_DEFAULT); ay += LINE_H;
                 ay += LINE_H * 2;
-                gfx_draw_text(ax, ay, "Keyboard shortcuts:", H2_COLOR, FONT_DEFAULT); ay += LINE_H + 4;
-                gfx_draw_text(ax, ay, "j/k       Scroll down/up", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "d/u       Half page down/up", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Space     Full page down", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "gg / G    Top / bottom of page", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "f         Follow link (hint mode)", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "o         Open URL", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "p         Paste URL and go", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "yy        Copy URL to clipboard", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Ctrl+V    Paste in URL bar", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Ctrl+C    Copy URL", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "H / L     Back / forward", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "/         Search in page", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "r         Reload", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Q         Quit browser", FG_COLOR, FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Esc       Normal mode", FG_COLOR, FONT_DEFAULT);
+                gfx_draw_text(ax, ay, "Keyboard shortcuts:", theme[T_H2], FONT_DEFAULT); ay += LINE_H + 4;
+                gfx_draw_text(ax, ay, "j/k       Scroll down/up", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "d/u       Half page down/up", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Space     Full page down", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "gg / G    Top / bottom of page", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "f         Follow link (hint mode)", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "o         Open URL", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "p         Paste URL and go", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "yy        Copy URL to clipboard", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Ctrl+V    Paste in URL bar", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Ctrl+C    Copy URL", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "H / L     Back / forward", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "/         Search in page", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "r         Reload", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Q         Quit browser", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
+                gfx_draw_text(ax, ay, "Esc       Normal mode", theme[T_FG], FONT_DEFAULT);
             };
 
             // URL-bar autocomplete dropdown (Insert mode only).  Matches
@@ -3070,14 +3208,14 @@ fn! main() {
             if len(ac_matches) > 0 {
                 let ady: i32 = CHROME_TOP;
                 let ad_h: i32 = len(ac_matches) * 14 + 4;
-                gfx_fill_rect(4, ady, canvas_width() - 8, ad_h, STATUS_BG);
+                gfx_fill_rect(4, ady, canvas_width() - 8, ad_h, theme[T_STATUS_BG]);
                 gfx_rect(4, ady, canvas_width() - 8, ad_h, UI_BORDER);
                 for ami in 0..len(ac_matches) {
                     let rowy: i32 = ady + 2 + ami * 14;
                     if ami == ac_selected {
-                        gfx_fill_rect(4, rowy, canvas_width() - 8, 14, SEL_COLOR);
+                        gfx_fill_rect(4, rowy, canvas_width() - 8, 14, theme[T_SEL]);
                     };
-                    gfx_draw_text(10, rowy + 3, ac_matches[ami], FG_COLOR, FONT_DEFAULT);
+                    gfx_draw_text(10, rowy + 3, ac_matches[ami], theme[T_FG], FONT_DEFAULT);
                 };
             };
 
@@ -3088,8 +3226,8 @@ fn! main() {
                         let fl: LinkInfo = follow_links[li];
                         if str_len(fl.label) > 0 {
                             let lw: i32 = str_len(fl.label) * FONT_W + 4;
-                            gfx_fill_rect(fl.x - 2, fl.y - 1, lw, FONT_H + 2, HINT_BG);
-                            gfx_draw_text(fl.x, fl.y, fl.label, HINT_FG, FONT_DEFAULT);
+                            gfx_fill_rect(fl.x - 2, fl.y - 1, lw, FONT_H + 2, theme[T_HINT_BG]);
+                            gfx_draw_text(fl.x, fl.y, fl.label, theme[T_HINT_FG], FONT_DEFAULT);
                         };
                     };
                 },
@@ -3103,13 +3241,13 @@ fn! main() {
             };
             if show_search_bar {
                 let sy: i32 = canvas_height() - CHROME_BOT - 24;
-                gfx_fill_rect(0, sy, canvas_width(), 24, STATUS_BG);
+                gfx_fill_rect(0, sy, canvas_width(), 24, theme[T_STATUS_BG]);
                 gfx_rect(0, sy, canvas_width(), 1, UI_BORDER);
-                gfx_draw_text(4, sy + 8, "/", FG_COLOR, FONT_DEFAULT);
+                gfx_draw_text(4, sy + 8, "/", theme[T_FG], FONT_DEFAULT);
                 let st: str = str_from_chars(search_buf);
-                gfx_draw_text(12, sy + 8, st, FG_COLOR, FONT_DEFAULT);
+                gfx_draw_text(12, sy + 8, st, theme[T_FG], FONT_DEFAULT);
                 // Cursor
-                gfx_fill_rect(12 + len(search_buf) * FONT_W, sy + 8, 1, FONT_H, FG_COLOR);
+                gfx_fill_rect(12 + len(search_buf) * FONT_W, sy + 8, 1, FONT_H, theme[T_FG]);
             } else if search_active and str_len(search_query) > 0 {
                 // Show match count in status area
                 let sy: i32 = canvas_height() - CHROME_BOT - 16;
@@ -3119,41 +3257,41 @@ fn! main() {
                 } else {
                     "/{search_query}  [no matches]"
                 };
-                gfx_fill_rect(0, sy, canvas_width(), 16, STATUS_BG);
-                gfx_draw_text(4, sy + 4, match_info, SEARCH_HL, FONT_DEFAULT);
+                gfx_fill_rect(0, sy, canvas_width(), 16, theme[T_STATUS_BG]);
+                gfx_draw_text(4, sy + 4, match_info, theme[T_SEARCH_HL], FONT_DEFAULT);
             };
 
             // Help overlay
             if show_help {
                 let hx: i32 = 200;
                 let hy: i32 = 60;
-                gfx_fill_rect(hx, hy, 600, 440, STATUS_BG);
+                gfx_fill_rect(hx, hy, 600, 440, theme[T_STATUS_BG]);
                 gfx_rect(hx, hy, 600, 440, UI_BORDER);
-                gfx_draw_text(hx + 10, hy + 10, "OscaWeb Keyboard Shortcuts", H1_COLOR, FONT_DEFAULT);
+                gfx_draw_text(hx + 10, hy + 10, "OscaWeb Keyboard Shortcuts", theme[T_H1], FONT_DEFAULT);
                 let mut ky: i32 = hy + 30;
-                gfx_draw_text(hx + 10, ky, "j / k        Scroll down / up", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "d / u        Half page down / up", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "gg / G       Top / bottom", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "gm           Jump to <main>/<article>", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "f / F        Follow link (all / chrome only)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "t            Toggle outline (ToC); 1-9 jumps", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL  (type to search)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "r            Reload page", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "gr           Toggle reader mode", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "gR           Toggle show-full (disables chrome trim)", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "b / B        Bookmark / bookmarks list", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "+ / - / 0    Zoom in / out / reset", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "p            Paste URL and go", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "yy           Copy URL to clipboard", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Ctrl+V       Paste in URL bar", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Ctrl+C       Copy URL", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "H / L        Back / forward", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "/            Search in page", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Esc          Normal mode", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Q            Quit browser", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "?            Toggle this help", FG_COLOR, FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "j / k        Scroll down / up", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "d / u        Half page down / up", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "gg / G       Top / bottom", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "gm           Jump to <main>/<article>", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "f / F        Follow link (all / chrome only)", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "t            Toggle outline (ToC); 1-9 jumps", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL  (type to search)", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "r            Reload page", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "gr           Toggle reader mode", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "gR           Toggle show-full (disables chrome trim)", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "b / B        Bookmark / bookmarks list", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "+ / - / 0    Zoom in / out / reset", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "p            Paste URL and go", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "yy           Copy URL to clipboard", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Ctrl+V       Paste in URL bar", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Ctrl+C       Copy URL", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "H / L        Back / forward", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "/            Search in page", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Esc          Normal mode", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "Q            Quit browser", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
+                gfx_draw_text(hx + 10, ky, "?            Toggle this help", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
                 ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Mouse click on links also works!", LINK_COLOR, FONT_DEFAULT);
+                gfx_draw_text(hx + 10, ky, "Mouse click on links also works!", theme[T_LINK], FONT_DEFAULT);
             };
 
             // Outline (table of contents) overlay
@@ -3162,14 +3300,14 @@ fn! main() {
                 let oy0: i32 = 100;
                 let on_cap: i32 = if len(outline_idx) < 9 { len(outline_idx) } else { 9 };
                 let oh: i32 = 40 + max_i32(on_cap, 1) * LINE_H;
-                gfx_fill_rect(ox, oy0, 600, oh, STATUS_BG);
+                gfx_fill_rect(ox, oy0, 600, oh, theme[T_STATUS_BG]);
                 gfx_rect(ox, oy0, 600, oh, UI_BORDER);
                 gfx_draw_text(ox + 10, oy0 + 10,
                     "Outline (press 1-9 to jump, t to close)",
-                    H1_COLOR, FONT_DEFAULT);
+                    theme[T_H1], FONT_DEFAULT);
                 if len(outline_idx) == 0 {
                     gfx_draw_text(ox + 10, oy0 + 30,
-                        "No headings on this page.", HR_COLOR, FONT_DEFAULT);
+                        "No headings on this page.", theme[T_HR], FONT_DEFAULT);
                 } else {
                     let mut oky: i32 = oy0 + 30;
                     for oki in 0..on_cap {
@@ -3178,9 +3316,9 @@ fn! main() {
                         let indent_str: str = if olv == 1 { "" }
                                               else if olv == 2 { "  " }
                                               else { "    " };
-                        let color_h: i32 = if olv == 1 { H1_COLOR }
-                                           else if olv == 2 { H2_COLOR }
-                                           else { H3_COLOR };
+                        let color_h: i32 = if olv == 1 { theme[T_H1] }
+                                           else if olv == 2 { theme[T_H2] }
+                                           else { theme[T_H3] };
                         let o_row: str = "{orn}. {indent_str}{outline_text[oki]}";
                         gfx_draw_text(ox + 10, oky, o_row, color_h, FONT_DEFAULT);
                         oky += LINE_H;
@@ -3193,21 +3331,21 @@ fn! main() {
                 let bx: i32 = 200;
                 let by: i32 = 100;
                 let bh: i32 = 40 + max_i32(len(bookmarks), 1) * LINE_H;
-                gfx_fill_rect(bx, by, 600, bh, STATUS_BG);
+                gfx_fill_rect(bx, by, 600, bh, theme[T_STATUS_BG]);
                 gfx_rect(bx, by, 600, bh, UI_BORDER);
                 gfx_draw_text(bx + 10, by + 10, "Bookmarks (press 1-9 to open, B to close)",
-                              H1_COLOR, FONT_DEFAULT);
+                              theme[T_H1], FONT_DEFAULT);
                 if len(bookmarks) == 0 {
                     gfx_draw_text(bx + 10, by + 30,
                                   "No bookmarks yet. Press 'b' on a page to save one.",
-                                  HR_COLOR, FONT_DEFAULT);
+                                  theme[T_HR], FONT_DEFAULT);
                 } else {
                     let mut bky: i32 = by + 30;
                     let cap: i32 = if len(bookmarks) < 9 { len(bookmarks) } else { 9 };
                     for bki in 0..cap {
                         let row_num: i32 = bki + 1;
                         let bm_row: str = "{row_num}. {bookmarks[bki]}";
-                        gfx_draw_text(bx + 10, bky, bm_row, LINK_COLOR, FONT_DEFAULT);
+                        gfx_draw_text(bx + 10, bky, bm_row, theme[T_LINK], FONT_DEFAULT);
                         bky += LINE_H;
                     };
                 };
@@ -3215,7 +3353,7 @@ fn! main() {
 
             // Status bar
             let sty: i32 = canvas_height() - CHROME_BOT;
-            gfx_fill_rect(0, sty, canvas_width(), CHROME_BOT, STATUS_BG);
+            gfx_fill_rect(0, sty, canvas_width(), CHROME_BOT, theme[T_STATUS_BG]);
             let mode_str: str = match mode {
                 BrowserMode::Normal => "NORMAL",
                 BrowserMode::Insert => "INSERT",
@@ -3233,7 +3371,7 @@ fn! main() {
             let zoom_flag: str = if body_scale > 1 { " | zoom {body_scale}x" } else { "" };
             gfx_draw_text(4, sty + 6,
                 " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}{reader_flag}{full_flag}{zoom_flag}",
-                FG_COLOR, FONT_DEFAULT);
+                theme[T_FG], FONT_DEFAULT);
 
             // Floating "F for Nav" button — visible whenever the page has
             // chrome (nav/header/footer/aside) that is currently trimmed.
@@ -3252,8 +3390,8 @@ fn! main() {
                 let fb_y: i32 = CHROME_TOP + 8;
                 // Simulated translucency: draw a darker shadow first so the
                 // button blends with page content beneath.
-                gfx_fill_rect(fb_x, fb_y, fb_w, fb_h, STATUS_BG);
-                f_btn_clicked = ui_button(fb_x, fb_y, fb_w, fb_h, fb_label, prev_btn);
+                gfx_fill_rect(fb_x, fb_y, fb_w, fb_h, theme[T_STATUS_BG]);
+                f_btn_clicked = ui_button(fb_x, fb_y, fb_w, fb_h, fb_label, prev_btn, ui_colors);
             };
 
             prev_btn = canvas_mouse_btn();
