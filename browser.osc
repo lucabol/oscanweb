@@ -228,10 +228,10 @@ fn! text_width_f(s: str, font: i32, scale: i32,
         if (h as i64) != (0 as i64) {
             tt_text_width(h, s, (px * scale) as f64)
         } else {
-            gfx_text_width(s, bitmap_font_of(font)) * scale
+            gfx_text_width(ascii_fold_utf8(s), bitmap_font_of(font)) * scale
         }
     } else {
-        gfx_text_width(s, bitmap_font_of(font)) * scale
+        gfx_text_width(ascii_fold_utf8(s), bitmap_font_of(font)) * scale
     }
 }
 
@@ -277,17 +277,19 @@ fn! draw_text_f(x: i32, y: i32, s: str, color: i32, font: i32, scale: i32,
             let tt_color: i32 = bor(color, bshl(255, 24));
             tt_draw_text(x, baseline, s, h, (px * scale) as f64, tt_color)
         } else {
+            let folded: str = ascii_fold_utf8(s);
             if scale <= 1 {
-                gfx_draw_text(x, y, s, color, bitmap_font_of(font))
+                gfx_draw_text(x, y, folded, color, bitmap_font_of(font))
             } else {
-                gfx_draw_text_scaled(x, y, s, color, scale, scale, bitmap_font_of(font))
+                gfx_draw_text_scaled(x, y, folded, color, scale, scale, bitmap_font_of(font))
             }
         }
     } else {
+        let folded2: str = ascii_fold_utf8(s);
         if scale <= 1 {
-            gfx_draw_text(x, y, s, color, bitmap_font_of(font))
+            gfx_draw_text(x, y, folded2, color, bitmap_font_of(font))
         } else {
-            gfx_draw_text_scaled(x, y, s, color, scale, scale, bitmap_font_of(font))
+            gfx_draw_text_scaled(x, y, folded2, color, scale, scale, bitmap_font_of(font))
         }
     }
 }
