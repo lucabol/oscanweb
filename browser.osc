@@ -2583,7 +2583,7 @@ fn! main() {
                         scroll_y = max_scroll;
                     } else if key == 103 {
                         if last_key == 103 { scroll_y = 0; };
-                    } else if key == 102 {
+                    } else if key == 102 and last_key != 103 {
                         if page_loaded {
                             mode = BrowserMode::Follow;
                             while len(follow_input) > 0 { pop(follow_input); };
