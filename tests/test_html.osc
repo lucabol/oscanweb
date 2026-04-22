@@ -205,6 +205,34 @@ fn! main() {
     assert_eq_i32(hex_rsquo_chars[1], 128, "hex entity rsquo byte 1");
     assert_eq_i32(hex_rsquo_chars[2], 153, "hex entity rsquo byte 2");
 
+    // ── ASCII folding for bitmap font fallback ──
+    // Plain ASCII passes through unchanged.
+    assert_eq_str(ascii_fold_utf8("hello"), "hello", "ascii fold: plain passthrough");
+
+    // Curly apostrophe U+2019 (UTF-8 E2 80 99) folds to '.
+    assert_eq_str(ascii_fold_utf8(html_entity_decode("it&rsquo;s")), "it's",
+                  "ascii fold: rsquo to apostrophe");
+
+    // Em-dash U+2014 folds to --, en-dash U+2013 to -.
+    assert_eq_str(ascii_fold_utf8(html_entity_decode("a&mdash;b")), "a--b",
+                  "ascii fold: mdash to --");
+    assert_eq_str(ascii_fold_utf8(html_entity_decode("1&ndash;10")), "1-10",
+                  "ascii fold: ndash to -");
+
+    // Ellipsis, bullet, euro, copy.
+    assert_eq_str(ascii_fold_utf8(html_entity_decode("a&hellip;b")), "a...b",
+                  "ascii fold: hellip to ...");
+    assert_eq_str(ascii_fold_utf8(html_entity_decode("&bull; item")), "* item",
+                  "ascii fold: bull to *");
+    assert_eq_str(ascii_fold_utf8(html_entity_decode("&euro;9")), "EUR9",
+                  "ascii fold: euro to EUR");
+    assert_eq_str(ascii_fold_utf8(html_entity_decode("&copy;2026")), "(c)2026",
+                  "ascii fold: copy to (c)");
+
+    // Curly double quotes.
+    assert_eq_str(ascii_fold_utf8(html_entity_decode("&ldquo;hi&rdquo;")), "\"hi\"",
+                  "ascii fold: ldquo/rdquo to \"");
+
     // ── New DOM structure tests ──
     println("=== New DOM Structure Tests ===");
 

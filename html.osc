@@ -108,6 +108,116 @@ fn! utf8_emit(out: [i32], cp: i32) {
     };
 }
 
+// Append every byte of an ASCII-only string into `out`.
+fn! push_ascii_str(out: [i32], s: str) {
+    let cs: [i32] = str_to_chars(s);
+    let n: i32 = len(cs);
+    for k in 0..n {
+        push(out, cs[k]);
+    };
+}
+
+// Map a single Unicode codepoint to its best-effort ASCII transliteration
+// (pushed as raw bytes into `out`).  Used by ascii_fold_utf8 so the bitmap
+// font path — which only ships ASCII 32..126 — shows something readable
+// instead of missing-glyph boxes for common typographic characters.
+fn! ascii_fold_emit(out: [i32], cp: i32) {
+    if cp < 128 {
+        push(out, cp);
+    } else if cp == 160 {
+        push(out, 32);
+    } else if cp == 169 {
+        push_ascii_str(out, "(c)");
+    } else if cp == 171 {
+        push_ascii_str(out, "<<");
+    } else if cp == 174 {
+        push_ascii_str(out, "(R)");
+    } else if cp == 183 {
+        push(out, 42);
+    } else if cp == 187 {
+        push_ascii_str(out, ">>");
+    } else if cp == 215 {
+        push(out, 120);
+    } else if cp == 247 {
+        push(out, 47);
+    } else if cp == 8211 {
+        push(out, 45);
+    } else if cp == 8212 {
+        push_ascii_str(out, "--");
+    } else if cp == 8216 or cp == 8217 or cp == 8218 {
+        push(out, 39);
+    } else if cp == 8220 or cp == 8221 or cp == 8222 {
+        push(out, 34);
+    } else if cp == 8226 {
+        push(out, 42);
+    } else if cp == 8230 {
+        push_ascii_str(out, "...");
+    } else if cp == 8242 {
+        push(out, 39);
+    } else if cp == 8243 {
+        push(out, 34);
+    } else if cp == 8364 {
+        push_ascii_str(out, "EUR");
+    } else if cp == 8482 {
+        push_ascii_str(out, "(TM)");
+    } else if cp == 8592 {
+        push(out, 60);
+    } else if cp == 8593 {
+        push(out, 94);
+    } else if cp == 8594 {
+        push(out, 62);
+    } else if cp == 8595 {
+        push(out, 118);
+    } else {
+        push(out, 63);
+    };
+}
+
+// Replace common non-ASCII UTF-8 codepoints with ASCII approximations so
+// the bitmap font path renders readable text for curly quotes, dashes,
+// ellipsis, etc.  Callers that use TrueType fonts should NOT fold — TT
+// renders the real glyphs.  Unknown codepoints collapse to `?` rather
+// than leaving stray UTF-8 continuation bytes that would show as tofu.
+fn! ascii_fold_utf8(s: str) -> str {
+    let bytes: [i32] = str_to_chars(s);
+    let n: i32 = len(bytes);
+    let mut out: [i32] = [];
+    let mut i: i32 = 0;
+    let mut had_non_ascii: bool = false;
+    while i < n {
+        let b: i32 = bytes[i];
+        if b < 128 {
+            push(out, b);
+            i += 1;
+        } else {
+            had_non_ascii = true;
+            let mut cp: i32 = -1;
+            let mut cons: i32 = 1;
+            if b >= 240 and i + 3 < n {
+                cp = (b - 240) * 262144
+                     + (bytes[i + 1] - 128) * 4096
+                     + (bytes[i + 2] - 128) * 64
+                     + (bytes[i + 3] - 128);
+                cons = 4;
+            } else if b >= 224 and i + 2 < n {
+                cp = (b - 224) * 4096
+                     + (bytes[i + 1] - 128) * 64
+                     + (bytes[i + 2] - 128);
+                cons = 3;
+            } else if b >= 192 and i + 1 < n {
+                cp = (b - 192) * 64 + (bytes[i + 1] - 128);
+                cons = 2;
+            } else {
+                cp = -1;
+                cons = 1;
+            };
+            ascii_fold_emit(out, cp);
+            i += cons;
+        };
+    };
+    if had_non_ascii { str_from_chars(out) } else { s }
+}
+
 fn! html_hex_to_i32(s: str) -> i32 {
     let chars: [i32] = str_to_chars(s);
     let mut result: i32 = 0;
