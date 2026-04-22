@@ -152,7 +152,11 @@ fn bitmap_font_of(font: i32) -> i32 {
     if font == FONT_HEADING_L { FONT_PROPORTIONAL_L } else { font }
 }
 
-fn line_h_of(scale: i32) -> i32 { FONT_H * scale + 8 }
+// Bitmap line height: FONT_H is the glyph cell (12 rows); the +10 of leading
+// gives room for the underline at gh+2 plus a visible gap before the next
+// line's glyph top.  Using +8 made underlined links in lists visually merge
+// with the next item.
+fn line_h_of(scale: i32) -> i32 { FONT_H * scale + 10 }
 
 // CSS line-height override helper: prefer computed style if set,
 // otherwise the scale-derived default.  A multiplier (unitless / %
@@ -161,6 +165,10 @@ fn line_h_of(scale: i32) -> i32 { FONT_H * scale + 8 }
 // via explicit px/em/pt) are used verbatim.
 fn effective_line_h(styles: [ComputedStyle], idx: i32, scale: i32,
                     tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
+    // Bitmap-mode minimum: the underline sits at gh+2, so any line-height
+    // tighter than gh+4 makes underlined links touch the next line.  Floor
+    // CSS line-height to this minimum in bitmap mode.
+    let bmp_min: i32 = if tt_on(tt_reg, tt_cfg) { 0 } else { FONT_H * scale + 8 };
     if idx >= 0 and idx < len(styles) {
         let mul: i32 = styles[idx].line_height_mul_x100;
         if mul > 0 {
@@ -171,10 +179,12 @@ fn effective_line_h(styles: [ComputedStyle], idx: i32, scale: i32,
                 FONT_H * scale
             };
             let out: i32 = (em * mul + 50) / 100;
-            if out > 0 { return out; };
+            let floored: i32 = if out < bmp_min { bmp_min } else { out };
+            if floored > 0 { return floored; };
         };
         if styles[idx].line_height_px > 0 {
-            return styles[idx].line_height_px;
+            let px_out: i32 = styles[idx].line_height_px;
+            return if px_out < bmp_min { bmp_min } else { px_out };
         };
     };
     tt_line_h_of(scale, tt_reg, tt_cfg, font)
@@ -750,7 +760,9 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                     };
                     draw_y + asc * scale + 5
                 } else {
-                    draw_y + gh - 2
+                    // Bitmap: sit just below the glyph cell so descenders
+                    // (p, g, y) don't touch the underline.
+                    draw_y + gh + 2
                 };
                 gfx_line(x_ptr[0], ul_y, x_ptr[0] + word_w, ul_y, color);
             };
