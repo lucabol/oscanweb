@@ -139,35 +139,71 @@ fn! main() {
     // ── New entity decode tests ──
     println("=== New Entity Decode Tests ===");
 
-    // mdash → — (U+2014 = 8212)
+    // mdash → — (U+2014, UTF-8: 0xE2 0x80 0x94 = 226 128 148)
     let mdash: str = html_entity_decode("hello&mdash;world");
     let mdash_chars: [i32] = str_to_chars(mdash);
-    assert_eq_i32(mdash_chars[5], 8212, "entity decode mdash codepoint");
+    assert_eq_i32(len(mdash_chars), 13, "entity decode mdash length");
+    assert_eq_i32(mdash_chars[5], 226, "entity decode mdash byte 0");
+    assert_eq_i32(mdash_chars[6], 128, "entity decode mdash byte 1");
+    assert_eq_i32(mdash_chars[7], 148, "entity decode mdash byte 2");
 
-    // ndash → – (U+2013 = 8211)
+    // ndash → – (U+2013, UTF-8: 0xE2 0x80 0x93 = 226 128 147)
     let ndash: str = html_entity_decode("1&ndash;10");
     let ndash_chars: [i32] = str_to_chars(ndash);
-    assert_eq_i32(ndash_chars[1], 8211, "entity decode ndash codepoint");
+    assert_eq_i32(ndash_chars[1], 226, "entity decode ndash byte 0");
+    assert_eq_i32(ndash_chars[2], 128, "entity decode ndash byte 1");
+    assert_eq_i32(ndash_chars[3], 147, "entity decode ndash byte 2");
 
-    // copy → © (U+00A9 = 169)
+    // copy → © (U+00A9, UTF-8: 0xC2 0xA9 = 194 169)
     let copy_str: str = html_entity_decode("&copy;");
     let copy_chars: [i32] = str_to_chars(copy_str);
-    assert_eq_i32(copy_chars[0], 169, "entity decode copy codepoint");
+    assert_eq_i32(copy_chars[0], 194, "entity decode copy byte 0");
+    assert_eq_i32(copy_chars[1], 169, "entity decode copy byte 1");
 
-    // bull → • (U+2022 = 8226)
+    // bull → • (U+2022, UTF-8: 0xE2 0x80 0xA2 = 226 128 162)
     let bull_str: str = html_entity_decode("&bull;");
     let bull_chars: [i32] = str_to_chars(bull_str);
-    assert_eq_i32(bull_chars[0], 8226, "entity decode bull codepoint");
+    assert_eq_i32(bull_chars[0], 226, "entity decode bull byte 0");
+    assert_eq_i32(bull_chars[1], 128, "entity decode bull byte 1");
+    assert_eq_i32(bull_chars[2], 162, "entity decode bull byte 2");
 
-    // euro → € (U+20AC = 8364)
+    // euro → € (U+20AC, UTF-8: 0xE2 0x82 0xAC = 226 130 172)
     let euro_str: str = html_entity_decode("&euro;");
     let euro_chars: [i32] = str_to_chars(euro_str);
-    assert_eq_i32(euro_chars[0], 8364, "entity decode euro codepoint");
+    assert_eq_i32(euro_chars[0], 226, "entity decode euro byte 0");
+    assert_eq_i32(euro_chars[1], 130, "entity decode euro byte 1");
+    assert_eq_i32(euro_chars[2], 172, "entity decode euro byte 2");
 
-    // hellip → … (U+2026 = 8230)
+    // hellip → … (U+2026, UTF-8: 0xE2 0x80 0xA6 = 226 128 166)
     let hellip_str: str = html_entity_decode("&hellip;");
     let hellip_chars: [i32] = str_to_chars(hellip_str);
-    assert_eq_i32(hellip_chars[0], 8230, "entity decode hellip codepoint");
+    assert_eq_i32(hellip_chars[0], 226, "entity decode hellip byte 0");
+    assert_eq_i32(hellip_chars[1], 128, "entity decode hellip byte 1");
+    assert_eq_i32(hellip_chars[2], 166, "entity decode hellip byte 2");
+
+    // rsquo → ' (U+2019, UTF-8: 0xE2 0x80 0x99 = 226 128 153)
+    let rsquo_str: str = html_entity_decode("it&rsquo;s");
+    let rsquo_chars: [i32] = str_to_chars(rsquo_str);
+    assert_eq_i32(len(rsquo_chars), 6, "entity decode rsquo length");
+    assert_eq_i32(rsquo_chars[2], 226, "entity decode rsquo byte 0");
+    assert_eq_i32(rsquo_chars[3], 128, "entity decode rsquo byte 1");
+    assert_eq_i32(rsquo_chars[4], 153, "entity decode rsquo byte 2");
+
+    // Numeric decimal entity: &#8217; should produce the same UTF-8 bytes.
+    let num_rsquo: str = html_entity_decode("&#8217;");
+    let num_rsquo_chars: [i32] = str_to_chars(num_rsquo);
+    assert_eq_i32(len(num_rsquo_chars), 3, "numeric entity rsquo length");
+    assert_eq_i32(num_rsquo_chars[0], 226, "numeric entity rsquo byte 0");
+    assert_eq_i32(num_rsquo_chars[1], 128, "numeric entity rsquo byte 1");
+    assert_eq_i32(num_rsquo_chars[2], 153, "numeric entity rsquo byte 2");
+
+    // Numeric hex entity: &#x2019; should produce the same UTF-8 bytes.
+    let hex_rsquo: str = html_entity_decode("&#x2019;");
+    let hex_rsquo_chars: [i32] = str_to_chars(hex_rsquo);
+    assert_eq_i32(len(hex_rsquo_chars), 3, "hex entity rsquo length");
+    assert_eq_i32(hex_rsquo_chars[0], 226, "hex entity rsquo byte 0");
+    assert_eq_i32(hex_rsquo_chars[1], 128, "hex entity rsquo byte 1");
+    assert_eq_i32(hex_rsquo_chars[2], 153, "hex entity rsquo byte 2");
 
     // ── New DOM structure tests ──
     println("=== New DOM Structure Tests ===");
