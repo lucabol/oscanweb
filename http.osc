@@ -28,9 +28,16 @@ struct HttpResponse {
     redirect_url: str,
     error: str,
     ok: bool,
+    // Raw `Set-Cookie:` header VALUES (without the "Set-Cookie: "
+    // prefix) in the order received. Servers may send multiple
+    // Set-Cookie headers per response, which `http_parse_headers`
+    // collapses because its backing map dedups keys — so we extract
+    // them separately in `http_extract_set_cookies` and attach here.
+    set_cookie_lines: [str],
 }
 
 fn! http_make_error(msg: str) -> HttpResponse {
+    let empty: [str] = [];
     HttpResponse {
         status_code: 0,
         content_type: "",
@@ -38,7 +45,30 @@ fn! http_make_error(msg: str) -> HttpResponse {
         redirect_url: "",
         error: msg,
         ok: false,
+        set_cookie_lines: empty,
     }
+}
+
+// Collect every `Set-Cookie:` header value (without the key prefix)
+// from a CRLF-separated header block. Case-insensitive on the key.
+// Kept separate from http_parse_headers because a map collapses the
+// repeated key, but Set-Cookie is the one header servers genuinely
+// send multiple times per response.
+fn! http_extract_set_cookies(header_block: str) -> [str] {
+    let mut result: [str] = [];
+    let lines: [str] = str_split(header_block, "\r\n");
+    for i in 0..len(lines) {
+        let line: str = lines[i];
+        let colon_pos: i32 = str_find(line, ":");
+        if colon_pos > 0 {
+            let key: str = str_to_lower(str_trim(str_slice(line, 0, colon_pos)));
+            if str_eq(key, "set-cookie") {
+                let val: str = str_trim(str_slice(line, colon_pos + 1, str_len(line)));
+                push(result, val);
+            };
+        };
+    };
+    result
 }
 
 fn! http_parse_headers(header_block: str) -> map {
@@ -131,6 +161,7 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
         };
     };
 
+    let empty: [str] = [];
     HttpResponse {
         status_code: 200,
         content_type: "",
@@ -138,6 +169,7 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
         redirect_url: "",
         error: "",
         ok: true,
+        set_cookie_lines: empty,
     }
 }
 
@@ -215,6 +247,7 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
         };
     };
 
+    let empty: [str] = [];
     HttpResponse {
         status_code: 200,
         content_type: "",
@@ -222,15 +255,20 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
         redirect_url: "",
         error: "",
         ok: true,
+        set_cookie_lines: empty,
     }
 }
 
-fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
+fn! http_get(host: str, port: i32, path: str, use_tls: bool, extra_headers: str) -> HttpResponse {
     // Send Accept and Accept-Language so CDNs that treat their absence as a
     // "not a real browser" signal route us normally. Notably www.microsoft.com
     // (Akamai) returns 403 from a NetStorage health-beacon endpoint when
     // Accept-Language is missing, regardless of HTTP version or User-Agent.
-    let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\n\r\n";
+    //
+    // `extra_headers` is the caller's opportunity to inject request-specific
+    // headers (Cookie, Referer, etc.). It must include its own trailing
+    // "\r\n" per header line, or be the empty string.
+    let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\n{extra_headers}\r\n";
 
     let mut raw_response: str = "";
 
@@ -276,6 +314,12 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
         return http_make_error("Empty response");
     };
 
+    http_parse_raw_response(raw_response)
+}
+
+// Parse a raw wire response (headers + body) into an HttpResponse. Shared
+// between http_get and http_post.
+fn! http_parse_raw_response(raw_response: str) -> HttpResponse {
     // Split headers from body at \r\n\r\n
     let sep_pos: i32 = str_find(raw_response, "\r\n\r\n");
     let mut header_section: str = raw_response;
@@ -312,6 +356,7 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
     };
 
     let headers: map = http_parse_headers(rest_headers);
+    let set_cookies: [str] = http_extract_set_cookies(rest_headers);
 
     let mut content_type: str = "";
     if map_has(headers, "content-type") {
@@ -334,5 +379,38 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
         redirect_url: redirect_url,
         error: "",
         ok: is_ok,
+        set_cookie_lines: set_cookies,
     }
+}
+
+// POST a request body. `body` is sent verbatim; `content_type` is the
+// Content-Type header value (e.g. "application/x-www-form-urlencoded").
+// Extra headers follow the same convention as http_get.
+fn! http_post(host: str, port: i32, path: str, use_tls: bool,
+              body: str, content_type: str, extra_headers: str) -> HttpResponse {
+    let body_len: i32 = str_len(body);
+    let request: str = "POST {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{extra_headers}\r\n{body}";
+
+    let mut raw_response: str = "";
+    if use_tls {
+        if host_was_primed(host) == 0 {
+            http_prime_tls(host);
+            mark_host_primed(host);
+        };
+        vlog_msg("tls_connect (POST)", host);
+        let tls_resp: HttpResponse = http_get_tls(host, port, request);
+        vlog_int("tls body_len", str_len(tls_resp.body));
+        if str_len(tls_resp.error) > 0 { return tls_resp; };
+        raw_response = tls_resp.body;
+    } else {
+        let plain_resp: HttpResponse = http_get_plain(host, port, request, 30000);
+        if str_len(plain_resp.error) > 0 { return plain_resp; };
+        raw_response = plain_resp.body;
+    };
+
+    if str_len(raw_response) == 0 {
+        return http_make_error("Empty response");
+    };
+
+    http_parse_raw_response(raw_response)
 }

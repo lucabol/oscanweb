@@ -1,0 +1,166 @@
+// Tests for cookies.osc — parsing, matching, header construction.
+
+use "../cookies.osc"
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! assert_true(actual: bool, test_name: str) {
+    if actual {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected true");
+    };
+}
+
+fn! assert_false(actual: bool, test_name: str) {
+    if not actual {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected false");
+    };
+}
+
+fn! main() {
+    println("=== Cookie Tests ===");
+
+    // --- Domain match --------------------------------------------------
+    assert_true(cookies_domain_match("example.com", "example.com", true),
+                "host-only exact match");
+    assert_false(cookies_domain_match("sub.example.com", "example.com", true),
+                 "host-only sub rejected");
+    assert_true(cookies_domain_match("example.com", "example.com", false),
+                "domain exact match");
+    assert_true(cookies_domain_match("sub.example.com", "example.com", false),
+                "domain subdomain match");
+    assert_false(cookies_domain_match("evil-example.com", "example.com", false),
+                 "domain non-subdomain rejected");
+    assert_true(cookies_domain_match("Example.COM", "example.com", true),
+                "domain match case-insensitive");
+
+    // --- Path match ----------------------------------------------------
+    assert_true(cookies_path_match("/", "/"), "path / matches /");
+    assert_true(cookies_path_match("/foo/bar", "/foo"), "path prefix with boundary");
+    assert_true(cookies_path_match("/foo/bar", "/foo/"), "path prefix ending in /");
+    assert_false(cookies_path_match("/foobar", "/foo"), "path prefix without boundary rejected");
+    assert_true(cookies_path_match("/foo", "/foo"), "path exact match");
+
+    // --- Basic parse + match -------------------------------------------
+    let mut names: [str] = [];
+    let mut values: [str] = [];
+    let mut domains: [str] = [];
+    let mut paths: [str] = [];
+    let mut secure: [bool] = [];
+    let mut host_only: [bool] = [];
+    let mut persistent: [bool] = [];
+
+    cookies_parse_set_cookie(names, values, domains, paths, secure, host_only, persistent,
+                             "example.com", "sid=abc123; Path=/; Secure");
+    assert_eq_i32(len(names), 1, "one cookie stored");
+    assert_eq_str(names[0], "sid", "name parsed");
+    assert_eq_str(values[0], "abc123", "value parsed");
+    assert_eq_str(domains[0], "example.com", "domain defaulted to request host");
+    assert_eq_str(paths[0], "/", "path /");
+    assert_true(secure[0], "secure flag");
+    assert_true(host_only[0], "host_only set when no Domain attr");
+    assert_false(persistent[0], "no Max-Age/Expires -> session cookie");
+
+    // Header for matching request
+    let hdr1: str = cookies_build_header(names, values, domains, paths, secure, host_only,
+                                          "example.com", "/foo", true);
+    assert_eq_str(hdr1, "sid=abc123", "secure cookie sent on https");
+
+    // Secure cookie NOT sent on plain http
+    let hdr2: str = cookies_build_header(names, values, domains, paths, secure, host_only,
+                                          "example.com", "/foo", false);
+    assert_eq_str(hdr2, "", "secure cookie suppressed on http");
+
+    // Wrong host -> no cookies
+    let hdr3: str = cookies_build_header(names, values, domains, paths, secure, host_only,
+                                          "other.com", "/", true);
+    assert_eq_str(hdr3, "", "host mismatch -> no cookies");
+
+    // --- Domain attribute (non-host-only) ------------------------------
+    cookies_parse_set_cookie(names, values, domains, paths, secure, host_only, persistent,
+                             "www.example.com", "pref=dark; Domain=.example.com; Path=/");
+    assert_eq_i32(len(names), 2, "second cookie stored");
+    assert_eq_str(domains[1], "example.com", "leading-dot stripped from Domain");
+    assert_false(host_only[1], "Domain attr -> not host-only");
+
+    // Matches on subdomain too
+    let hdr4: str = cookies_build_header(names, values, domains, paths, secure, host_only,
+                                          "api.example.com", "/", true);
+    assert_eq_str(hdr4, "pref=dark", "domain cookie matches subdomain");
+
+    // Both match on www.example.com + https + /
+    let hdr5: str = cookies_build_header(names, values, domains, paths, secure, host_only,
+                                          "www.example.com", "/", true);
+    assert_true(str_contains(hdr5, "sid=") or str_contains(hdr5, "pref="),
+                "both cookies considered on matching host");
+    // Actually "sid=abc123" is host-only on example.com, so it shouldn't
+    // match www.example.com. Verify:
+    assert_false(str_contains(hdr5, "sid="),
+                 "host-only cookie does NOT match subdomain");
+    assert_true(str_contains(hdr5, "pref=dark"),
+                "domain cookie matches subdomain in combined header");
+
+    // --- Max-Age handling ----------------------------------------------
+    cookies_parse_set_cookie(names, values, domains, paths, secure, host_only, persistent,
+                             "example.com", "token=xyz; Max-Age=3600");
+    let ti: i32 = cookies_find(names, domains, paths, "token", "example.com", "/");
+    assert_true(ti >= 0, "token cookie stored");
+    assert_true(persistent[ti], "Max-Age>0 -> persistent");
+
+    // Max-Age=0 deletes
+    cookies_parse_set_cookie(names, values, domains, paths, secure, host_only, persistent,
+                             "example.com", "token=discard; Max-Age=0");
+    let ti2: i32 = cookies_find(names, domains, paths, "token", "example.com", "/");
+    assert_eq_i32(ti2, -1, "Max-Age=0 removed the cookie");
+
+    // --- Update-in-place on re-set -------------------------------------
+    let n_before: i32 = len(names);
+    cookies_parse_set_cookie(names, values, domains, paths, secure, host_only, persistent,
+                             "example.com", "sid=xyz789; Path=/; Secure");
+    assert_eq_i32(len(names), n_before, "re-set same (name,domain,path) did not add");
+    let si: i32 = cookies_find(names, domains, paths, "sid", "example.com", "/");
+    assert_eq_str(values[si], "xyz789", "value updated");
+
+    // --- Expires triggers persistent even without Max-Age --------------
+    cookies_parse_set_cookie(names, values, domains, paths, secure, host_only, persistent,
+                             "example.com", "remember=1; Expires=Wed, 09 Jun 2027 10:18:14 GMT");
+    let ri: i32 = cookies_find(names, domains, paths, "remember", "example.com", "/");
+    assert_true(ri >= 0, "expires-only cookie stored");
+    assert_true(persistent[ri], "Expires marks cookie persistent");
+
+    // --- Malformed input is dropped ------------------------------------
+    let n2: i32 = len(names);
+    cookies_parse_set_cookie(names, values, domains, paths, secure, host_only, persistent,
+                             "example.com", "");
+    cookies_parse_set_cookie(names, values, domains, paths, secure, host_only, persistent,
+                             "example.com", "no_equals_sign");
+    cookies_parse_set_cookie(names, values, domains, paths, secure, host_only, persistent,
+                             "example.com", "=only_value");
+    assert_eq_i32(len(names), n2, "malformed lines ignored");
+
+    // --- clear_all empties the jar -------------------------------------
+    cookies_clear_all(names, values, domains, paths, secure, host_only, persistent);
+    assert_eq_i32(len(names), 0, "clear_all empties names");
+    assert_eq_i32(len(values), 0, "clear_all empties values");
+    assert_eq_i32(len(domains), 0, "clear_all empties domains");
+    assert_eq_i32(len(paths), 0, "clear_all empties paths");
+
+    println("=== Done ===");
+}

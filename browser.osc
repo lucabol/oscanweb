@@ -4,6 +4,9 @@
 use "url.osc"
 use "html.osc"
 use "http.osc"
+use "http_cache.osc"
+use "cookies.osc"
+use "forms.osc"
 use "css.osc"
 use "js.osc"
 use "storage.osc"
@@ -428,6 +431,8 @@ enum BrowserMode {
     Insert,
     Follow,
     Search,
+    FormFill,
+    FormPick,
 }
 
 // ─── Link Info ───────────────────────────────────────────
@@ -525,8 +530,10 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
         return -1;
     };
 
-    // Fetch image data
-    let resp: HttpResponse = http_get(img_host, img_port, img_path, img_tls);
+    // Fetch image data. Subresources don't carry cookies in v1 — most
+    // image CDNs don't authenticate, and threading the jar through the
+    // image pipeline would materially widen this module's surface.
+    let resp: HttpResponse = http_get(img_host, img_port, img_path, img_tls, "");
     if not resp.ok or str_len(resp.body) == 0 {
         map_set(img_cache_idx, src, "-1");
         return -1;
@@ -1094,12 +1101,21 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     if is_block and idx >= 0 and idx < len(styles) {
         let csp: ComputedStyle = styles[idx];
         // Max-width: resolve px first, else percent of current vp_width.
+        // `width` acts as a second cap: take the smaller of the two so
+        // an element with both properties set respects the stricter limit.
         let mut mw: i32 = -1;
         if csp.max_width_px >= 0 {
             mw = csp.max_width_px;
         } else if csp.max_width_pct > 0 {
             mw = (vp_width * csp.max_width_pct) / 100;
         };
+        let mut ww: i32 = -1;
+        if csp.width_px >= 0 {
+            ww = csp.width_px;
+        } else if csp.width_pct > 0 {
+            ww = (vp_width * csp.width_pct) / 100;
+        };
+        if ww > 0 and (mw < 0 or ww < mw) { mw = ww; };
         if mw > 0 {
             let avail: i32 = vp_width - indent - PAD * 2;
             if mw < avail {
@@ -1116,6 +1132,14 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         if csp.pad_r > 0 { eff_vp_width = eff_vp_width - csp.pad_r; };
         if csp.pad_t > 0 { pad_top_px = csp.pad_t; };
         if csp.pad_b > 0 { pad_bot_px = csp.pad_b; };
+        // Numeric margins: left/right shift the content edges inward
+        // (in addition to any auto-centering above); top/bottom add
+        // vertical space rendered as extra pad_{top,bot}_px since we
+        // don't model a full margin box.
+        if csp.margin_l > 0 { eff_indent = eff_indent + csp.margin_l; };
+        if csp.margin_r > 0 { eff_vp_width = eff_vp_width - csp.margin_r; };
+        if csp.margin_t > 0 { pad_top_px = pad_top_px + csp.margin_t; };
+        if csp.margin_b > 0 { pad_bot_px = pad_bot_px + csp.margin_b; };
     };
 
     let entry_line_h: i32 = effective_line_h(styles, idx, scale, tt_reg, tt_cfg, font);
@@ -1729,6 +1753,30 @@ fn user_stylesheet() -> str {
     "nav {{ display: none !important; }} aside {{ display: none !important; }} .sidebar {{ display: none !important; }} .site-header {{ display: none !important; }} .global-nav {{ display: none !important; }} .skip-link {{ display: none !important; }} .cookie-banner {{ display: none !important; }} .cookie-notice {{ display: none !important; }} .hamburger {{ display: none !important; }} .menu-toggle {{ display: none !important; }} #mw-navigation {{ display: none !important; }} #mw-panel {{ display: none !important; }} .mw-panel {{ display: none !important; }} .mw-jump-link {{ display: none !important; }} .vector-main-menu {{ display: none !important; }} .vector-pinned-container {{ display: none !important; }} .vector-header-container {{ display: none !important; }} .vector-sticky-header {{ display: none !important; }} .vector-toc {{ display: none !important; }} .mw-footer {{ display: none !important; }} #p-lang {{ display: none !important; }} .navbox {{ display: none !important; }} .sister-project {{ display: none !important; }} .interlanguage-link {{ display: none !important; }}"
 }
 
+// Returns true if `kind` is an editable text-like field whose value the
+// user types into during FormFill mode. Hidden fields are submitted but
+// not prompted for; checkbox/radio/select/submit/button are skipped.
+fn form_kind_is_editable(kind: str) -> bool {
+    str_eq(kind, "text") or str_eq(kind, "search") or
+    str_eq(kind, "email") or str_eq(kind, "url") or
+    str_eq(kind, "tel") or str_eq(kind, "password") or
+    str_eq(kind, "number") or str_eq(kind, "textarea")
+}
+
+// Resolve a form action string against the current page URL. Handles
+// absolute URLs (http[s]://), origin-relative (/foo), path-relative
+// (foo), and empty (submit to self).
+fn! form_resolve_action(action: str, current_url: str) -> str {
+    if str_len(action) == 0 { return current_url; };
+    if str_contains(action, "://") { return action; };
+    let cu: Url = url_parse(current_url);
+    let rp: str = url_resolve_relative(cu.path, action);
+    url_to_string(Url {
+        scheme: cu.scheme, host: cu.host, port: cu.port,
+        path: rp, fragment: "",
+    })
+}
+
 
 // ─── Main ────────────────────────────────────────────────
 
@@ -1761,6 +1809,32 @@ fn! main() {
     let mut img_cache_data: [[i32]] = [];
     let mut img_cache_w: [i32] = [];
     let mut img_cache_h: [i32] = [];
+
+    // Page (HTML document) cache. Keyed by canonical URL
+    // (scheme://host:port/path). Populated on successful fetch, consulted
+    // on every navigation before going to the network so back/forward
+    // (H/L) and repeat visits are instant. Images keep their own cache
+    // above — this one only caches top-level documents. `r` (reload)
+    // invalidates the current URL before re-navigating so the user can
+    // force a fresh fetch.
+    let mut page_cache_urls: [str] = [];
+    let mut page_cache_bodies: [str] = [];
+    let mut page_cache_cts: [str] = [];
+    let mut page_cache_status: [i32] = [];
+
+    // Cookie jar. Parallel arrays per repo convention (see cookies.osc
+    // header for details). Loaded from %APPDATA%/oscaweb_cookies.txt at
+    // startup; saved back after every navigation that sets a persistent
+    // cookie. `gC` clears the whole jar.
+    let mut ck_names: [str] = [];
+    let mut ck_values: [str] = [];
+    let mut ck_domains: [str] = [];
+    let mut ck_paths: [str] = [];
+    let mut ck_secure: [bool] = [];
+    let mut ck_host_only: [bool] = [];
+    let mut ck_persistent: [bool] = [];
+    cookies_load(ck_names, ck_values, ck_domains, ck_paths,
+                 ck_secure, ck_host_only, ck_persistent);
 
     // Address bar
     let mut url_buf: [i32] = [];
@@ -1918,6 +1992,19 @@ fn! main() {
     let mut search_match_y: [i32] = [];
     let mut search_match_idx: i32 = 0;
 
+    // Form fill mode: rebuilt from the DOM on every navigation.  We fill
+    // the editable fields of one form sequentially via a status-bar prompt
+    // (like Search mode), then submit.  v1 targets the FIRST form on the
+    // page; multi-form selection can come later.
+    let mut page_forms: [Form] = [];
+    let mut page_fields: [FormField] = [];
+    // Indices into page_fields that FormFill iterates (submittable,
+    // editable, not disabled, has a name).
+    let mut form_fill_order: [i32] = [];
+    let mut form_fill_target: i32 = -1;   // index into page_forms
+    let mut form_fill_pos: i32 = 0;       // index into form_fill_order
+    let mut form_input_buf: [i32] = [];
+
     // Help
     let mut show_help: bool = false;
     let mut last_key: i32 = 0;
@@ -1936,6 +2023,12 @@ fn! main() {
     // Navigation trigger
     let mut needs_navigate: bool = false;
     let mut nav_url: str = "";
+    // One-shot POST payload: set by form submission, consumed by the
+    // next navigation. Cleared after the initial request so that any
+    // redirect is followed as a plain GET (matches browser behaviour
+    // for 302/303 on POST).
+    let mut nav_is_post: bool = false;
+    let mut nav_post_body: str = "";
 
     // Render gating: only re-render when user input or state changes.
     // Without this, render_node is called 60× per second and — because the
@@ -2162,6 +2255,20 @@ fn! main() {
             push(follow_input, key);
         };
 
+        // Form fill: same printable/backspace handling as search.
+        let is_formfill: bool = match mode {
+            BrowserMode::FormFill => true,
+            _ => false,
+        };
+        if is_formfill {
+            if key >= 32 and key <= 126 {
+                push(form_input_buf, key);
+            };
+            if key == 8 and len(form_input_buf) > 0 {
+                pop(form_input_buf);
+            };
+        };
+
         // Main frame body (no arena block — avoids array realloc corruption)
         //
         // `nav_pass` lets us re-execute the navigate block once if input
@@ -2243,9 +2350,78 @@ fn! main() {
                 while not done and redir_count < MAX_REDIRECTS {
                     vlog_msg("fetch start", fetch_host);
                     vlog_int("fetch tls", if fetch_tls { 1 } else { 0 });
-                    let resp: HttpResponse = http_get(fetch_host, fetch_port, fetch_path, fetch_tls);
+                    // Canonical URL for cache keying. Always includes port
+                    // for consistency (the cache doesn't normalize default
+                    // ports, but all callers within a session agree).
+                    let cache_scheme: str = if fetch_tls { "https" } else { "http" };
+                    let cache_key: str = "{cache_scheme}://{fetch_host}:{fetch_port}{fetch_path}";
+                    // POST requests bypass the page cache and dispatch
+                    // via http_post once; any redirect switches to GET.
+                    let is_post_now: bool = nav_is_post and redir_count == 0;
+                    let cache_hit: i32 = if is_post_now { -1 } else {
+                        http_cache_lookup(page_cache_urls, cache_key)
+                    };
+                    let mut resp: HttpResponse = http_make_error("");
+                    let mut from_cache: bool = false;
+                    if cache_hit >= 0 {
+                        vlog_msg("cache hit", cache_key);
+                        resp = http_cache_build(page_cache_bodies[cache_hit],
+                                                page_cache_cts[cache_hit],
+                                                page_cache_status[cache_hit]);
+                        from_cache = true;
+                    } else {
+                        // Build Cookie: header (if any jar entries match
+                        // host/path/scheme) and pass to http_get. The
+                        // response may carry Set-Cookie lines which we
+                        // fold back into the jar below.
+                        let ck_hdr: str = cookies_build_header(
+                            ck_names, ck_values, ck_domains, ck_paths,
+                            ck_secure, ck_host_only,
+                            fetch_host, fetch_path, fetch_tls);
+                        let mut extra: str = "";
+                        if str_len(ck_hdr) > 0 {
+                            extra = "Cookie: {ck_hdr}\r\n";
+                        };
+                        if is_post_now {
+                            vlog_msg("POST", fetch_path);
+                            resp = http_post(fetch_host, fetch_port, fetch_path,
+                                             fetch_tls, nav_post_body,
+                                             "application/x-www-form-urlencoded", extra);
+                            // One-shot: clear so redirects become GETs.
+                            nav_is_post = false;
+                            nav_post_body = "";
+                        } else {
+                            resp = http_get(fetch_host, fetch_port, fetch_path, fetch_tls, extra);
+                        };
+                        // Absorb any Set-Cookie headers from the response
+                        // into the jar. Done before redirect handling so
+                        // cookies set on a 302 response are available on
+                        // the follow-up request (standard browser
+                        // behaviour — login flows depend on this).
+                        let sc_n: i32 = len(resp.set_cookie_lines);
+                        if sc_n > 0 {
+                            let mut sci: i32 = 0;
+                            while sci < sc_n {
+                                cookies_parse_set_cookie(
+                                    ck_names, ck_values, ck_domains, ck_paths,
+                                    ck_secure, ck_host_only, ck_persistent,
+                                    fetch_host, resp.set_cookie_lines[sci]);
+                                sci += 1;
+                            };
+                            cookies_save(ck_names, ck_values, ck_domains, ck_paths,
+                                         ck_secure, ck_host_only, ck_persistent);
+                        };
+                    };
                     vlog_int("fetch status", resp.status_code);
                     vlog_int("fetch body_len", str_len(resp.body));
+                    // Cache any successful or 3xx-redirect response (not
+                    // errors). Redirects are cheap to cache and let the
+                    // full chain short-circuit on revisit.
+                    if not from_cache and str_len(resp.error) == 0 and resp.status_code >= 200 and resp.status_code < 400 {
+                        http_cache_put(page_cache_urls, page_cache_bodies,
+                                       page_cache_cts, page_cache_status,
+                                       cache_key, resp);
+                    };
 
                     if str_len(resp.redirect_url) > 0 and (resp.status_code == 301 or resp.status_code == 302 or resp.status_code == 307) {
                         vlog_msg("redirect", resp.redirect_url);
@@ -2279,6 +2455,23 @@ fn! main() {
                         vlog_msg("js scripts end", "");
                         if js_bridge_is_dom_dirty() > 0 {
                             js_bridge_clear_dom_dirty();
+                        };
+
+                        // Forms: rebuild the page_forms / page_fields lists.
+                        // Done after JS so dynamically inserted fields are
+                        // picked up.  Clearing is in-place (mutating the
+                        // same array) to avoid the realloc-on-child-arena
+                        // bug documented elsewhere.
+                        while len(page_forms) > 0 { pop(page_forms); };
+                        while len(page_fields) > 0 { pop(page_fields); };
+                        while len(form_fill_order) > 0 { pop(form_fill_order); };
+                        form_fill_target = -1;
+                        form_fill_pos = 0;
+                        while len(form_input_buf) > 0 { pop(form_input_buf); };
+                        if dom_root >= 0 {
+                            forms_collect(dom_nodes, dom_root, page_forms, page_fields);
+                            vlog_int("forms", len(page_forms));
+                            vlog_int("fields", len(page_fields));
                         };
 
                         // CSS: collect <style> contents, external <link
@@ -2319,7 +2512,7 @@ fn! main() {
                                     link_path = url_resolve_relative(fetch_path, href);
                                 };
                                 vlog_msg("css link fetch", href);
-                                let lresp: HttpResponse = http_get(link_host, link_port, link_path, link_tls);
+                                let lresp: HttpResponse = http_get(link_host, link_port, link_path, link_tls, "");
                                 if lresp.ok and str_len(lresp.body) > 0 {
                                     css_order = css_parse(css_rules, lresp.body, css_order);
                                 };
@@ -2429,7 +2622,7 @@ fn! main() {
                         scroll_y = max_scroll;
                     } else if key == 103 {
                         if last_key == 103 { scroll_y = 0; };
-                    } else if key == 102 {
+                    } else if key == 102 and last_key != 103 {
                         if page_loaded {
                             mode = BrowserMode::Follow;
                             while len(follow_input) > 0 { pop(follow_input); };
@@ -2453,6 +2646,15 @@ fn! main() {
                             scroll_y = 0;
                             render_dirty = true;
                         } else if str_len(current_url) > 0 {
+                            // `r` — reload. Invalidate the cached copy of
+                            // the current page (and its redirect chain, if
+                            // any) so the re-navigation re-fetches instead
+                            // of hitting the page cache.
+                            let ru: Url = url_parse(current_url);
+                            let rsch: str = if str_eq(ru.scheme, "https") { "https" } else { "http" };
+                            let rkey: str = "{rsch}://{ru.host}:{ru.port}{ru.path}";
+                            http_cache_invalidate(page_cache_urls, page_cache_bodies,
+                                                  page_cache_cts, page_cache_status, rkey);
                             nav_url = current_url;
                             needs_navigate = true;
                         };
@@ -2467,6 +2669,48 @@ fn! main() {
                             needs_navigate = true;
                         };
                         render_dirty = true;
+                    } else if key == 67 and last_key == 103 {
+                        // gC — clear the cookie jar (both in-memory and
+                        // on-disk). User-facing escape hatch since we
+                        // don't enforce real-time cookie expiry.
+                        cookies_clear_all(ck_names, ck_values, ck_domains, ck_paths,
+                                          ck_secure, ck_host_only, ck_persistent);
+                        status_msg = "Cookies cleared";
+                        render_dirty = true;
+                    } else if key == 102 and last_key == 103 {
+                        // gf — enter FormFill (or FormPick if there are
+                        // multiple forms on the page).
+                        if len(page_forms) == 0 or len(page_fields) == 0 {
+                            status_msg = "No form on this page";
+                        } else if len(page_forms) > 1 {
+                            mode = BrowserMode::FormPick;
+                            render_dirty = true;
+                        } else {
+                            form_fill_target = 0;
+                            while len(form_fill_order) > 0 { pop(form_fill_order); };
+                            for ffi in 0..len(page_fields) {
+                                let f: FormField = page_fields[ffi];
+                                if f.form_idx == form_fill_target and
+                                   form_kind_is_editable(f.kind) and
+                                   not f.disabled and
+                                   str_len(f.name) > 0 {
+                                    push(form_fill_order, ffi);
+                                };
+                            };
+                            if len(form_fill_order) == 0 {
+                                status_msg = "Form has no editable fields";
+                            } else {
+                                form_fill_pos = 0;
+                                while len(form_input_buf) > 0 { pop(form_input_buf); };
+                                let init_f: FormField = page_fields[form_fill_order[0]];
+                                let init_chars: [i32] = str_to_chars(init_f.value);
+                                for ici in 0..len(init_chars) {
+                                    push(form_input_buf, init_chars[ici]);
+                                };
+                                mode = BrowserMode::FormFill;
+                                render_dirty = true;
+                            };
+                        };
                     } else if key == 109 and last_key == 103 {
                         // gm — jump to main content landmark.  Uses the
                         // existing fragment machinery by scanning the
@@ -2811,6 +3055,93 @@ fn! main() {
                         };
                     };
                     // push/pop for search_buf handled outside arena
+                },
+                BrowserMode::FormFill => {
+                    if key == KEY_ESC {
+                        // Abort: leave any previously-committed field
+                        // values in place (they persist in page_fields),
+                        // but drop the in-progress buffer.
+                        mode = BrowserMode::Normal;
+                        while len(form_input_buf) > 0 { pop(form_input_buf); };
+                        status_msg = "Form fill cancelled";
+                    } else if key == KEY_ENTER {
+                        // Commit current input buffer into the active field.
+                        if form_fill_pos >= 0 and form_fill_pos < len(form_fill_order) {
+                            let field_idx: i32 = form_fill_order[form_fill_pos];
+                            page_fields[field_idx].value = str_from_chars(form_input_buf);
+                        };
+                        form_fill_pos = form_fill_pos + 1;
+                        while len(form_input_buf) > 0 { pop(form_input_buf); };
+
+                        if form_fill_pos >= len(form_fill_order) {
+                            // All editable fields filled — build body and submit.
+                            let body: str = forms_build_urlencoded(
+                                page_fields, form_fill_target, -1);
+                            let action: str = page_forms[form_fill_target].action;
+                            let resolved: str = form_resolve_action(action, current_url);
+                            let method: str = page_forms[form_fill_target].method;
+                            if str_eq(method, "post") {
+                                nav_is_post = true;
+                                nav_post_body = body;
+                                nav_url = resolved;
+                            } else {
+                                nav_is_post = false;
+                                nav_post_body = "";
+                                let target_url: str = if str_len(body) > 0 {
+                                    str_concat(str_concat(resolved, "?"), body)
+                                } else { resolved };
+                                nav_url = target_url;
+                            };
+                            needs_navigate = true;
+                            mode = BrowserMode::Normal;
+                        } else {
+                            // Preload the next field's current value.
+                            let next_f: FormField = page_fields[
+                                form_fill_order[form_fill_pos]];
+                            let next_chars: [i32] = str_to_chars(next_f.value);
+                            for nci in 0..len(next_chars) {
+                                push(form_input_buf, next_chars[nci]);
+                            };
+                        };
+                        render_dirty = true;
+                    };
+                    // push/pop for form_input_buf handled outside arena
+                },
+                BrowserMode::FormPick => {
+                    if key == KEY_ESC {
+                        mode = BrowserMode::Normal;
+                        status_msg = "Form pick cancelled";
+                        render_dirty = true;
+                    } else if key >= 97 and key <= 122 {
+                        let pick: i32 = key - 97;
+                        if pick < len(page_forms) {
+                            form_fill_target = pick;
+                            while len(form_fill_order) > 0 { pop(form_fill_order); };
+                            for fpi in 0..len(page_fields) {
+                                let fp: FormField = page_fields[fpi];
+                                if fp.form_idx == form_fill_target and
+                                   form_kind_is_editable(fp.kind) and
+                                   not fp.disabled and
+                                   str_len(fp.name) > 0 {
+                                    push(form_fill_order, fpi);
+                                };
+                            };
+                            if len(form_fill_order) == 0 {
+                                status_msg = "Form has no editable fields";
+                                mode = BrowserMode::Normal;
+                            } else {
+                                form_fill_pos = 0;
+                                while len(form_input_buf) > 0 { pop(form_input_buf); };
+                                let pinit: FormField = page_fields[form_fill_order[0]];
+                                let pchars: [i32] = str_to_chars(pinit.value);
+                                for pci in 0..len(pchars) {
+                                    push(form_input_buf, pchars[pci]);
+                                };
+                                mode = BrowserMode::FormFill;
+                            };
+                            render_dirty = true;
+                        };
+                    };
                 },
             };
             };  // end if nav_pass == 0
@@ -3253,7 +3584,62 @@ fn! main() {
                 BrowserMode::Search => true,
                 _ => false,
             };
-            if show_search_bar {
+            let show_form_bar: bool = match mode {
+                BrowserMode::FormFill => true,
+                BrowserMode::FormPick => true,
+                _ => false,
+            };
+            let is_form_pick: bool = match mode {
+                BrowserMode::FormPick => true,
+                _ => false,
+            };
+            if is_form_pick {
+                let psy: i32 = canvas_height() - CHROME_BOT - 24;
+                gfx_fill_rect(0, psy, canvas_width(), 24, theme[T_STATUS_BG]);
+                gfx_rect(0, psy, canvas_width(), 1, UI_BORDER);
+                let mut px: i32 = 4;
+                gfx_draw_text(px, psy + 8, "Pick form:", theme[T_FG], FONT_DEFAULT);
+                px = px + gfx_text_width("Pick form:", FONT_DEFAULT) + 8;
+                let nforms: i32 = len(page_forms);
+                let max_show: i32 = if nforms < 26 { nforms } else { 26 };
+                for fi in 0..max_show {
+                    let fm: Form = page_forms[fi];
+                    let mut nfields: i32 = 0;
+                    for fqi in 0..len(page_fields) {
+                        let fq: FormField = page_fields[fqi];
+                        if fq.form_idx == fi and form_kind_is_editable(fq.kind) and
+                           not fq.disabled and str_len(fq.name) > 0 {
+                            nfields = nfields + 1;
+                        };
+                    };
+                    let label_ch: i32 = 97 + fi;
+                    let label_buf: [i32] = [label_ch];
+                    let label: str = str_from_chars(label_buf);
+                    let method_up: str = if str_eq(fm.method, "post") { "POST" } else { "GET" };
+                    let seg: str = "[{label}] {method_up}({nfields}) ";
+                    gfx_draw_text(px, psy + 8, seg, theme[T_FG], FONT_DEFAULT);
+                    px = px + gfx_text_width(seg, FONT_DEFAULT);
+                    if px > canvas_width() - 80 { break; };
+                };
+            } else if show_form_bar {
+                let sy: i32 = canvas_height() - CHROME_BOT - 24;
+                gfx_fill_rect(0, sy, canvas_width(), 24, theme[T_STATUS_BG]);
+                gfx_rect(0, sy, canvas_width(), 1, UI_BORDER);
+                let pos_disp: i32 = form_fill_pos + 1;
+                let total: i32 = len(form_fill_order);
+                let field_name: str = if form_fill_pos >= 0 and
+                                        form_fill_pos < len(form_fill_order) {
+                    page_fields[form_fill_order[form_fill_pos]].name
+                } else { "" };
+                let prompt: str = "Form [{pos_disp}/{total}] {field_name}: ";
+                gfx_draw_text(4, sy + 8, prompt, theme[T_FG], FONT_DEFAULT);
+                let prompt_w: i32 = gfx_text_width(prompt, FONT_DEFAULT);
+                let val: str = str_from_chars(form_input_buf);
+                gfx_draw_text(4 + prompt_w, sy + 8, val, theme[T_FG], FONT_DEFAULT);
+                // Cursor
+                gfx_fill_rect(4 + prompt_w + len(form_input_buf) * FONT_W,
+                              sy + 8, 1, FONT_H, theme[T_FG]);
+            } else if show_search_bar {
                 let sy: i32 = canvas_height() - CHROME_BOT - 24;
                 gfx_fill_rect(0, sy, canvas_width(), 24, theme[T_STATUS_BG]);
                 gfx_rect(0, sy, canvas_width(), 1, UI_BORDER);
@@ -3373,6 +3759,8 @@ fn! main() {
                 BrowserMode::Insert => "INSERT",
                 BrowserMode::Follow => "FOLLOW",
                 BrowserMode::Search => "SEARCH",
+                BrowserMode::FormFill => "FORM",
+                BrowserMode::FormPick => "FORM?",
             };
             let scroll_pct: str = if max_scroll > 0 {
                 let pct: i32 = scroll_y * 100 / max_scroll;

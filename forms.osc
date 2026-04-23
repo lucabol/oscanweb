@@ -1,0 +1,268 @@
+// Forms data layer for OscaWeb.
+//
+// Responsibilities (v1, renderer/network agnostic):
+//   * Walk a flat DOM and build a list of <form> elements plus the
+//     submittable <input>/<textarea>/<button>/<select> fields that belong
+//     to each one.
+//   * Provide URL encoding (application/x-www-form-urlencoded).
+//   * Build the query string a browser would send for a given form,
+//     honoring the "successful controls" rules that actually matter:
+//       - disabled fields are skipped
+//       - nameless fields are skipped
+//       - unchecked checkboxes / radios contribute nothing
+//       - <button type="submit"> / <input type="submit"> only contribute
+//         when they are the one that initiated submission (caller picks).
+//
+// What this module does NOT do:
+//   * render fields to the screen
+//   * perform HTTP (that's step 3b: http_post + GET form wiring)
+//   * focus/INSERT mode (that's step 3d)
+//
+// Intentional simplifications vs. the full HTML forms spec:
+//   * <form> elements MUST physically contain their fields; the `form=""`
+//     attribute that lets a field live outside its form is not supported.
+//   * <fieldset disabled> does not disable descendants (we only read the
+//     field's own `disabled` attr).
+//   * enctype is always application/x-www-form-urlencoded. multipart and
+//     text/plain are ignored -- file inputs will be skipped for now.
+//   * <select multiple> is not modelled; every <select> contributes at
+//     most one value (the selected option, or the first option if none
+//     is marked selected, matching browser behaviour).
+
+use "html.osc"
+
+struct Form {
+    node_idx: i32,   // index of the <form> node in the flat DOM
+    action: str,     // raw action attr (may be relative; caller resolves)
+    method: str,     // lowercased: "get" or "post"
+    enctype: str,    // lowercased; only urlencoded is honored at submit
+}
+
+struct FormField {
+    form_idx: i32,   // index into the forms array; -1 if orphan
+    node_idx: i32,   // DOM node index
+    kind: str,       // lowercased input type, or "textarea"/"button"/"select"
+    name: str,       // may be "" -> excluded at submit time
+    value: str,      // current value (mutated in INSERT mode later)
+    checked: bool,   // checkbox/radio only
+    disabled: bool,
+}
+
+// ─── URL / form encoding ────────────────────────────────────
+
+fn! forms_hex_digit(n: i32) -> i32 {
+    // 0..9 -> '0'..'9' ; 10..15 -> 'A'..'F'
+    if n < 10 { 48 + n } else { 55 + n }
+}
+
+fn! forms_is_unreserved(c: i32) -> bool {
+    // RFC 3986 unreserved: ALPHA / DIGIT / "-" / "." / "_" / "~"
+    // application/x-www-form-urlencoded additionally maps space to '+'
+    // so everything else (including '~' technically) would be percent-
+    // encoded by strict implementations -- but real browsers and servers
+    // treat unreserved as safe. Match that.
+    (c >= 48 and c <= 57) or
+    (c >= 65 and c <= 90) or
+    (c >= 97 and c <= 122) or
+    c == 45 or c == 46 or c == 95 or c == 126
+}
+
+fn! forms_url_encode(s: str) -> str {
+    let chars: [i32] = str_to_chars(s);
+    let n: i32 = len(chars);
+    let mut out: [i32] = [];
+    for i in 0..n {
+        let c: i32 = chars[i];
+        if c == 32 {
+            push(out, 43); // '+'
+        } else if forms_is_unreserved(c) {
+            push(out, c);
+        } else {
+            // UTF-8 bytes in Oscan strings are already i32 code units
+            // holding byte values 0..255 for non-ASCII; percent-encode
+            // each byte.
+            push(out, 37); // '%'
+            let hi: i32 = (c / 16) % 16;
+            let lo: i32 = c % 16;
+            push(out, forms_hex_digit(hi));
+            push(out, forms_hex_digit(lo));
+        };
+    };
+    str_from_chars(out)
+}
+
+// ─── DOM walk: collect forms + fields ───────────────────────
+
+fn! forms_field_kind(node: HtmlNode) -> str {
+    // Normalize: for <input> return the `type` attr (defaulting to text);
+    // for <textarea>/<button>/<select> return the tag name. Everything
+    // else returns "" (meaning: not a form field).
+    if str_eq(node.tag, "input") {
+        let t: str = html_get_attr(node, "type");
+        if str_len(t) == 0 { return "text"; };
+        return str_to_lower(t);
+    };
+    if str_eq(node.tag, "textarea") { return "textarea"; };
+    if str_eq(node.tag, "button")   { return "button"; };
+    if str_eq(node.tag, "select")   { return "select"; };
+    ""
+}
+
+fn! forms_default_value(nodes: [HtmlNode], idx: i32, kind: str) -> str {
+    let n: HtmlNode = nodes[idx];
+    if str_eq(kind, "textarea") {
+        // initial value = concatenated text content
+        return html_get_text_content(nodes, idx);
+    };
+    if str_eq(kind, "select") {
+        // Find first <option selected> else first <option>
+        let mut chosen: str = "";
+        let mut first: str = "";
+        let mut found_first: bool = false;
+        let mut child: i32 = n.first_child;
+        while child != -1 {
+            if str_eq(nodes[child].tag, "option") {
+                let opt_val_attr: str = html_get_attr(nodes[child], "value");
+                let opt_val: str = if str_len(opt_val_attr) > 0 {
+                    opt_val_attr
+                } else {
+                    str_trim(html_get_text_content(nodes, child))
+                };
+                if not found_first { first = opt_val; found_first = true; };
+                if map_has(nodes[child].attrs, "selected") {
+                    chosen = opt_val;
+                };
+            };
+            child = nodes[child].next_sibling;
+        };
+        if str_len(chosen) > 0 { return chosen; };
+        return first;
+    };
+    // input or button: value attr (browsers fall back to "" otherwise)
+    html_get_attr(n, "value")
+}
+
+// Recursive walker with an explicit form-stack. We track the innermost
+// <form> ancestor; HTML5 forbids nested forms but the parser might still
+// produce them, and picking the innermost matches Blink/Gecko.
+fn! forms_walk(nodes: [HtmlNode], idx: i32, current_form: i32,
+               forms: [Form], fields: [FormField]) {
+    if idx < 0 { return; };
+    let node: HtmlNode = nodes[idx];
+    let mut new_form: i32 = current_form;
+
+    if str_eq(node.tag, "form") {
+        let raw_method: str = html_get_attr(node, "method");
+        let method_norm: str = if str_len(raw_method) > 0 {
+            str_to_lower(str_trim(raw_method))
+        } else { "get" };
+        let method: str = if str_eq(method_norm, "post") { "post" } else { "get" };
+        let raw_enctype: str = html_get_attr(node, "enctype");
+        let enctype: str = if str_len(raw_enctype) > 0 {
+            str_to_lower(str_trim(raw_enctype))
+        } else { "application/x-www-form-urlencoded" };
+        let f: Form = Form {
+            node_idx: idx,
+            action: html_get_attr(node, "action"),
+            method: method,
+            enctype: enctype,
+        };
+        push(forms, f);
+        new_form = len(forms) - 1;
+    } else {
+        let kind: str = forms_field_kind(node);
+        if str_len(kind) > 0 {
+            let checked: bool = map_has(node.attrs, "checked");
+            let disabled: bool = map_has(node.attrs, "disabled");
+            let value: str = forms_default_value(nodes, idx, kind);
+            let name: str = html_get_attr(node, "name");
+            let field: FormField = FormField {
+                form_idx: current_form,
+                node_idx: idx,
+                kind: kind,
+                name: name,
+                value: value,
+                checked: checked,
+                disabled: disabled,
+            };
+            push(fields, field);
+        };
+    };
+
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        forms_walk(nodes, child, new_form, forms, fields);
+        child = nodes[child].next_sibling;
+    };
+}
+
+fn! forms_collect(nodes: [HtmlNode], root: i32,
+                  forms: [Form], fields: [FormField]) {
+    forms_walk(nodes, root, -1, forms, fields);
+}
+
+// ─── Submission helpers ─────────────────────────────────────
+
+// Is `kind` a field that ever contributes a (name,value) pair to the
+// submission when active? Submit buttons contribute only when they are
+// the initiator -- caller handles that separately via the submitter idx.
+fn! forms_is_value_field(kind: str) -> bool {
+    str_eq(kind, "text") or str_eq(kind, "search") or
+    str_eq(kind, "email") or str_eq(kind, "url") or
+    str_eq(kind, "tel") or str_eq(kind, "password") or
+    str_eq(kind, "number") or str_eq(kind, "hidden") or
+    str_eq(kind, "textarea") or str_eq(kind, "select")
+}
+
+fn! forms_is_toggle_field(kind: str) -> bool {
+    str_eq(kind, "checkbox") or str_eq(kind, "radio")
+}
+
+// Build an application/x-www-form-urlencoded body for `target_form`.
+// `submitter_field_idx` is the index (into `fields`) of the specific
+// submit control that fired the submission, or -1 if none; submit
+// controls that are NOT the submitter are silently skipped.
+fn! forms_build_urlencoded(fields: [FormField],
+                           target_form: i32,
+                           submitter_field_idx: i32) -> str {
+    let mut parts: [str] = [];
+    let n: i32 = len(fields);
+    for i in 0..n {
+        let f: FormField = fields[i];
+        if f.form_idx != target_form { continue; };
+        if f.disabled { continue; };
+        if str_len(f.name) == 0 { continue; };
+
+        if forms_is_value_field(f.kind) {
+            let k: str = forms_url_encode(f.name);
+            let v: str = forms_url_encode(f.value);
+            let piece: str = "{k}={v}";
+            push(parts, piece);
+        } else if forms_is_toggle_field(f.kind) {
+            if f.checked {
+                // Checked checkbox/radio with no value attr submits "on".
+                let vraw: str = if str_len(f.value) > 0 { f.value } else { "on" };
+                let k: str = forms_url_encode(f.name);
+                let v: str = forms_url_encode(vraw);
+                let piece: str = "{k}={v}";
+                push(parts, piece);
+            };
+        } else if str_eq(f.kind, "submit") or str_eq(f.kind, "image") or str_eq(f.kind, "button") {
+            if i == submitter_field_idx {
+                let k: str = forms_url_encode(f.name);
+                let v: str = forms_url_encode(f.value);
+                let piece: str = "{k}={v}";
+                push(parts, piece);
+            };
+        };
+        // file / reset / color / range etc.: skipped in v1
+    };
+
+    let mut out: str = "";
+    let np: i32 = len(parts);
+    for i in 0..np {
+        if i > 0 { out = str_concat(out, "&"); };
+        out = str_concat(out, parts[i]);
+    };
+    out
+}

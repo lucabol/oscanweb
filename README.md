@@ -7,6 +7,9 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 ### Key Features
 
 - **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
+- **HTTP page cache** — 20-entry FIFO cache keyed by URL; back/forward and repeat visits are instant. Bypassed on `r` (reload).
+- **Cookie jar** — minimal RFC 6265 subset: `Set-Cookie` parsing (Max-Age, Expires, Secure, Domain, Path), `Cookie:` header injection on main-document fetches, persisted across restarts. Clear with `gC`.
+- **Form submission (GET and POST)** — press `gf` to fill `<form>` text fields sequentially via status-bar prompts, then submit. Pages with multiple forms show a letter-labeled picker (`[a]`, `[b]`, …) so you can choose which form to fill. Supports text, search, email, url, tel, password, number, and textarea inputs; submit buttons and hidden fields are included automatically. POST forms dispatch `application/x-www-form-urlencoded` bodies; redirects after a POST follow as GETs.
 - **Omnibox search** — type any query in the address bar; non-URL input is sent to DuckDuckGo automatically, with autocomplete from your browsing history
 - **Readable article column** — when a page has `<main>` or `<article>`, that subtree is automatically narrowed to ~640 CSS px and centered, so long articles don't run edge-to-edge on wide canvases
 - **Chrome trimming** — navigation sidebars, hamburger menus, and site chrome (nav/header/footer/aside, `#mw-panel`, `.vector-*`, `.sidebar`, etc.) are hidden by default on heavy pages like Wikipedia; `gR` toggles the full page back on
@@ -17,7 +20,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Runtime zoom** — `+`/`-` zoom in/out, `0` resets (1×–4×)
 - **HTTP and HTTPS support** — TLS is built into Oscan (zero external dependencies)
 - **JavaScript execution** — inline `<script>` tags and `onclick` handlers via embedded QuickJS-ng
-- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`, `padding`, `max-width`, `line-height`, `margin: 0 auto` centering, and `@media (prefers-color-scheme)`) with a real cascade, descendant combinator, and inheritance. Tables now auto-size columns to content and wrap long cells.
+- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`, `padding`, `max-width`, `width` (px/%), `line-height`, `margin` (px and `0 auto` centering), and `@media (prefers-color-scheme)`) with a real cascade, descendant combinator, and inheritance. Tables now auto-size columns to content and wrap long cells.
 - **Image rendering** — PNG, JPEG, BMP, GIF, and SVG decoded, cached, and displayed inline
 - **Rich HTML rendering** — headings, lists, tables, blockquotes, code blocks, and 30+ tags
 - **Text selection & copy** — click-and-drag to select text, automatically copied to clipboard
@@ -73,6 +76,8 @@ OscaWeb uses Vimium-inspired keybindings. Press `?` in the browser to toggle the
 | `r`   | Reload page                       |
 | `gr`  | Toggle reader mode                |
 | `gR`  | Toggle show-full (disable chrome trim + user stylesheet, reloads) |
+| `gC`  | Clear all cookies (jar + disk file) |
+| `gf`  | Fill form on the current page (sequential prompts, Enter advances, Esc aborts) |
 | `gm`  | Jump to `<main>`/`<article>` / first heading |
 | `t`   | Toggle outline (table of contents) |
 | `1`–`9` | Jump to Nth heading (when outline is open) |
@@ -291,8 +296,8 @@ back to left alignment).
   rules containing them are parsed and skipped
 - Pseudo-classes / pseudo-elements (`:hover`, `::before`, …)
 - Attribute selectors (`[href]`)
-- Box-model properties (`width`, `height`, `margin`, `padding`, `border`,
-  `float`, `position`, `flex`, `grid`)
+- Box-model properties beyond `padding`/`width`/`max-width`/numeric
+  `margin` (no `height`, `border`, `float`, `position`, `flex`, `grid`)
 - Units other than unitless integers for `rgb()` and bare hex colors
 - `@media`, `@import`, `@font-face` and other at-rules (parsed and
   ignored)
@@ -450,17 +455,17 @@ headings, paragraphs, code blocks, and tables uniformly.
 
 ## Limitations
 
-- **No CSS layout** — colors, weights, decorations, backgrounds, and
-  `display:none` are honored, but there is no box model, no flexbox/grid,
-  no floats, and no width/height/margin/padding rules
+- **No full CSS layout** — colors, weights, decorations, backgrounds,
+  `display:none`, `padding`, `width`/`max-width` and numeric `margin`
+  are honored, but there is no `height`, `border`, flexbox/grid, or
+  `float`/`position`
 - **CSS selectors are simple only** — `tag`, `.class`, `#id`, `*`, and
   comma-separated lists; combinators (` `, `>`, `+`, `~`), pseudo-classes,
   attribute selectors, and `@media` queries are ignored
 - **No external stylesheets** — `<link rel="stylesheet">` is not fetched
   (inline `<style>` blocks and `style=""` attributes are supported)
 - **No external script loading** — `<script src="...">` tags are ignored
-- **No cookies or session management**
-- **No form submission** — `<form>`, `<input>`, `<textarea>` not rendered
+- **Limited form submission** — GET and POST forms supported via `gf` (no visual field rendering; no checkbox/radio/select UI yet)
 - **Fixed viewport** — 1024×768 window with 8×8 monospace bitmap font
 - **Single-threaded** — synchronous page fetching
 

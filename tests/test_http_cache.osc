@@ -1,0 +1,109 @@
+// Tests for http_cache.osc — LRU/FIFO page cache helpers.
+
+use "../http_cache.osc"
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! assert_true(actual: bool, test_name: str) {
+    if actual {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected true");
+    };
+}
+
+fn! make_resp(body: str, ct: str, status: i32) -> HttpResponse {
+    let empty: [str] = [];
+    HttpResponse {
+        status_code: status,
+        content_type: ct,
+        body: body,
+        redirect_url: "",
+        error: "",
+        ok: status >= 200 and status < 300,
+        set_cookie_lines: empty,
+    }
+}
+
+fn! main() {
+    println("=== HTTP Cache Tests ===");
+
+    // 1. Empty-cache lookup returns -1
+    let mut urls: [str] = [];
+    let mut bodies: [str] = [];
+    let mut cts: [str] = [];
+    let mut status: [i32] = [];
+    assert_eq_i32(http_cache_lookup(urls, "https://example.com/"), -1, "empty lookup -> -1");
+
+    // 2. Insert then lookup
+    http_cache_put(urls, bodies, cts, status, "https://example.com/", make_resp("<h1>hi</h1>", "text/html", 200));
+    assert_eq_i32(http_cache_lookup(urls, "https://example.com/"), 0, "insert then lookup -> 0");
+    assert_eq_i32(len(urls), 1, "len=1 after one insert");
+    assert_eq_str(bodies[0], "<h1>hi</h1>", "stored body matches");
+    assert_eq_str(cts[0], "text/html", "stored content-type matches");
+    assert_eq_i32(status[0], 200, "stored status matches");
+
+    // 3. Re-insert same URL updates in place (no duplicate)
+    http_cache_put(urls, bodies, cts, status, "https://example.com/", make_resp("<h1>v2</h1>", "text/html", 200));
+    assert_eq_i32(len(urls), 1, "len still 1 after re-insert");
+    assert_eq_str(bodies[0], "<h1>v2</h1>", "body updated in place");
+
+    // 4. Fill to capacity + overflow -> oldest evicted
+    http_cache_clear(urls, bodies, cts, status);
+    let mut i: i32 = 0;
+    let max: i32 = http_cache_max();
+    while i < max {
+        let url: str = "https://site.test/p{i}";
+        http_cache_put(urls, bodies, cts, status, url, make_resp("body{i}", "text/html", 200));
+        i += 1;
+    };
+    assert_eq_i32(len(urls), max, "cache filled to capacity");
+    assert_eq_str(urls[0], "https://site.test/p0", "oldest still at index 0");
+
+    // Insert one more -> oldest should be evicted
+    http_cache_put(urls, bodies, cts, status, "https://site.test/overflow", make_resp("over", "text/html", 200));
+    assert_eq_i32(len(urls), max, "still at capacity after overflow insert");
+    assert_eq_i32(http_cache_lookup(urls, "https://site.test/p0"), -1, "oldest evicted");
+    assert_true(http_cache_lookup(urls, "https://site.test/p1") >= 0, "second-oldest retained");
+    let overflow_idx: i32 = http_cache_lookup(urls, "https://site.test/overflow");
+    assert_true(overflow_idx >= 0, "newest retained");
+    assert_eq_str(bodies[overflow_idx], "over", "newest body intact");
+
+    // 5. Invalidate removes one entry
+    http_cache_invalidate(urls, bodies, cts, status, "https://site.test/p5");
+    assert_eq_i32(len(urls), max - 1, "len decremented after invalidate");
+    assert_eq_i32(http_cache_lookup(urls, "https://site.test/p5"), -1, "invalidated entry absent");
+    assert_true(http_cache_lookup(urls, "https://site.test/p6") >= 0, "neighbour still present");
+
+    // 6. Clear empties everything
+    http_cache_clear(urls, bodies, cts, status);
+    assert_eq_i32(len(urls), 0, "urls empty after clear");
+    assert_eq_i32(len(bodies), 0, "bodies empty after clear");
+    assert_eq_i32(len(cts), 0, "cts empty after clear");
+    assert_eq_i32(len(status), 0, "status empty after clear");
+
+    // 7. build() reconstructs a sensible HttpResponse
+    let resp: HttpResponse = http_cache_build("<p>x</p>", "text/html", 200);
+    assert_eq_str(resp.body, "<p>x</p>", "build body");
+    assert_eq_str(resp.content_type, "text/html", "build content-type");
+    assert_eq_i32(resp.status_code, 200, "build status");
+    assert_true(resp.ok, "build ok=true for 200");
+    let resp_err: HttpResponse = http_cache_build("", "", 500);
+    assert_true(not resp_err.ok, "build ok=false for 500");
+
+    println("=== Done ===");
+}

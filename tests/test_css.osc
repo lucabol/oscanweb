@@ -390,5 +390,111 @@ fn! main() {
     assert_true(h1_i >= 0, "found <h1>");
     assert_eq_i32(styles_m[h1_i].color, css_parse_color("#ff0000"), "dark media applied");
 
+    println("=== CSS Phase 4 — width + numeric margins ===");
+    // width: Npx
+    let mut n4a: [HtmlNode] = [];
+    let n4a_node: HtmlNode = html_node_element("div", map_new());
+    push(n4a, n4a_node);
+    n4a[0].attrs = map_new();
+    map_set(n4a[0].attrs, "style", "width: 640px");
+    let mut r4a: [CssRule] = [];
+    let mut s4a: [ComputedStyle] = [];
+    css_compute_all(n4a, 0, r4a, s4a);
+    assert_eq_i32(s4a[0].width_px, 640, "width 640px");
+    assert_eq_i32(s4a[0].width_pct, -1, "width px has no pct");
+
+    // width: N%
+    let mut n4b: [HtmlNode] = [];
+    let n4b_node: HtmlNode = html_node_element("div", map_new());
+    push(n4b, n4b_node);
+    n4b[0].attrs = map_new();
+    map_set(n4b[0].attrs, "style", "width: 75%");
+    let mut r4b: [CssRule] = [];
+    let mut s4b: [ComputedStyle] = [];
+    css_compute_all(n4b, 0, r4b, s4b);
+    assert_eq_i32(s4b[0].width_pct, 75, "width 75%");
+    assert_eq_i32(s4b[0].width_px, -1, "width % has no px");
+
+    // width: auto -> unset
+    let mut n4c: [HtmlNode] = [];
+    let n4c_node: HtmlNode = html_node_element("div", map_new());
+    push(n4c, n4c_node);
+    n4c[0].attrs = map_new();
+    map_set(n4c[0].attrs, "style", "width: auto");
+    let mut r4c: [CssRule] = [];
+    let mut s4c: [ComputedStyle] = [];
+    css_compute_all(n4c, 0, r4c, s4c);
+    assert_eq_i32(s4c[0].width_px, -1, "width auto => unset");
+
+    // margin shorthand numeric T R B L
+    let mut n4d: [HtmlNode] = [];
+    let n4d_node: HtmlNode = html_node_element("div", map_new());
+    push(n4d, n4d_node);
+    n4d[0].attrs = map_new();
+    map_set(n4d[0].attrs, "style", "margin: 1px 2px 3px 4px");
+    let mut r4d: [CssRule] = [];
+    let mut s4d: [ComputedStyle] = [];
+    css_compute_all(n4d, 0, r4d, s4d);
+    assert_eq_i32(s4d[0].margin_t, 1, "margin T=1");
+    assert_eq_i32(s4d[0].margin_r, 2, "margin R=2");
+    assert_eq_i32(s4d[0].margin_b, 3, "margin B=3");
+    assert_eq_i32(s4d[0].margin_l, 4, "margin L=4");
+
+    // margin shorthand V H
+    let mut n4e: [HtmlNode] = [];
+    let n4e_node: HtmlNode = html_node_element("div", map_new());
+    push(n4e, n4e_node);
+    n4e[0].attrs = map_new();
+    map_set(n4e[0].attrs, "style", "margin: 10px 20px");
+    let mut r4e: [CssRule] = [];
+    let mut s4e: [ComputedStyle] = [];
+    css_compute_all(n4e, 0, r4e, s4e);
+    assert_eq_i32(s4e[0].margin_t, 10, "margin V=10 (top)");
+    assert_eq_i32(s4e[0].margin_b, 10, "margin V=10 (bottom)");
+    assert_eq_i32(s4e[0].margin_l, 20, "margin H=20 (left)");
+    assert_eq_i32(s4e[0].margin_r, 20, "margin H=20 (right)");
+
+    // Single-side margins
+    let mut n4f: [HtmlNode] = [];
+    let n4f_node: HtmlNode = html_node_element("div", map_new());
+    push(n4f, n4f_node);
+    n4f[0].attrs = map_new();
+    map_set(n4f[0].attrs, "style", "margin-top: 12px; margin-left: 8px");
+    let mut r4f: [CssRule] = [];
+    let mut s4f: [ComputedStyle] = [];
+    css_compute_all(n4f, 0, r4f, s4f);
+    assert_eq_i32(s4f[0].margin_t, 12, "margin-top 12");
+    assert_eq_i32(s4f[0].margin_l, 8, "margin-left 8");
+    assert_eq_i32(s4f[0].margin_r, -1, "margin-right still unset");
+    assert_eq_i32(s4f[0].margin_b, -1, "margin-bottom still unset");
+
+    // margin: 0 auto still centers (regression guard).
+    let mut n4g: [HtmlNode] = [];
+    let n4g_node: HtmlNode = html_node_element("div", map_new());
+    push(n4g, n4g_node);
+    n4g[0].attrs = map_new();
+    map_set(n4g[0].attrs, "style", "margin: 0 auto");
+    let mut r4g: [CssRule] = [];
+    let mut s4g: [ComputedStyle] = [];
+    css_compute_all(n4g, 0, r4g, s4g);
+    assert_eq_i32(s4g[0].center_block, 1, "margin: 0 auto still centers");
+    assert_eq_i32(s4g[0].margin_t, 0, "margin 0 auto: T=0");
+    assert_eq_i32(s4g[0].margin_b, 0, "margin 0 auto: B=0");
+
+    // width + margins do NOT inherit.
+    let mut dom_h: [HtmlNode] = [];
+    let r_h: i32 = html_parse(dom_h,
+        "<body style=\"width: 600px; margin: 20px\"><p>x</p></body>");
+    let mut rules_h: [CssRule] = [];
+    let mut styles_h: [ComputedStyle] = [];
+    css_compute_all(dom_h, r_h, rules_h, styles_h);
+    let mut p_h: i32 = -1;
+    for hi in 0..len(dom_h) {
+        if not dom_h[hi].is_text and str_eq(dom_h[hi].tag, "p") { p_h = hi; };
+    };
+    assert_true(p_h >= 0, "found <p> child");
+    assert_eq_i32(styles_h[p_h].width_px, -1, "width does NOT inherit");
+    assert_eq_i32(styles_h[p_h].margin_t, -1, "margin does NOT inherit");
+
     println("=== CSS Done ===");
 }

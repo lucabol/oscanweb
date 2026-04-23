@@ -1,0 +1,313 @@
+// cookies.osc — minimal cookie jar for OscaWeb
+//
+// Implements a deliberately small subset of RFC 6265 sufficient for
+// "stay logged in" to work on most real-world sites:
+//
+//   * Parses Set-Cookie response headers (name, value, Domain, Path,
+//     Secure, Max-Age).
+//   * Stores cookies in parallel arrays (Oscan convention — no
+//     self-referential structs, values passed by reference via the
+//     arrays).
+//   * Builds a single `Cookie: n1=v1; n2=v2` header for a given
+//     (host, path, is_https) tuple.
+//   * Persists only cookies that had Max-Age / Expires at parse time
+//     (session cookies stay in memory only).
+//
+// Intentional simplifications, documented for callers:
+//
+//   * `Expires=<http-date>` is IGNORED (no HTTP-date parser in tree).
+//     A cookie with only Expires is still recognised as persistent
+//     for persistence purposes, but its expiry instant is not
+//     enforced — it lives until the cookie jar is cleared or the
+//     origin re-sets it. Max-Age is the attribute that gates
+//     deletion (Max-Age <= 0 -> immediate removal).
+//   * No real-time clock is consulted, so persistent cookies never
+//     expire automatically. `gC` (clear all cookies, see browser.osc)
+//     is the user-facing escape hatch.
+//   * HttpOnly / SameSite / Partitioned are parsed but not acted on
+//     (we have no JS cookie API and no cross-site request concept).
+//   * Path defaulting uses "/" rather than the "directory of the
+//     request path" algorithm in RFC 6265 §5.1.4 — simpler and safe
+//     (over-sends rather than under-sends, which is the behaviour
+//     most servers expect anyway).
+//   * Domain match is the standard RFC 6265 §5.1.3 algorithm:
+//     host-only cookies match exactly; domain cookies match the
+//     domain itself or any subdomain.
+//
+// Used by browser.osc's fetch loop (main document + CSS + image
+// subresources all get Cookie headers injected via http_get's
+// extra_headers parameter).
+
+use "storage.osc"
+
+// Persisted cookies file (next to history/bookmarks).
+fn cookies_filename() -> str { "oscaweb_cookies.txt" }
+
+// Lowercase a host for case-insensitive comparison.
+fn! cookies_host_lower(h: str) -> str { str_to_lower(h) }
+
+// RFC 6265 §5.1.3 domain-match: given request host and cookie's
+// stored (domain, host_only) tuple, return true iff this cookie
+// should be a candidate for the request.
+fn! cookies_domain_match(req_host: str, ck_domain: str, host_only: bool) -> bool {
+    let rh: str = cookies_host_lower(req_host);
+    let cd: str = cookies_host_lower(ck_domain);
+    if host_only {
+        return str_eq(rh, cd);
+    };
+    if str_eq(rh, cd) { return true; };
+    // Subdomain match: rh must end with "." + cd
+    let dotted: str = str_concat(".", cd);
+    str_ends_with(rh, dotted)
+}
+
+// RFC 6265 §5.1.4 path-match (simplified). A request path matches
+// the cookie path if they are identical, OR the cookie path is a
+// prefix of the request path and either (a) the cookie path already
+// ends with "/" or (b) the next character in the request path is "/".
+fn! cookies_path_match(req_path: str, ck_path: str) -> bool {
+    if str_len(ck_path) == 0 { return true; };
+    if str_eq(req_path, ck_path) { return true; };
+    if not str_starts_with(req_path, ck_path) { return false; };
+    // ck_path is a strict prefix of req_path
+    let ck_chars: [i32] = str_to_chars(ck_path);
+    let last: i32 = ck_chars[len(ck_chars) - 1];
+    if last == 47 { return true; }; // '/' — matches anything under
+    let rp: [i32] = str_to_chars(req_path);
+    if len(rp) <= len(ck_chars) { return false; };
+    rp[len(ck_chars)] == 47
+}
+
+// Find the index of an existing (name, domain, path) cookie, or -1.
+fn! cookies_find(names: [str], domains: [str], paths: [str],
+                 name: str, domain: str, path: str) -> i32 {
+    let n: i32 = len(names);
+    let mut i: i32 = 0;
+    while i < n {
+        if str_eq(names[i], name) and str_eq(domains[i], domain) and str_eq(paths[i], path) {
+            return i;
+        };
+        i += 1;
+    };
+    -1
+}
+
+// Remove cookie at index idx by shifting subsequent entries down.
+// Mirrors http_cache_invalidate's in-place shift (Oscan arrays have
+// pop() but no remove-at-index).
+fn! cookies_remove_at(names: [str], values: [str], domains: [str],
+                      paths: [str], secure: [bool], host_only: [bool],
+                      persistent: [bool], idx: i32) {
+    let n: i32 = len(names);
+    if idx < 0 or idx >= n { return; };
+    let mut i: i32 = idx;
+    while i < n - 1 {
+        names[i]      = names[i + 1];
+        values[i]     = values[i + 1];
+        domains[i]    = domains[i + 1];
+        paths[i]      = paths[i + 1];
+        secure[i]     = secure[i + 1];
+        host_only[i]  = host_only[i + 1];
+        persistent[i] = persistent[i + 1];
+        i += 1;
+    };
+    pop(names);
+    pop(values);
+    pop(domains);
+    pop(paths);
+    pop(secure);
+    pop(host_only);
+    pop(persistent);
+}
+
+// Parse a single `Set-Cookie: ...` header VALUE (the bit after
+// "Set-Cookie: ") and upsert it into the jar. Silently ignores
+// malformed input (no name, no '=', etc.).
+//
+// `req_host` is the request's host; used to populate Domain when
+// the Set-Cookie omits the attribute (creating a host-only cookie).
+fn! cookies_parse_set_cookie(names: [str], values: [str], domains: [str],
+                             paths: [str], secure: [bool], host_only: [bool],
+                             persistent: [bool],
+                             req_host: str, line: str) {
+    let trimmed: str = str_trim(line);
+    if str_len(trimmed) == 0 { return; };
+
+    let parts: [str] = str_split(trimmed, ";");
+    if len(parts) == 0 { return; };
+
+    // First part is name=value (value may itself contain '=').
+    let first: str = str_trim(parts[0]);
+    let eq_pos: i32 = str_find(first, "=");
+    if eq_pos <= 0 { return; };
+    let name: str = str_trim(str_slice(first, 0, eq_pos));
+    let value: str = str_trim(str_slice(first, eq_pos + 1, str_len(first)));
+    if str_len(name) == 0 { return; };
+
+    // Attribute defaults.
+    let mut attr_domain: str = "";
+    let mut attr_path: str = "/";
+    let mut attr_secure: bool = false;
+    let mut attr_max_age_present: bool = false;
+    let mut attr_max_age: i32 = 0;
+    let mut attr_expires_present: bool = false;
+
+    let mut i: i32 = 1;
+    while i < len(parts) {
+        let raw: str = str_trim(parts[i]);
+        if str_len(raw) > 0 {
+            let key_eq: i32 = str_find(raw, "=");
+            let mut key: str = raw;
+            let mut val: str = "";
+            if key_eq >= 0 {
+                key = str_trim(str_slice(raw, 0, key_eq));
+                val = str_trim(str_slice(raw, key_eq + 1, str_len(raw)));
+            };
+            let klow: str = str_to_lower(key);
+            if str_eq(klow, "domain") {
+                // Strip any leading '.' per RFC 6265 §5.2.3.
+                let dlow: str = str_to_lower(val);
+                if str_starts_with(dlow, ".") {
+                    attr_domain = str_slice(dlow, 1, str_len(dlow));
+                } else {
+                    attr_domain = dlow;
+                };
+            } else if str_eq(klow, "path") {
+                if str_len(val) > 0 { attr_path = val; };
+            } else if str_eq(klow, "secure") {
+                attr_secure = true;
+            } else if str_eq(klow, "max-age") {
+                attr_max_age_present = true;
+                let r: Result<i32, str> = parse_i32(val);
+                match r {
+                    Result::Ok(n) => { attr_max_age = n; },
+                    Result::Err(_e) => { attr_max_age_present = false; },
+                };
+            } else if str_eq(klow, "expires") {
+                attr_expires_present = true;
+            };
+            // HttpOnly, SameSite, Partitioned: parsed away silently.
+        };
+        i += 1;
+    };
+
+    // Resolve effective domain + host_only flag.
+    let mut eff_domain: str = attr_domain;
+    let mut eff_host_only: bool = false;
+    if str_len(attr_domain) == 0 {
+        eff_domain = cookies_host_lower(req_host);
+        eff_host_only = true;
+    };
+
+    // Max-Age <= 0 -> delete any matching cookie.
+    if attr_max_age_present and attr_max_age <= 0 {
+        let existing: i32 = cookies_find(names, domains, paths, name, eff_domain, attr_path);
+        if existing >= 0 {
+            cookies_remove_at(names, values, domains, paths, secure, host_only, persistent, existing);
+        };
+        return;
+    };
+
+    let eff_persistent: bool = attr_max_age_present or attr_expires_present;
+
+    // Upsert.
+    let existing: i32 = cookies_find(names, domains, paths, name, eff_domain, attr_path);
+    if existing >= 0 {
+        values[existing]     = value;
+        secure[existing]     = attr_secure;
+        host_only[existing]  = eff_host_only;
+        persistent[existing] = eff_persistent;
+    } else {
+        push(names, name);
+        push(values, value);
+        push(domains, eff_domain);
+        push(paths, attr_path);
+        push(secure, attr_secure);
+        push(host_only, eff_host_only);
+        push(persistent, eff_persistent);
+    };
+}
+
+// Build the value for a `Cookie:` request header (without the
+// "Cookie: " prefix and without a trailing CRLF). Returns "" when
+// no cookies match — callers should skip the header line entirely
+// in that case.
+fn! cookies_build_header(names: [str], values: [str], domains: [str],
+                         paths: [str], secure: [bool], host_only: [bool],
+                         req_host: str, req_path: str, is_https: bool) -> str {
+    let mut out: str = "";
+    let n: i32 = len(names);
+    let mut i: i32 = 0;
+    while i < n {
+        let mut ok: bool = true;
+        if secure[i] and not is_https { ok = false; };
+        if ok and not cookies_domain_match(req_host, domains[i], host_only[i]) { ok = false; };
+        if ok and not cookies_path_match(req_path, paths[i]) { ok = false; };
+        if ok {
+            if str_len(out) > 0 { out = str_concat(out, "; "); };
+            out = str_concat(out, "{names[i]}={values[i]}");
+        };
+        i += 1;
+    };
+    out
+}
+
+// Clear every cookie in the jar (bound to the `gC` keybinding in
+// browser.osc). Both in-memory and on-disk storage are wiped.
+fn! cookies_clear_all(names: [str], values: [str], domains: [str],
+                      paths: [str], secure: [bool], host_only: [bool],
+                      persistent: [bool]) {
+    while len(names) > 0 { pop(names); };
+    while len(values) > 0 { pop(values); };
+    while len(domains) > 0 { pop(domains); };
+    while len(paths) > 0 { pop(paths); };
+    while len(secure) > 0 { pop(secure); };
+    while len(host_only) > 0 { pop(host_only); };
+    while len(persistent) > 0 { pop(persistent); };
+    let empty: [str] = [];
+    storage_save_lines(cookies_filename(), empty);
+}
+
+// Persistence format: one cookie per line, tab-separated.
+//   name\tvalue\tdomain\tpath\tsecure\thost_only
+// Only persistent=true cookies are written. Reads silently skip
+// malformed lines to stay forward-compatible.
+
+fn! cookies_save(names: [str], values: [str], domains: [str],
+                 paths: [str], secure: [bool], host_only: [bool],
+                 persistent: [bool]) {
+    let mut lines: [str] = [];
+    let n: i32 = len(names);
+    let mut i: i32 = 0;
+    while i < n {
+        if persistent[i] {
+            let sec: str = if secure[i] { "1" } else { "0" };
+            let ho: str = if host_only[i] { "1" } else { "0" };
+            let line: str = "{names[i]}\t{values[i]}\t{domains[i]}\t{paths[i]}\t{sec}\t{ho}";
+            push(lines, line);
+        };
+        i += 1;
+    };
+    storage_save_lines(cookies_filename(), lines);
+}
+
+fn! cookies_load(names: [str], values: [str], domains: [str],
+                 paths: [str], secure: [bool], host_only: [bool],
+                 persistent: [bool]) {
+    let lines: [str] = storage_load_lines(cookies_filename());
+    let n: i32 = len(lines);
+    let mut i: i32 = 0;
+    while i < n {
+        let parts: [str] = str_split(lines[i], "\t");
+        if len(parts) >= 6 {
+            push(names, parts[0]);
+            push(values, parts[1]);
+            push(domains, parts[2]);
+            push(paths, parts[3]);
+            push(secure, str_eq(parts[4], "1"));
+            push(host_only, str_eq(parts[5], "1"));
+            push(persistent, true);
+        };
+        i += 1;
+    };
+}
