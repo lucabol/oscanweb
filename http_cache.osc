@@ -176,18 +176,26 @@ fn! http_cache_hex_val(c: i32) -> i32 {
 }
 
 fn! http_cache_hex_encode(body: str) -> str {
+    // Build the output as a char array and join once.  Earlier versions
+    // used `out = str_concat(out, ...)` per byte, which is O(n^2) and
+    // froze the browser for tens of seconds (or longer) on quit when
+    // any sizeable text resource (Wikipedia article, large JS bundle)
+    // was in the cache.
     let chars: [i32] = str_to_chars(body);
     let n: i32 = len(chars);
-    let mut out: str = "";
+    let mut out_chars: [i32] = [];
     let mut i: i32 = 0;
     while i < n {
         let b: i32 = chars[i] % 256;
         let hi: i32 = (b / 16) % 16;
         let lo: i32 = b % 16;
-        out = str_concat(out, str_concat(http_cache_hex_nibble(hi), http_cache_hex_nibble(lo)));
+        let hi_c: i32 = if hi < 10 { 48 + hi } else { 97 + (hi - 10) };
+        let lo_c: i32 = if lo < 10 { 48 + lo } else { 97 + (lo - 10) };
+        push(out_chars, hi_c);
+        push(out_chars, lo_c);
         i += 1;
     };
-    out
+    str_from_chars(out_chars)
 }
 
 fn! http_cache_hex_decode(hex: str) -> str {

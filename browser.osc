@@ -2151,7 +2151,9 @@ fn! main() {
         vlog_msg("startup url", nav_url);
     };
 
-    while canvas_alive() {
+    let mut quit_requested: bool = false;
+
+    while canvas_alive() and not quit_requested {
         // Poll key OUTSIDE arena so array push/pop stays on parent arena
         let key: i32 = canvas_key();
 
@@ -2971,9 +2973,12 @@ fn! main() {
                             if scroll_y > max_scroll { scroll_y = max_scroll; };
                         };
                     } else if key == 81 {
-                        // Q — quit the browser
-                        canvas_close();
-                        exit(0);
+                        // Q — request graceful quit (falls through to the
+                        // persistent-cache save + canvas_close at the end
+                        // of main, so we don't skip state flushing and we
+                        // don't blow up the Win32 message pump mid-event
+                        // like canvas_close()+exit(0) did).
+                        quit_requested = true;
                     } else if key == 78 and search_active {
                         // N — previous search match
                         if len(search_match_y) > 0 {
