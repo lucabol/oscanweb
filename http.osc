@@ -151,10 +151,19 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
                 };
             };
 
-            // If we know Content-Length, stop once we have enough body bytes
+            // If we know Content-Length, stop once we have enough body bytes.
+            // Defensive: some TLS recv paths hand back a chunk whose declared
+            // string length exceeds the bytes actually written (e.g. trailing
+            // record padding or buffer tail).  Truncate to the advertised body
+            // length so stray bytes don't end up parsed as trailing HTML text
+            // (which shows up as tofu/mojibake after the real page content).
             if headers_done and content_length >= 0 {
                 let body_received: i32 = str_len(raw_response) - body_start;
                 if body_received >= content_length {
+                    let expected_total: i32 = body_start + content_length;
+                    if str_len(raw_response) > expected_total {
+                        raw_response = str_slice(raw_response, 0, expected_total);
+                    };
                     done = true;
                 };
             };
