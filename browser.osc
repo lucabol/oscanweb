@@ -2435,6 +2435,27 @@ fn! main() {
                 let mut done: bool = false;
                 let mut load_failed: bool = false;
                 let mut load_error: str = "";
+                // If the user typed a bare apex hostname like "lucabol.com"
+                // and the initial fetch fails, transparently retry with a
+                // "www." prefix (many sites only serve the www subdomain).
+                // Eligible when: the host has exactly one dot, doesn't
+                // already start with "www.", and isn't an IP or localhost.
+                let mut tried_www_fallback: bool = false;
+                let host_chars: [i32] = str_to_chars(u.host);
+                let mut dot_count: i32 = 0;
+                let mut has_alpha_host: bool = false;
+                for hci in 0..len(host_chars) {
+                    let hc: i32 = host_chars[hci];
+                    if hc == 46 { dot_count += 1; };
+                    if (hc >= 65 and hc <= 90) or (hc >= 97 and hc <= 122) {
+                        has_alpha_host = true;
+                    };
+                };
+                let www_eligible: bool =
+                    dot_count == 1 and
+                    has_alpha_host and
+                    not str_starts_with(u.host, "www.") and
+                    not str_eq(u.host, "localhost");
 
                 while not done and redir_count < MAX_REDIRECTS {
                     vlog_msg("fetch start", fetch_host);
@@ -2633,12 +2654,23 @@ fn! main() {
                         done = true;
                     } else {
                         vlog_msg("fetch error", resp.error);
-                        error_msg = resp.error;
-                        status_msg = "Error: {resp.error}";
-                        page_loaded = false;
-                        load_failed = true;
-                        load_error = resp.error;
-                        done = true;
+                        // Apex-host fallback: retry once with "www." prefix
+                        // before giving up.  Only on actual connection/DNS
+                        // failures (resp.error set) — a 4xx/5xx means the
+                        // apex is reachable and www. likely behaves the same.
+                        if www_eligible and not tried_www_fallback and redir_count == 0 and str_len(resp.error) > 0 {
+                            vlog_msg("www fallback", fetch_host);
+                            tried_www_fallback = true;
+                            fetch_host = str_concat("www.", fetch_host);
+                            current_url = "{cache_scheme}://{fetch_host}{if (fetch_tls and fetch_port == 443) or (not fetch_tls and fetch_port == 80) { "" } else { ":{fetch_port}" }}{fetch_path}";
+                        } else {
+                            error_msg = resp.error;
+                            status_msg = "Error: {resp.error}";
+                            page_loaded = false;
+                            load_failed = true;
+                            load_error = resp.error;
+                            done = true;
+                        };
                     };
                 };
 
