@@ -62,23 +62,25 @@ fn! main() {
     assert_eq_str(s5.tag, "*", "universal selector");
 
     let s6: CssSimple = css_parse_simple("h1>p");
-    assert_eq_str(s6.tag, "__fail__", "child combinator rejected");
+    // css_parse_simple handles ONE simple selector; `h1>p` still contains
+    // a combinator so it fails at the simple-selector level.
+    assert_eq_str(s6.tag, "__fail__", "combinator not a simple selector");
 
     println("=== CSS Selector List Validator ===");
     assert_true(css_selector_list_supported("h1"), "h1 supported");
     assert_true(css_selector_list_supported("h1, h2, p"), "selector list supported");
     assert_true(css_selector_list_supported(".a.b"), "compound supported");
-    assert_true(not css_selector_list_supported("div > p"), "child combinator rejected");
+    assert_true(css_selector_list_supported("div > p"), "child combinator supported");
     assert_true(not css_selector_list_supported("p:hover"), "pseudo rejected");
     assert_true(css_selector_list_supported("div p"), "descendant combinator supported");
     assert_true(css_selector_list_supported("nav a.x, .y h2"), "mixed descendants supported");
-    assert_true(not css_selector_list_supported("a > b, .x y"), "list with one bad rejected");
+    assert_true(css_selector_list_supported("a > b, .x y"), "child + descendant both supported");
 
     println("=== CSS Parser ===");
     let mut rules: [CssRule] = [];
     let src1: str = "h1 {{ color: red; font-weight: bold; }}\n.note {{ color: #00ff00 !important; }}\n/* comment */ p, div {{ color: blue; }}\n@media screen {{ skip-me {{ color: black; }} }}\n";
     let _o: i32 = css_parse(rules, src1, 0);
-    assert_eq_i32(len(rules), 3, "parsed 3 rules");
+    assert_eq_i32(len(rules), 4, "parsed 4 rules (incl. @media screen inner)");
 
     assert_eq_i32(len(rules[0].selectors), 1, "h1 has 1 selector");
     assert_eq_str(rules[0].selectors[0].parts[0].tag, "h1", "h1 selector tag");
@@ -92,10 +94,10 @@ fn! main() {
     assert_eq_i32(len(rules[2].selectors), 2, "p, div has 2 selectors");
 
     println("=== CSS Specificity ===");
-    let sp_tag:  i32 = css_specificity(CssSimple { tag: "h1", id: "", cls: "" });
-    let sp_cls:  i32 = css_specificity(CssSimple { tag: "",   id: "", cls: "a" });
-    let sp_id:   i32 = css_specificity(CssSimple { tag: "",   id: "x", cls: "" });
-    let sp_comb: i32 = css_specificity(CssSimple { tag: "h1", id: "x", cls: "a" });
+    let sp_tag:  i32 = css_specificity(CssSimple { tag: "h1", id: "", cls: "", attr_name: "", attr_op: 0, attr_value: "" });
+    let sp_cls:  i32 = css_specificity(CssSimple { tag: "",   id: "", cls: "a", attr_name: "", attr_op: 0, attr_value: "" });
+    let sp_id:   i32 = css_specificity(CssSimple { tag: "",   id: "x", cls: "", attr_name: "", attr_op: 0, attr_value: "" });
+    let sp_comb: i32 = css_specificity(CssSimple { tag: "h1", id: "x", cls: "a", attr_name: "", attr_op: 0, attr_value: "" });
     assert_true(sp_cls > sp_tag, "class beats tag");
     assert_true(sp_id > sp_cls, "id beats class");
     assert_true(sp_comb > sp_id, "id+class+tag beats id alone");
@@ -118,10 +120,10 @@ fn! main() {
 
     html_append_child(nodes, 0, 1);
 
-    let sel_div: CssSimple = CssSimple { tag: "div", id: "", cls: "" };
-    let sel_b:   CssSimple = CssSimple { tag: "",   id: "", cls: "b" };
-    let sel_id:  CssSimple = CssSimple { tag: "",   id: "main", cls: "" };
-    let sel_mis: CssSimple = CssSimple { tag: "",   id: "", cls: "z" };
+    let sel_div: CssSimple = CssSimple { tag: "div", id: "", cls: "", attr_name: "", attr_op: 0, attr_value: "" };
+    let sel_b:   CssSimple = CssSimple { tag: "",   id: "", cls: "b", attr_name: "", attr_op: 0, attr_value: "" };
+    let sel_id:  CssSimple = CssSimple { tag: "",   id: "main", cls: "", attr_name: "", attr_op: 0, attr_value: "" };
+    let sel_mis: CssSimple = CssSimple { tag: "",   id: "", cls: "z", attr_name: "", attr_op: 0, attr_value: "" };
 
     assert_true(css_simple_matches(sel_div, nodes[0]), "div matches div");
     assert_true(css_simple_matches(sel_b,   nodes[0]), ".b matches div.b");
@@ -129,6 +131,67 @@ fn! main() {
     assert_true(css_simple_matches(sel_id,  nodes[0]), "#main matches");
     assert_true(not css_simple_matches(sel_mis, nodes[0]), ".z does not match");
     assert_true(not css_simple_matches(sel_div, nodes[1]), "div does not match p");
+
+    println("=== CSS Attribute selectors ===");
+    let mut rules_attr: [CssRule] = [];
+    let src_attr: str = "a[href] {{ color: red; }}\na[href=\"/foo\"] {{ color: blue; }}\na[href^=\"https://\"] {{ color: green; }}\na[href$=\".pdf\"] {{ color: yellow; }}\na[class~=\"ext\"] {{ color: cyan; }}\na[href*=\"github\"] {{ color: magenta; }}\n";
+    let _oa: i32 = css_parse(rules_attr, src_attr, 0);
+    assert_eq_i32(len(rules_attr), 6, "6 attr rules parsed");
+    // Verify selector compound parsed correctly (one simple with tag=a + attr)
+    assert_eq_i32(len(rules_attr[0].selectors), 1, "1 selector in a[href]");
+    assert_eq_i32(len(rules_attr[0].selectors[0].parts), 1, "1 part");
+    assert_eq_i32(rules_attr[0].selectors[0].parts[0].attr_op, 1, "a[href] op=presence");
+    assert_eq_i32(rules_attr[1].selectors[0].parts[0].attr_op, 2, "[href=] op=exact");
+    assert_eq_i32(rules_attr[2].selectors[0].parts[0].attr_op, 4, "[href^=] op=prefix");
+    assert_eq_i32(rules_attr[3].selectors[0].parts[0].attr_op, 5, "[href$=] op=suffix");
+    assert_eq_i32(rules_attr[4].selectors[0].parts[0].attr_op, 3, "[class~=] op=token");
+    assert_eq_i32(rules_attr[5].selectors[0].parts[0].attr_op, 6, "[href*=] op=substring");
+
+    // Build <a href="https://github.com/x.pdf" class="ext foo">X</a>
+    let mut anodes: [HtmlNode] = [];
+    let a_attrs: map = map_new();
+    let a_node: HtmlNode = html_node_element("a", a_attrs);
+    push(anodes, a_node);
+    anodes[0].attrs = map_new();
+    map_set(anodes[0].attrs, "href", "https://github.com/x.pdf");
+    map_set(anodes[0].attrs, "class", "ext foo");
+    let mut astyles: [ComputedStyle] = [];
+    css_compute_all(anodes, 0, rules_attr, astyles);
+    // All 6 selectors match this node; last-declared wins on equal specificity.
+    // specificity: tag + attr = 101 for each — so source order wins → magenta (substring) last.
+    assert_eq_i32(astyles[0].color, css_parse_color("magenta"), "attr cascade winner");
+
+    println("=== CSS Child combinator ===");
+    // <div><p><span/></p></div>
+    let mut cnodes: [HtmlNode] = [];
+    let cd_attrs: map = map_new();
+    let cd: HtmlNode = html_node_element("div", cd_attrs);
+    push(cnodes, cd);
+    cnodes[0].attrs = map_new();
+    let cp_attrs: map = map_new();
+    let cp: HtmlNode = html_node_element("p", cp_attrs);
+    push(cnodes, cp);
+    cnodes[1].attrs = map_new();
+    let cs_attrs: map = map_new();
+    let cs: HtmlNode = html_node_element("span", cs_attrs);
+    push(cnodes, cs);
+    cnodes[2].attrs = map_new();
+    html_append_child(cnodes, 0, 1);
+    html_append_child(cnodes, 1, 2);
+
+    let mut rules_child: [CssRule] = [];
+    let src_child: str = "div > span {{ color: red; }}\ndiv > p {{ color: blue; }}\ndiv span {{ color: green; }}\n";
+    let _oc: i32 = css_parse(rules_child, src_child, 0);
+    assert_eq_i32(len(rules_child), 3, "3 child-combinator rules parsed");
+    assert_eq_i32(rules_child[0].selectors[0].combinators[0], 1, "'>' stored as 1");
+    assert_eq_i32(rules_child[2].selectors[0].combinators[0], 0, "descendant stored as 0");
+
+    let mut cstyles: [ComputedStyle] = [];
+    css_compute_all(cnodes, 0, rules_child, cstyles);
+    // div > p matches the p directly → blue.
+    assert_eq_i32(cstyles[1].color, css_parse_color("blue"), "div > p matches");
+    // div > span does NOT match span (p is between); only "div span" matches → green.
+    assert_eq_i32(cstyles[2].color, css_parse_color("green"), "div > span skipped, div span wins");
 
     println("=== CSS Cascade / Inherit ===");
     let mut rules2: [CssRule] = [];

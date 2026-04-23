@@ -9,7 +9,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
 - **HTTP page cache** — 20-entry FIFO cache keyed by URL; back/forward and repeat visits are instant. Bypassed on `r` (reload).
 - **Cookie jar** — minimal RFC 6265 subset: `Set-Cookie` parsing (Max-Age, Expires, Secure, Domain, Path), `Cookie:` header injection on main-document fetches, persisted across restarts. Clear with `gC`.
-- **Form submission (GET and POST)** — press `gf` to fill `<form>` text fields sequentially via status-bar prompts, then submit. Pages with multiple forms show a letter-labeled picker (`[a]`, `[b]`, …) so you can choose which form to fill. Supports text, search, email, url, tel, password, number, and textarea inputs; submit buttons and hidden fields are included automatically. POST forms dispatch `application/x-www-form-urlencoded` bodies; redirects after a POST follow as GETs.
+- **Form submission (GET and POST)** — press `gf` to fill `<form>` fields sequentially via status-bar prompts, then submit. Pages with multiple forms show a letter-labeled picker (`[a]`, `[b]`, …) so you can choose which form to fill. Supports text, search, email, url, tel, password, number, textarea, **checkbox**/**radio** (type `y`/`n` or `yes`/`no`/`on`/`off`/`1`/`0` at the prompt), and `<select>` (type the option value). The status-bar hint shows the field type in brackets, e.g. `agree [y/n]` or `country [select]`. Submit buttons and hidden fields are included automatically. POST forms dispatch `application/x-www-form-urlencoded` bodies; redirects after a POST follow as GETs.
 - **Omnibox search** — type any query in the address bar; non-URL input is sent to DuckDuckGo automatically, with autocomplete from your browsing history
 - **Readable article column** — when a page has `<main>` or `<article>`, that subtree is automatically narrowed to ~640 CSS px and centered, so long articles don't run edge-to-edge on wide canvases
 - **Chrome trimming** — navigation sidebars, hamburger menus, and site chrome (nav/header/footer/aside, `#mw-panel`, `.vector-*`, `.sidebar`, etc.) are hidden by default on heavy pages like Wikipedia; `gR` toggles the full page back on
@@ -175,16 +175,25 @@ OscaWeb embeds [QuickJS-ng](https://github.com/nicotordev/quickjs-ng) for JavaSc
 // Document methods
 document.getElementById("myId")        // → Element or null
 document.getElementsByTagName("div")   // → Element[]
+document.getElementsByClassName("btn") // → Element[]
+document.querySelector("#main .title") // → Element or null
+document.querySelectorAll("a.ext")     // → Element[]
 
 // Element properties
 element.tagName       // getter
 element.textContent   // getter/setter
 element.children      // getter → child Element[]
 element.id            // getter
+element.className     // getter/setter (class attribute)
+element.classList     // getter → DOMTokenList { add, remove, toggle, contains }
 
 // Element methods
 element.getAttribute("href")
 element.setAttribute("class", "active")
+element.querySelector(".note")           // scoped like document.querySelector
+element.querySelectorAll("li")
+element.addEventListener("click", fn)    // accepted, not dispatched
+element.removeEventListener("click", fn) // accepted, not dispatched
 
 // Console
 console.log("hello")
@@ -192,7 +201,13 @@ console.warn("warning")
 console.error("error")
 ```
 
-> **Note:** External scripts (`<script src="...">`) are not loaded. Only inline script content is executed.
+**Selector subset supported by `querySelector`/`querySelectorAll`:** `tag`,
+`.class`, `#id`, `*`, compound (`a.btn`, `div#main`), comma-separated lists,
+and the descendant combinator (`nav a`, `#main .title`).
+
+**External scripts** — `<script src="...">` is fetched (same origin rules
+as `<link rel="stylesheet">`) and evaluated after inline scripts in
+document order.
 
 ## Mouse Interaction
 
@@ -267,8 +282,10 @@ cascade, and propagates inheritable properties.
 ### Supported
 
 - **Selectors** — `tag`, `.class`, `#id`, `*`, compounds (`h1.title`),
-  comma-separated selector lists, and the descendant combinator
-  (`nav a`, `article .title`)
+  comma-separated selector lists, the descendant combinator
+  (`nav a`, `article .title`), the child combinator (`div > p`), and
+  attribute selectors (`[attr]`, `[attr=value]`, `[attr~=tok]`,
+  `[attr^=prefix]`, `[attr$=suffix]`, `[attr*=substr]`)
 - **Properties** — `color`, `background-color` / `background`,
   `font-weight`, `font-style`, `text-decoration`
   (`underline` / `line-through` / `none`), `text-align`
@@ -292,15 +309,14 @@ back to left alignment).
 
 ### Not supported
 
-- Combinators other than descendant (child `>`, sibling `+`/`~`) —
-  rules containing them are parsed and skipped
+- Sibling combinators (`+`/`~`) — rules containing them are parsed
+  and skipped
 - Pseudo-classes / pseudo-elements (`:hover`, `::before`, …)
-- Attribute selectors (`[href]`)
 - Box-model properties beyond `padding`/`width`/`max-width`/numeric
   `margin` (no `height`, `border`, `float`, `position`, `flex`, `grid`)
 - Units other than unitless integers for `rgb()` and bare hex colors
-- `@media`, `@import`, `@font-face` and other at-rules (parsed and
-  ignored)
+- `@media` beyond `prefers-color-scheme` (other at-rules are parsed and
+  ignored; `@import` and `@font-face` are not expanded)
 
 ### Try it
 
@@ -319,10 +335,18 @@ supported CSS feature.
 
 ### HTTP/HTTPS
 
-- **HTTP/1.0** with automatic `User-Agent: OscaWeb/0.1` header
+- **HTTP/1.1** with chunked `Transfer-Encoding` decoding, automatic
+  `User-Agent: OscaWeb/0.1` header, and `Connection: close` (we still
+  do one request per socket, but servers that don't send a
+  `Content-Length` and instead stream chunked responses now work)
 - **TLS built-in** — SChannel on Windows, BearSSL on Linux (zero external dependencies)
 - **Redirects** — automatic follow of 301/302/307/308 (up to 5 hops)
 - **Default ports** — 80 for HTTP, 443 for HTTPS
+- **Persistent HTTP cache** — text responses (HTML, CSS, JS, JSON, XML)
+  survive browser restarts; saved to
+  `%APPDATA%/oscanweb_cache.txt` (or `$HOME/...` on POSIX) on exit and
+  reloaded at startup. Binary resources (images) are cached in-memory
+  only. Press `r` to invalidate the current URL and force a refetch.
 
 ### URL Handling
 
@@ -459,15 +483,112 @@ headings, paragraphs, code blocks, and tables uniformly.
   `display:none`, `padding`, `width`/`max-width` and numeric `margin`
   are honored, but there is no `height`, `border`, flexbox/grid, or
   `float`/`position`
-- **CSS selectors are simple only** — `tag`, `.class`, `#id`, `*`, and
-  comma-separated lists; combinators (` `, `>`, `+`, `~`), pseudo-classes,
-  attribute selectors, and `@media` queries are ignored
-- **No external stylesheets** — `<link rel="stylesheet">` is not fetched
-  (inline `<style>` blocks and `style=""` attributes are supported)
-- **No external script loading** — `<script src="...">` tags are ignored
-- **Limited form submission** — GET and POST forms supported via `gf` (no visual field rendering; no checkbox/radio/select UI yet)
+- **CSS selectors** — `tag`, `.class`, `#id`, `*`, comma-separated lists,
+  descendant combinator (` `), child combinator (`>`), and attribute
+  selectors (`[attr]`, `[attr=v]`, `[attr~=v]`, `[attr^=v]`, `[attr$=v]`,
+  `[attr*=v]`). Sibling combinators (`+`, `~`) and pseudo-classes
+  (`:hover`, `::before`) are not matched
+- **External stylesheets** — `<link rel="stylesheet">` is fetched and
+  parsed alongside inline `<style>` blocks
+- **External scripts** — `<script src="...">` is fetched and evaluated
+  after inline scripts
+- **Limited form submission** — GET and POST forms supported via `gf` with text, textarea, checkbox, radio, and select fields (no visual inline rendering of the fields; prompting is status-bar-driven)
+- **No HTTP Content-Encoding** — `Accept-Encoding` is not advertised
+  (no gzip/deflate/brotli decoding); responses are expected to be
+  identity-encoded
 - **Fixed viewport** — 1024×768 window with 8×8 monospace bitmap font
 - **Single-threaded** — synchronous page fetching
+
+## Manual Test Plan
+
+After a build, these short smoke tests exercise the higher-impact
+features end-to-end. All can be run against a local Python server
+(`python -m http.server 8000`) or against the real Internet.
+
+1. **HTTP/1.1 + chunked transfer-encoding**
+   - `build\browser.exe https://www.wikipedia.org`
+   - **Expect:** page renders without garbage characters at the end or
+     a hang. Wikipedia streams responses as `Transfer-Encoding: chunked`
+     without `Content-Length`.
+
+2. **External `<script src>`**
+   - Create `tests/scratch_script.html`:
+     ```html
+     <p id="target">old</p>
+     <script src="scratch_external.js"></script>
+     ```
+     and `tests/scratch_external.js`:
+     ```js
+     document.getElementById("target").textContent = "loaded externally";
+     ```
+   - Serve with `python -m http.server 8000` in `tests/`, then
+     `build\browser.exe http://localhost:8000/scratch_script.html`.
+   - **Expect:** page text reads `loaded externally`.
+
+3. **Checkbox / radio / select via `gf`**
+   - Save as `tests/scratch_form.html`:
+     ```html
+     <form method="get" action="/scratch_form.html">
+       <input name="agree" type="checkbox"> agree
+       <input name="tier" type="radio" value="pro"> pro
+       <input name="tier" type="radio" value="free"> free
+       <select name="country">
+         <option value="us">US</option>
+         <option value="jp">JP</option>
+       </select>
+       <button>Submit</button>
+     </form>
+     ```
+   - `gf`, at each prompt type `y`, then `pro`, then `jp`, Enter.
+   - **Expect:** the URL becomes
+     `...?agree=on&tier=pro&country=jp` after submit. The status-bar
+     prompt shows `[y/n]` next to the first field and `[select]` next
+     to the dropdown.
+
+4. **CSS attribute + child selectors**
+   - `tests/scratch_css.html`:
+     ```html
+     <style>
+       a[href^="https://"] { color: #00ff00; }
+       a[href$=".pdf"]     { color: #ffff00; }
+       div > p             { color: #00ffff; }
+       div p               { color: #ff00ff; }
+     </style>
+     <div><p>child</p><section><p>grandchild</p></section></div>
+     <a href="https://example.com/file.pdf">both</a>
+     ```
+   - **Expect:** "child" paragraph renders cyan (`div > p`),
+     "grandchild" paragraph renders magenta (`div p` only),
+     and "both" link renders yellow (`$=".pdf"` beats `^="https://"`
+     because it is later in source order at equal specificity).
+
+5. **JS DOM APIs (`querySelector`, `classList`)**
+   - `tests/scratch_js_dom.html`:
+     ```html
+     <ul id="list">
+       <li class="item">one</li>
+       <li class="item selected">two</li>
+       <li class="item">three</li>
+     </ul>
+     <script>
+       var sel = document.querySelectorAll("#list .item");
+       for (var i = 0; i < sel.length; i++)
+         sel[i].classList.add("seen");
+       document.querySelector(".selected").textContent = "picked";
+     </script>
+     ```
+   - **Expect:** second `<li>` shows `picked`; internally all three
+     `<li>` elements now carry `class="item seen"` (or `item selected
+     seen`).
+
+6. **Persistent HTTP cache**
+   - Fresh launch: `build\browser.exe https://en.wikipedia.org/wiki/Oscar_Wilde`
+     — note the page load time.
+   - Quit with `q`.
+   - Relaunch `build\browser.exe https://en.wikipedia.org/wiki/Oscar_Wilde`.
+   - **Expect:** the page appears instantly (cached). The file
+     `%APPDATA%\oscanweb_cache.txt` exists and contains `U:`/`C:`/`S:`/
+     `B:` lines. Press `r` to force a refetch.
 
 ## Design Philosophy
 

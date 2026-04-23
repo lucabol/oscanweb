@@ -28,6 +28,17 @@
 //   }
 
 use "http.osc"
+use "storage.osc"
+
+// Persistent cache format (single flat file, one record per line group):
+//   U:<url>
+//   C:<content-type>
+//   S:<status_code>
+//   B:<hex-escaped body bytes>
+// We hex-escape bodies so newlines/binary cannot break the line-based
+// format. Only text/* content is persisted; binary resources (images,
+// fonts) stay in-memory only.
+fn http_cache_persist_file() -> str { "oscanweb_cache.txt" }
 
 // Maximum number of entries in the page cache. 20 matches the rough size
 // of a typical browsing session's back-stack; beyond that FIFO eviction
@@ -138,4 +149,142 @@ fn! http_cache_invalidate(urls: [str], bodies: [str], cts: [str], status: [i32],
     pop(bodies);
     pop(cts);
     pop(status);
+}
+
+// ── Persistent on-disk cache ────────────────────────────────
+//
+// We serialize the text/* entries to a single flat file in %APPDATA%
+// (or $HOME) so repeat visits survive browser restarts. Binary bodies
+// are skipped because the line-based format needs reversible escaping;
+// a future revision could switch to a length-prefixed layout.
+
+fn! http_cache_hex_nibble(n: i32) -> str {
+    if n < 10 { return "{n}"; };
+    if n == 10 { return "a"; };
+    if n == 11 { return "b"; };
+    if n == 12 { return "c"; };
+    if n == 13 { return "d"; };
+    if n == 14 { return "e"; };
+    "f"
+}
+
+fn! http_cache_hex_val(c: i32) -> i32 {
+    if c >= 48 and c <= 57 { return c - 48; };
+    if c >= 97 and c <= 102 { return c - 97 + 10; };
+    if c >= 65 and c <= 70 { return c - 65 + 10; };
+    -1
+}
+
+fn! http_cache_hex_encode(body: str) -> str {
+    // Build the output as a char array and join once.  Earlier versions
+    // used `out = str_concat(out, ...)` per byte, which is O(n^2) and
+    // froze the browser for tens of seconds (or longer) on quit when
+    // any sizeable text resource (Wikipedia article, large JS bundle)
+    // was in the cache.
+    let chars: [i32] = str_to_chars(body);
+    let n: i32 = len(chars);
+    let mut out_chars: [i32] = [];
+    let mut i: i32 = 0;
+    while i < n {
+        let b: i32 = chars[i] % 256;
+        let hi: i32 = (b / 16) % 16;
+        let lo: i32 = b % 16;
+        let hi_c: i32 = if hi < 10 { 48 + hi } else { 97 + (hi - 10) };
+        let lo_c: i32 = if lo < 10 { 48 + lo } else { 97 + (lo - 10) };
+        push(out_chars, hi_c);
+        push(out_chars, lo_c);
+        i += 1;
+    };
+    str_from_chars(out_chars)
+}
+
+fn! http_cache_hex_decode(hex: str) -> str {
+    let chars: [i32] = str_to_chars(hex);
+    let n: i32 = len(chars);
+    let mut out_chars: [i32] = [];
+    let mut i: i32 = 0;
+    while i + 1 < n {
+        let hi: i32 = http_cache_hex_val(chars[i]);
+        let lo: i32 = http_cache_hex_val(chars[i + 1]);
+        if hi < 0 or lo < 0 { return str_from_chars(out_chars); };
+        push(out_chars, hi * 16 + lo);
+        i += 2;
+    };
+    str_from_chars(out_chars)
+}
+
+fn! http_cache_is_text(ct: str) -> bool {
+    let lc: str = str_to_lower(ct);
+    str_find(lc, "text/") >= 0 or
+    str_find(lc, "javascript") >= 0 or
+    str_find(lc, "json") >= 0 or
+    str_find(lc, "xml") >= 0 or
+    str_find(lc, "css") >= 0
+}
+
+// Serialize the text/* entries to the persistent cache file.
+// Called from browser.osc on a graceful quit; a crash mid-save simply
+// leaves the prior file untouched since write_file is atomic-at-replace.
+fn! http_cache_save(urls: [str], bodies: [str], cts: [str], status: [i32]) {
+    let mut lines: [str] = [];
+    let n: i32 = len(urls);
+    let mut i: i32 = 0;
+    while i < n {
+        if http_cache_is_text(cts[i]) {
+            push(lines, str_concat("U:", urls[i]));
+            push(lines, str_concat("C:", cts[i]));
+            push(lines, str_concat("S:", "{status[i]}"));
+            push(lines, str_concat("B:", http_cache_hex_encode(bodies[i])));
+        };
+        i += 1;
+    };
+    storage_save_lines(http_cache_persist_file(), lines);
+}
+
+// Load previously-saved cache entries into the in-memory arrays.
+// Silently no-ops on any format error. Called once at startup.
+fn! http_cache_load(urls: [str], bodies: [str], cts: [str], status: [i32]) {
+    let lines: [str] = storage_load_lines(http_cache_persist_file());
+    let n: i32 = len(lines);
+    let mut i: i32 = 0;
+    let mut cur_url: str = "";
+    let mut cur_ct: str = "";
+    let mut cur_status: i32 = 200;
+    let mut have_url: bool = false;
+    let mut have_ct: bool = false;
+    let mut have_st: bool = false;
+    while i < n {
+        let line: str = lines[i];
+        if str_len(line) < 2 {
+            i += 1;
+            continue;
+        };
+        let tag: str = str_slice(line, 0, 2);
+        let rest: str = str_slice(line, 2, str_len(line));
+        if str_eq(tag, "U:") {
+            cur_url = rest;
+            have_url = true;
+        } else if str_eq(tag, "C:") {
+            cur_ct = rest;
+            have_ct = true;
+        } else if str_eq(tag, "S:") {
+            let p_st: Result<i32, str> = parse_i32(rest);
+            match p_st {
+                Result::Ok(v) => { cur_status = v; have_st = true; },
+                Result::Err(_e) => { cur_status = 200; have_st = true; },
+            };
+        } else if str_eq(tag, "B:") and have_url and have_ct and have_st {
+            if len(urls) >= http_cache_max() {
+                http_cache_evict_oldest(urls, bodies, cts, status);
+            };
+            push(urls, cur_url);
+            push(bodies, http_cache_hex_decode(rest));
+            push(cts, cur_ct);
+            push(status, cur_status);
+            have_url = false;
+            have_ct = false;
+            have_st = false;
+        };
+        i += 1;
+    };
 }

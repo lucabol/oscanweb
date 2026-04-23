@@ -34,19 +34,36 @@ struct CssDecl {
     important: bool,
 }
 
-// One simple selector: tag + optional id + optional class.
-// Empty string for any field means "not constrained".
+// One simple selector: tag + optional id + optional class + optional
+// attribute match.  Empty string for any string field means "not
+// constrained"; `attr_op` = 0 means "no attribute selector".
+//
+// Supported attribute operators (the common Selectors 3 subset):
+//   1 = [attr]           presence
+//   2 = [attr=value]     exact match
+//   3 = [attr~=value]    value is one whitespace-separated token
+//   4 = [attr^=value]    value prefix
+//   5 = [attr$=value]    value suffix
+//   6 = [attr*=value]    value substring
 struct CssSimple {
     tag: str,
     id: str,
     cls: str,
+    attr_name: str,
+    attr_op: i32,
+    attr_value: str,
 }
 
 // Compound descendant chain: parts[0] is the outermost ancestor and
 // parts[len-1] is the subject (the node that ultimately gets matched).
 // A single-part compound is a plain simple selector.
+//
+// `combinators` is parallel to `parts` with len = len(parts)-1.
+// combinators[i] describes the relationship between parts[i] and
+// parts[i+1]:  0 = descendant (whitespace), 1 = child ('>').
 struct CssCompound {
     parts: [CssSimple],
+    combinators: [i32],
 }
 
 struct CssRule {
@@ -358,21 +375,31 @@ fn! css_split_values(s: str) -> [str] {
 
 // Parse one simple selector like "h1", ".cls", "#id", "*", "h1.cls".
 // Returns a selector with tag="__fail__" when input is unsupported.
+// Helper: build a sentinel "fail" CssSimple.
+fn! css_simple_fail() -> CssSimple {
+    CssSimple { tag: "__fail__", id: "", cls: "",
+                attr_name: "", attr_op: 0, attr_value: "" }
+}
+
 fn! css_parse_simple(s: str) -> CssSimple {
     let trimmed: str = str_trim(s);
     let chars: [i32] = str_to_chars(trimmed);
     let n: i32 = len(chars);
 
     if n == 0 {
-        return CssSimple { tag: "__fail__", id: "", cls: "" };
+        return css_simple_fail();
     };
     if n == 1 and chars[0] == 42 {
-        return CssSimple { tag: "*", id: "", cls: "" };
+        return CssSimple { tag: "*", id: "", cls: "",
+                           attr_name: "", attr_op: 0, attr_value: "" };
     };
 
     let mut tag_s: str = "";
     let mut id_s: str = "";
     let mut cls_s: str = "";
+    let mut at_name: str = "";
+    let mut at_op: i32 = 0;
+    let mut at_val: str = "";
     let mut i: i32 = 0;
 
     // Leading tag name (optional)
@@ -385,7 +412,7 @@ fn! css_parse_simple(s: str) -> CssSimple {
         tag_s = str_to_lower(str_from_chars(tbuf));
     };
 
-    // Remaining segments: .class or #id only
+    // Remaining segments: .class, #id, or [attr...]
     while i < n {
         let c: i32 = chars[i];
         if c == 46 {
@@ -396,17 +423,15 @@ fn! css_parse_simple(s: str) -> CssSimple {
                 i = i + 1;
             };
             if len(cbuf) == 0 {
-                return CssSimple { tag: "__fail__", id: "", cls: "" };
+                return css_simple_fail();
             };
             if str_len(cls_s) == 0 {
                 cls_s = str_from_chars(cbuf);
             } else {
                 // Multi-class compound like ".a.b" is not supported; mark
                 // as fail so the rule is skipped entirely rather than
-                // silently matching only the first class (which would
-                // over-match, e.g. ".result__body.highlight" mistakenly
-                // matching every ".result__body").
-                return CssSimple { tag: "__fail__", id: "", cls: "" };
+                // silently matching only the first class.
+                return css_simple_fail();
             };
         } else if c == 35 {
             i = i + 1;
@@ -416,19 +441,85 @@ fn! css_parse_simple(s: str) -> CssSimple {
                 i = i + 1;
             };
             if len(ibuf) == 0 {
-                return CssSimple { tag: "__fail__", id: "", cls: "" };
+                return css_simple_fail();
             };
             id_s = str_from_chars(ibuf);
+        } else if c == 91 {
+            // Attribute selector [attr], [attr=val], [attr~=val],
+            // [attr^=val], [attr$=val], [attr*=val].  Only one attribute
+            // per simple-selector is modelled (chained [a][b] falls through
+            // as an unsupported syntax and the rule is skipped).
+            if str_len(at_name) > 0 {
+                return css_simple_fail();
+            };
+            i = i + 1;
+            let mut nbuf: [i32] = [];
+            while i < n and css_is_ident(chars[i]) {
+                push(nbuf, chars[i]);
+                i = i + 1;
+            };
+            if len(nbuf) == 0 { return css_simple_fail(); };
+            at_name = str_to_lower(str_from_chars(nbuf));
+            if i < n and chars[i] == 93 {
+                at_op = 1;                      // [attr] presence
+                i = i + 1;
+            } else {
+                // Operator: '=' (2), '~=' (3), '^=' (4), '$=' (5), '*=' (6).
+                let mut op_code: i32 = 0;
+                if i < n and chars[i] == 61 {
+                    op_code = 2;
+                    i = i + 1;
+                } else if i + 1 < n and chars[i] == 126 and chars[i + 1] == 61 {
+                    op_code = 3;
+                    i = i + 2;
+                } else if i + 1 < n and chars[i] == 94 and chars[i + 1] == 61 {
+                    op_code = 4;
+                    i = i + 2;
+                } else if i + 1 < n and chars[i] == 36 and chars[i + 1] == 61 {
+                    op_code = 5;
+                    i = i + 2;
+                } else if i + 1 < n and chars[i] == 42 and chars[i + 1] == 61 {
+                    op_code = 6;
+                    i = i + 2;
+                } else {
+                    return css_simple_fail();
+                };
+                // Value: optional quotes.
+                let mut quote: i32 = 0;
+                if i < n and (chars[i] == 34 or chars[i] == 39) {
+                    quote = chars[i];
+                    i = i + 1;
+                };
+                let mut vbuf: [i32] = [];
+                while i < n {
+                    let vc: i32 = chars[i];
+                    if quote != 0 and vc == quote { break; };
+                    if quote == 0 and (vc == 93 or css_is_ws(vc)) { break; };
+                    push(vbuf, vc);
+                    i = i + 1;
+                };
+                if quote != 0 {
+                    if i >= n or chars[i] != quote { return css_simple_fail(); };
+                    i = i + 1;
+                };
+                while i < n and css_is_ws(chars[i]) { i = i + 1; };
+                if i >= n or chars[i] != 93 { return css_simple_fail(); };
+                i = i + 1;
+                at_op = op_code;
+                at_val = str_from_chars(vbuf);
+            };
         } else {
-            return CssSimple { tag: "__fail__", id: "", cls: "" };
+            return css_simple_fail();
         };
     };
 
-    CssSimple { tag: tag_s, id: id_s, cls: cls_s }
+    CssSimple { tag: tag_s, id: id_s, cls: cls_s,
+                attr_name: at_name, attr_op: at_op, attr_value: at_val }
 }
 
 // True if the selector list has no unsupported combinators/features.
-// Spaces (descendant combinator) ARE allowed; >, +, ~, :, [ are not.
+// Spaces (descendant), '>' (child), and '[attr...]' attribute selectors
+// are allowed; '+', '~', ':' (pseudo-classes) are not.
 fn! css_selector_list_supported(s: str) -> bool {
     let parts: [str] = str_split(s, ",");
     let mut ok: bool = true;
@@ -436,55 +527,82 @@ fn! css_selector_list_supported(s: str) -> bool {
         let p: str = str_trim(parts[pi]);
         let pc: [i32] = str_to_chars(p);
         let pn: i32 = len(pc);
+        // Rudimentary bracket tracking so a '~' or ':' inside an attribute
+        // value (e.g. [href^="https:"]) doesn't fail the whole selector.
+        let mut depth: i32 = 0;
         for ci in 0..pn {
             let ch: i32 = pc[ci];
-            if ch == 62 or ch == 43 or ch == 126 or ch == 58 or ch == 91 {
-                ok = false;
+            if ch == 91 { depth = depth + 1; };
+            if ch == 93 { depth = depth - 1; };
+            if depth == 0 {
+                if ch == 43 or ch == 126 or ch == 58 {
+                    ok = false;
+                };
             };
         };
     };
     ok
 }
 
-// Split a selector chain into whitespace-separated tokens. Multiple
-// runs of whitespace collapse to a single separator.
-fn! css_split_ws(s: str) -> [str] {
+// Split a selector chain into tokens.  Whitespace separates descendant
+// tokens, '>' separates child tokens.  Bracketed attribute selectors
+// keep their whitespace.  Returns parallel arrays: `out` is the token
+// string (already stripped of combinator chars) and `combinators` is
+// the relation between consecutive tokens: 0 = descendant, 1 = child.
+// combinators has len = len(out) - 1.
+fn! css_tokenize_compound(s: str, out: [str], combinators: [i32]) {
     let chars: [i32] = str_to_chars(s);
     let n: i32 = len(chars);
-    let mut out: [str] = [];
     let mut buf: [i32] = [];
-    for i in 0..n {
+    let mut depth: i32 = 0;
+    let mut pending_combinator: i32 = 0;
+    let mut have_token: bool = false;
+    let mut i: i32 = 0;
+    while i < n {
         let c: i32 = chars[i];
-        if css_is_ws(c) {
+        if c == 91 { depth = depth + 1; };
+        if c == 93 { depth = depth - 1; };
+        if depth <= 0 and (css_is_ws(c) or c == 62) {
             if len(buf) > 0 {
+                if have_token { push(combinators, pending_combinator); };
                 push(out, str_from_chars(buf));
                 while len(buf) > 0 { pop(buf); };
+                have_token = true;
+                pending_combinator = 0;
             };
+            if c == 62 { pending_combinator = 1; };
         } else {
             push(buf, c);
         };
+        i = i + 1;
     };
-    if len(buf) > 0 { push(out, str_from_chars(buf)); };
-    out
+    if len(buf) > 0 {
+        if have_token { push(combinators, pending_combinator); };
+        push(out, str_from_chars(buf));
+    };
 }
 
-// Parse one compound like "nav a" or "h1.title" into a CssCompound.
+// Parse one compound like "nav a" or "main > h1.title" into a CssCompound.
 // Returns a compound whose first part has tag="__fail__" on unsupported input.
 fn! css_parse_compound(s: str) -> CssCompound {
-    let toks: [str] = css_split_ws(str_trim(s));
+    let mut toks: [str] = [];
+    let mut combos: [i32] = [];
+    css_tokenize_compound(str_trim(s), toks, combos);
     let mut parts: [CssSimple] = [];
     if len(toks) == 0 {
-        push(parts, CssSimple { tag: "__fail__", id: "", cls: "" });
-        return CssCompound { parts: parts };
+        push(parts, css_simple_fail());
+        let empty_combos: [i32] = [];
+        return CssCompound { parts: parts, combinators: empty_combos };
     };
     for ti in 0..len(toks) {
         let one: CssSimple = css_parse_simple(toks[ti]);
         push(parts, one);
         if str_eq(one.tag, "__fail__") {
-            return CssCompound { parts: parts };
+            let partial: [i32] = [];
+            return CssCompound { parts: parts, combinators: partial };
         };
     };
-    CssCompound { parts: parts }
+    CssCompound { parts: parts, combinators: combos }
 }
 
 // ─── Declaration parsing ───────────────────────────────────
@@ -687,6 +805,30 @@ fn! css_class_contains(class_attr: str, needle: str) -> bool {
     hit
 }
 
+// Return true if `haystack` contains `needle` as a substring.
+fn! css_str_contains(haystack: str, needle: str) -> bool {
+    if str_len(needle) == 0 { return true; };
+    str_find(haystack, needle) >= 0
+}
+
+// Return true if `haystack` starts with `needle`.
+fn! css_str_starts_with(haystack: str, needle: str) -> bool {
+    let hl: i32 = str_len(haystack);
+    let nl: i32 = str_len(needle);
+    if nl == 0 { return true; };
+    if nl > hl { return false; };
+    str_eq(str_slice(haystack, 0, nl), needle)
+}
+
+// Return true if `haystack` ends with `needle`.
+fn! css_str_ends_with(haystack: str, needle: str) -> bool {
+    let hl: i32 = str_len(haystack);
+    let nl: i32 = str_len(needle);
+    if nl == 0 { return true; };
+    if nl > hl { return false; };
+    str_eq(str_slice(haystack, hl - nl, hl), needle)
+}
+
 fn! css_simple_matches(sel: CssSimple, node: HtmlNode) -> bool {
     if node.is_text { return false; };
     if str_len(sel.tag) > 0 and not str_eq(sel.tag, "*") {
@@ -700,16 +842,40 @@ fn! css_simple_matches(sel: CssSimple, node: HtmlNode) -> bool {
             return false;
         };
     };
+    if sel.attr_op > 0 and str_len(sel.attr_name) > 0 {
+        let has_it: bool = map_has(node.attrs, sel.attr_name);
+        let av: str = if has_it { html_get_attr(node, sel.attr_name) } else { "" };
+        if sel.attr_op == 1 {
+            if not has_it { return false; };
+        } else if sel.attr_op == 2 {
+            if not has_it { return false; };
+            if not str_eq(av, sel.attr_value) { return false; };
+        } else if sel.attr_op == 3 {
+            if not has_it { return false; };
+            if not css_class_contains(av, sel.attr_value) { return false; };
+        } else if sel.attr_op == 4 {
+            if not has_it { return false; };
+            if not css_str_starts_with(av, sel.attr_value) { return false; };
+        } else if sel.attr_op == 5 {
+            if not has_it { return false; };
+            if not css_str_ends_with(av, sel.attr_value) { return false; };
+        } else if sel.attr_op == 6 {
+            if not has_it { return false; };
+            if not css_str_contains(av, sel.attr_value) { return false; };
+        };
+    };
     true
 }
 
 // CSS 2.1 specificity packed into a single int.
 // (id_count * 10000) + (class_count * 100) + tag_count
+// Attribute selectors count the same as a class (+100).
 fn! css_specificity(sel: CssSimple) -> i32 {
     let id_w: i32 = if str_len(sel.id) > 0 { 10000 } else { 0 };
     let cls_w: i32 = if str_len(sel.cls) > 0 { 100 } else { 0 };
+    let attr_w: i32 = if sel.attr_op > 0 and str_len(sel.attr_name) > 0 { 100 } else { 0 };
     let tag_w: i32 = if str_len(sel.tag) > 0 and not str_eq(sel.tag, "*") { 1 } else { 0 };
-    id_w + cls_w + tag_w
+    id_w + cls_w + attr_w + tag_w
 }
 
 // Specificity of a compound = sum of specificities of its simple parts.
@@ -723,6 +889,9 @@ fn! css_compound_specificity(c: CssCompound) -> i32 {
 
 // Match a compound descendant chain against a node.
 // `ancestors` lists indices in shallowest-first order (root ... parent).
+// `sel.combinators[k]` describes the link between parts[k] and parts[k+1]:
+//   0 = descendant  (ancestor anywhere up the chain, greedy)
+//   1 = child       (must be the immediate parent)
 fn! css_compound_matches(sel: CssCompound, node: HtmlNode,
                         nodes: [HtmlNode], ancestors: [i32]) -> bool {
     let np: i32 = len(sel.parts);
@@ -730,15 +899,29 @@ fn! css_compound_matches(sel: CssCompound, node: HtmlNode,
     // Subject = last part must match the node itself.
     if not css_simple_matches(sel.parts[np - 1], node) { return false; };
     if np == 1 { return true; };
-    // Match remaining parts against ancestors, right-to-left, greedy.
+    // Match remaining parts against ancestors, right-to-left.
     let mut k: i32 = np - 2;               // next part to match (from right)
     let mut ai: i32 = len(ancestors) - 1;  // walk ancestors from parent up
-    while k >= 0 and ai >= 0 {
-        let anc_idx: i32 = ancestors[ai];
-        if css_simple_matches(sel.parts[k], nodes[anc_idx]) {
+    while k >= 0 {
+        if ai < 0 { return false; };
+        // combinators[k] sits between parts[k] and parts[k+1].
+        let combo: i32 = if k < len(sel.combinators) { sel.combinators[k] } else { 0 };
+        if combo == 1 {
+            // Child combinator: parts[k] must be the IMMEDIATE ancestor.
+            let anc_idx: i32 = ancestors[ai];
+            if not css_simple_matches(sel.parts[k], nodes[anc_idx]) {
+                return false;
+            };
             k = k - 1;
+            ai = ai - 1;
+        } else {
+            // Descendant: walk up until match or out of ancestors.
+            let anc_idx: i32 = ancestors[ai];
+            if css_simple_matches(sel.parts[k], nodes[anc_idx]) {
+                k = k - 1;
+            };
+            ai = ai - 1;
         };
-        ai = ai - 1;
     };
     k < 0
 }
