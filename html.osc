@@ -430,6 +430,17 @@ fn! html_parse(nodes: [HtmlNode], source: str) -> i32 {
 
                 let end_tag: str = str_from_chars(end_tag_chars);
 
+                // Nothing legitimate follows </html>.  Some upstreams (e.g.
+                // a TLS transport whose last recv hands back more bytes
+                // than it actually wrote, with no Content-Length to clip
+                // against) leave trailing garbage after the real document.
+                // Rendering that garbage as a stray top-level text node
+                // shows up on screen as tofu / mojibake.  Treat the root
+                // </html> as a hard stop.
+                if str_eq(end_tag, "html") {
+                    break;
+                };
+
                 // Pop matching element from stack
                 let mut found: i32 = -1;
                 let mut si: i32 = len(stack) - 1;
