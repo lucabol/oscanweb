@@ -2005,6 +2005,12 @@ fn! main() {
     // Navigation trigger
     let mut needs_navigate: bool = false;
     let mut nav_url: str = "";
+    // One-shot POST payload: set by form submission, consumed by the
+    // next navigation. Cleared after the initial request so that any
+    // redirect is followed as a plain GET (matches browser behaviour
+    // for 302/303 on POST).
+    let mut nav_is_post: bool = false;
+    let mut nav_post_body: str = "";
 
     // Render gating: only re-render when user input or state changes.
     // Without this, render_node is called 60× per second and — because the
@@ -2331,7 +2337,12 @@ fn! main() {
                     // ports, but all callers within a session agree).
                     let cache_scheme: str = if fetch_tls { "https" } else { "http" };
                     let cache_key: str = "{cache_scheme}://{fetch_host}:{fetch_port}{fetch_path}";
-                    let cache_hit: i32 = http_cache_lookup(page_cache_urls, cache_key);
+                    // POST requests bypass the page cache and dispatch
+                    // via http_post once; any redirect switches to GET.
+                    let is_post_now: bool = nav_is_post and redir_count == 0;
+                    let cache_hit: i32 = if is_post_now { -1 } else {
+                        http_cache_lookup(page_cache_urls, cache_key)
+                    };
                     let mut resp: HttpResponse = http_make_error("");
                     let mut from_cache: bool = false;
                     if cache_hit >= 0 {
@@ -2353,7 +2364,17 @@ fn! main() {
                         if str_len(ck_hdr) > 0 {
                             extra = "Cookie: {ck_hdr}\r\n";
                         };
-                        resp = http_get(fetch_host, fetch_port, fetch_path, fetch_tls, extra);
+                        if is_post_now {
+                            vlog_msg("POST", fetch_path);
+                            resp = http_post(fetch_host, fetch_port, fetch_path,
+                                             fetch_tls, nav_post_body,
+                                             "application/x-www-form-urlencoded", extra);
+                            // One-shot: clear so redirects become GETs.
+                            nav_is_post = false;
+                            nav_post_body = "";
+                        } else {
+                            resp = http_get(fetch_host, fetch_port, fetch_path, fetch_tls, extra);
+                        };
                         // Absorb any Set-Cookie headers from the response
                         // into the jar. Done before redirect handling so
                         // cookies set on a 302 response are available on
@@ -3036,23 +3057,24 @@ fn! main() {
                         while len(form_input_buf) > 0 { pop(form_input_buf); };
 
                         if form_fill_pos >= len(form_fill_order) {
-                            // All editable fields filled — build the body
-                            // and submit.  v1 is GET-only via the normal
-                            // nav path.  POST forms fall back to GET with
-                            // a status message; full POST support can come
-                            // after the UX layer settles.
+                            // All editable fields filled — build body and submit.
                             let body: str = forms_build_urlencoded(
                                 page_fields, form_fill_target, -1);
                             let action: str = page_forms[form_fill_target].action;
                             let resolved: str = form_resolve_action(action, current_url);
                             let method: str = page_forms[form_fill_target].method;
                             if str_eq(method, "post") {
-                                status_msg = "POST form — not wired yet, retrying as GET";
+                                nav_is_post = true;
+                                nav_post_body = body;
+                                nav_url = resolved;
+                            } else {
+                                nav_is_post = false;
+                                nav_post_body = "";
+                                let target_url: str = if str_len(body) > 0 {
+                                    str_concat(str_concat(resolved, "?"), body)
+                                } else { resolved };
+                                nav_url = target_url;
                             };
-                            let target_url: str = if str_len(body) > 0 {
-                                str_concat(str_concat(resolved, "?"), body)
-                            } else { resolved };
-                            nav_url = target_url;
                             needs_navigate = true;
                             mode = BrowserMode::Normal;
                         } else {
