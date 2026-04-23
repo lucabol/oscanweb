@@ -10,9 +10,12 @@ struct Url {
 
 fn! url_parse(raw: str) -> Url {
     let mut s: str = raw;
-    let mut scheme: str = "http";
+    // Default to https for schemeless input (e.g. "lucabol.com"): modern
+    // sites overwhelmingly require TLS, and most HTTP endpoints redirect
+    // to HTTPS anyway.  Explicit "http://..." is still honoured below.
+    let mut scheme: str = "https";
     let mut host: str = "";
-    let mut port: i32 = 80;
+    let mut port: i32 = 443;
     let mut path: str = "/";
     let mut fragment: str = "";
 
@@ -23,10 +26,11 @@ fn! url_parse(raw: str) -> Url {
         s = str_slice(s, scheme_pos + 3, str_len(s));
     };
 
-    // Set default port based on scheme
+    // Set default port based on scheme (only when no explicit port is
+    // parsed from the authority below).
     if str_eq(scheme, "https") {
         port = 443;
-    } else {
+    } else if str_eq(scheme, "http") {
         port = 80;
     };
 

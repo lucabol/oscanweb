@@ -51,10 +51,14 @@ fn! main() {
     assert_eq_i32(u5.port, 3000, "parse port+path port");
     assert_eq_str(u5.path, "/api", "parse port+path path");
 
-    // 6. Parse bare hostname (no scheme)
+    // 6. Parse bare hostname (no scheme) — defaults to https.  Modern
+    // sites overwhelmingly require TLS; omnibox input like "lucabol.com"
+    // should resolve to https://lucabol.com/ without forcing the user to
+    // type the scheme.
     let u6: Url = url_parse("example.com");
-    assert_eq_str(u6.scheme, "http", "no-scheme defaults to http");
+    assert_eq_str(u6.scheme, "https", "no-scheme defaults to https");
     assert_eq_str(u6.host, "example.com", "no-scheme host");
+    assert_eq_i32(u6.port, 443, "no-scheme port defaults to 443");
 
     // 7. url_to_string round-trip
     let rt1: str = url_to_string(url_parse("http://example.com"));
