@@ -1517,7 +1517,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         };
         if cs.underline == 1 { child_uline = true; };
         if cs.strike == 1 { child_strike = true; };
-        if cs.bg_color >= 0 { child_markbg = cs.bg_color; };
+        if cs.bg_color >= 0 and not is_block { child_markbg = cs.bg_color; };
     };
 
     // Anchors always use the browser's link color.  Many pages ship a
