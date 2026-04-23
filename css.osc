@@ -75,10 +75,18 @@ struct ComputedStyle {
     // Phase 3 additions — all pixel values, -1 means unset.
     max_width_px: i32,  // max-width resolved to pixels (>=0), else -1
     max_width_pct: i32, // max-width in percent of viewport (1..100), else -1
+    width_px: i32,      // width resolved to pixels (>=0), else -1
+    width_pct: i32,     // width in percent of viewport (1..100), else -1
     pad_t: i32,
     pad_r: i32,
     pad_b: i32,
     pad_l: i32,
+    // Numeric margins in pixels; -1 unset.  Auto centering is still
+    // signalled by `center_block` below (not modelled as real margin).
+    margin_t: i32,
+    margin_b: i32,
+    margin_l: i32,
+    margin_r: i32,
     line_height_px: i32,   // -1 unset; positive absolute pixel value; inherits
     line_height_mul_x100: i32, // -1 unset; multiplier × 100 for unitless / % / normal; inherits
     center_block: i32,     // 1 = margin:auto centering sentinel, -1 unset, 0 explicit non-center
@@ -96,10 +104,16 @@ fn! css_empty_style() -> ComputedStyle {
         text_align: -1,
         max_width_px: -1,
         max_width_pct: -1,
+        width_px: -1,
+        width_pct: -1,
         pad_t: -1,
         pad_r: -1,
         pad_b: -1,
         pad_l: -1,
+        margin_t: -1,
+        margin_b: -1,
+        margin_l: -1,
+        margin_r: -1,
         line_height_px: -1,
         line_height_mul_x100: -1,
         center_block: -1,
@@ -877,6 +891,30 @@ fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
         return;
     };
 
+    // ── Phase 3: width (concrete column width) ───────────────
+    // Treated like a second max-width cap: when set, the block is
+    // laid out within this inline width (clamped to the viewport).
+    // `height` is intentionally not modelled — clipping block
+    // content rarely improves terminal-style readability.
+    if str_eq(prop, "width") {
+        if str_eq(val, "auto") or str_eq(val, "none") {
+            styles[idx].width_px = -1;
+            styles[idx].width_pct = -1;
+            return;
+        };
+        let px_p: [i32] = [-1];
+        let pct_p: [i32] = [-1];
+        css_parse_length(d.value, px_p, pct_p);
+        if px_p[0] >= 0 {
+            styles[idx].width_px = px_p[0];
+            styles[idx].width_pct = -1;
+        } else if pct_p[0] > 0 {
+            styles[idx].width_px = -1;
+            styles[idx].width_pct = pct_p[0];
+        };
+        return;
+    };
+
     // ── Phase 3: line-height ─────────────────────────────────
     // Relative forms (normal / unitless number / percent) are stored as a
     // multiplier × 100 so the renderer can resolve against the *current*
@@ -935,36 +973,73 @@ fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
         return;
     };
 
-    // ── Phase 3: margin (only the "auto" centering sentinel) ────
-    if str_eq(prop, "margin") or str_eq(prop, "margin-left") or str_eq(prop, "margin-right") {
+    // ── Phase 3: margin (auto centering sentinel + numeric px) ──
+    // Auto: `margin: auto`, `margin: 0 auto`, `margin-left/right: auto`
+    // set `center_block = 1` (rendered via max-width + (avail-mw)/2).
+    // Numeric lengths populate margin_{t,r,b,l}; `%` and negative values
+    // are treated as unset (negative margins are rare in content CSS and
+    // would collide with our block layout model).
+    if str_eq(prop, "margin") or str_eq(prop, "margin-top") or
+       str_eq(prop, "margin-right") or str_eq(prop, "margin-bottom") or
+       str_eq(prop, "margin-left") {
         let toks: [str] = css_split_values(val);
         let m: i32 = len(toks);
         let mut left_auto: bool = false;
         let mut right_auto: bool = false;
+
+        // Parse one token as a pixel length; returns -1 if not a
+        // positive px value (auto / %, negative, or garbage).
+        // Inline because we don't want to leak this helper globally.
         if str_eq(prop, "margin") {
-            // margin: auto  (1 token) => all sides auto
-            // margin: V H   (2 tokens) => H is left/right
-            // margin: T H B (3 tokens) => H is left/right
-            // margin: T R B L (4 tokens)
+            // margin: V            -> T/R/B/L
+            // margin: V H          -> T/B = V, L/R = H
+            // margin: T H B        -> L/R = H, B = B
+            // margin: T R B L
+            let mut t_tok: str = "";
+            let mut r_tok: str = "";
+            let mut b_tok: str = "";
+            let mut l_tok: str = "";
             if m == 1 {
-                if str_eq(toks[0], "auto") { left_auto = true; right_auto = true; };
+                t_tok = toks[0]; r_tok = toks[0]; b_tok = toks[0]; l_tok = toks[0];
             } else if m == 2 {
-                if str_eq(toks[1], "auto") { left_auto = true; right_auto = true; };
+                t_tok = toks[0]; b_tok = toks[0]; l_tok = toks[1]; r_tok = toks[1];
             } else if m == 3 {
-                if str_eq(toks[1], "auto") { left_auto = true; right_auto = true; };
+                t_tok = toks[0]; l_tok = toks[1]; r_tok = toks[1]; b_tok = toks[2];
             } else if m == 4 {
-                if str_eq(toks[1], "auto") { right_auto = true; };
-                if str_eq(toks[3], "auto") { left_auto = true; };
+                t_tok = toks[0]; r_tok = toks[1]; b_tok = toks[2]; l_tok = toks[3];
             };
-        } else if str_eq(prop, "margin-left") and m >= 1 {
-            if str_eq(toks[0], "auto") { left_auto = true; };
-        } else if str_eq(prop, "margin-right") and m >= 1 {
-            if str_eq(toks[0], "auto") { right_auto = true; };
+            if str_eq(l_tok, "auto") { left_auto = true; };
+            if str_eq(r_tok, "auto") { right_auto = true; };
+            let tpx: [i32] = [-1]; let tpct: [i32] = [-1];
+            css_parse_length(t_tok, tpx, tpct);
+            if tpx[0] >= 0 { styles[idx].margin_t = tpx[0]; };
+            let rpx: [i32] = [-1]; let rpct: [i32] = [-1];
+            css_parse_length(r_tok, rpx, rpct);
+            if rpx[0] >= 0 { styles[idx].margin_r = rpx[0]; };
+            let bpx: [i32] = [-1]; let bpct: [i32] = [-1];
+            css_parse_length(b_tok, bpx, bpct);
+            if bpx[0] >= 0 { styles[idx].margin_b = bpx[0]; };
+            let lpx: [i32] = [-1]; let lpct: [i32] = [-1];
+            css_parse_length(l_tok, lpx, lpct);
+            if lpx[0] >= 0 { styles[idx].margin_l = lpx[0]; };
+        } else if m >= 1 {
+            let t: str = toks[0];
+            if str_eq(prop, "margin-left") {
+                if str_eq(t, "auto") { left_auto = true; };
+            } else if str_eq(prop, "margin-right") {
+                if str_eq(t, "auto") { right_auto = true; };
+            };
+            let pxo: [i32] = [-1]; let pcto: [i32] = [-1];
+            css_parse_length(t, pxo, pcto);
+            if pxo[0] >= 0 {
+                if str_eq(prop, "margin-top")    { styles[idx].margin_t = pxo[0]; };
+                if str_eq(prop, "margin-right")  { styles[idx].margin_r = pxo[0]; };
+                if str_eq(prop, "margin-bottom") { styles[idx].margin_b = pxo[0]; };
+                if str_eq(prop, "margin-left")   { styles[idx].margin_l = pxo[0]; };
+            };
         };
         if left_auto and right_auto {
             styles[idx].center_block = 1;
-        } else if left_auto or right_auto {
-            // Single-side auto is rare; leave as unset to avoid surprises.
         };
         return;
     };

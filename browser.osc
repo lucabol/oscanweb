@@ -1101,12 +1101,21 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     if is_block and idx >= 0 and idx < len(styles) {
         let csp: ComputedStyle = styles[idx];
         // Max-width: resolve px first, else percent of current vp_width.
+        // `width` acts as a second cap: take the smaller of the two so
+        // an element with both properties set respects the stricter limit.
         let mut mw: i32 = -1;
         if csp.max_width_px >= 0 {
             mw = csp.max_width_px;
         } else if csp.max_width_pct > 0 {
             mw = (vp_width * csp.max_width_pct) / 100;
         };
+        let mut ww: i32 = -1;
+        if csp.width_px >= 0 {
+            ww = csp.width_px;
+        } else if csp.width_pct > 0 {
+            ww = (vp_width * csp.width_pct) / 100;
+        };
+        if ww > 0 and (mw < 0 or ww < mw) { mw = ww; };
         if mw > 0 {
             let avail: i32 = vp_width - indent - PAD * 2;
             if mw < avail {
@@ -1123,6 +1132,14 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         if csp.pad_r > 0 { eff_vp_width = eff_vp_width - csp.pad_r; };
         if csp.pad_t > 0 { pad_top_px = csp.pad_t; };
         if csp.pad_b > 0 { pad_bot_px = csp.pad_b; };
+        // Numeric margins: left/right shift the content edges inward
+        // (in addition to any auto-centering above); top/bottom add
+        // vertical space rendered as extra pad_{top,bot}_px since we
+        // don't model a full margin box.
+        if csp.margin_l > 0 { eff_indent = eff_indent + csp.margin_l; };
+        if csp.margin_r > 0 { eff_vp_width = eff_vp_width - csp.margin_r; };
+        if csp.margin_t > 0 { pad_top_px = pad_top_px + csp.margin_t; };
+        if csp.margin_b > 0 { pad_bot_px = pad_bot_px + csp.margin_b; };
     };
 
     let entry_line_h: i32 = effective_line_h(styles, idx, scale, tt_reg, tt_cfg, font);

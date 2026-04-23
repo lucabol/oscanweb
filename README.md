@@ -20,7 +20,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Runtime zoom** — `+`/`-` zoom in/out, `0` resets (1×–4×)
 - **HTTP and HTTPS support** — TLS is built into Oscan (zero external dependencies)
 - **JavaScript execution** — inline `<script>` tags and `onclick` handlers via embedded QuickJS-ng
-- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`, `padding`, `max-width`, `line-height`, `margin: 0 auto` centering, and `@media (prefers-color-scheme)`) with a real cascade, descendant combinator, and inheritance. Tables now auto-size columns to content and wrap long cells.
+- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`, `padding`, `max-width`, `width` (px/%), `line-height`, `margin` (px and `0 auto` centering), and `@media (prefers-color-scheme)`) with a real cascade, descendant combinator, and inheritance. Tables now auto-size columns to content and wrap long cells.
 - **Image rendering** — PNG, JPEG, BMP, GIF, and SVG decoded, cached, and displayed inline
 - **Rich HTML rendering** — headings, lists, tables, blockquotes, code blocks, and 30+ tags
 - **Text selection & copy** — click-and-drag to select text, automatically copied to clipboard
@@ -296,8 +296,8 @@ back to left alignment).
   rules containing them are parsed and skipped
 - Pseudo-classes / pseudo-elements (`:hover`, `::before`, …)
 - Attribute selectors (`[href]`)
-- Box-model properties (`width`, `height`, `margin`, `padding`, `border`,
-  `float`, `position`, `flex`, `grid`)
+- Box-model properties beyond `padding`/`width`/`max-width`/numeric
+  `margin` (no `height`, `border`, `float`, `position`, `flex`, `grid`)
 - Units other than unitless integers for `rgb()` and bare hex colors
 - `@media`, `@import`, `@font-face` and other at-rules (parsed and
   ignored)
@@ -455,9 +455,10 @@ headings, paragraphs, code blocks, and tables uniformly.
 
 ## Limitations
 
-- **No CSS layout** — colors, weights, decorations, backgrounds, and
-  `display:none` are honored, but there is no box model, no flexbox/grid,
-  no floats, and no width/height/margin/padding rules
+- **No full CSS layout** — colors, weights, decorations, backgrounds,
+  `display:none`, `padding`, `width`/`max-width` and numeric `margin`
+  are honored, but there is no `height`, `border`, flexbox/grid, or
+  `float`/`position`
 - **CSS selectors are simple only** — `tag`, `.class`, `#id`, `*`, and
   comma-separated lists; combinators (` `, `>`, `+`, `~`), pseudo-classes,
   attribute selectors, and `@media` queries are ignored
