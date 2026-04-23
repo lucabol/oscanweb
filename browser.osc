@@ -3472,12 +3472,29 @@ fn! main() {
                 push(plth, i32_to_str(if light_mode { 1 } else { 0 }));
                 storage_save_lines("theme.cfg", plth);
             };
+            // "Nav" button — visible whenever the page has chrome
+            // (nav/header/footer/aside) that is currently trimmed.  Gives
+            // mouse users a visible affordance equivalent to the F key
+            // toggle.  Sits just left of the theme toggle.
+            let mut f_btn_clicked: bool = false;
+            let is_insert: bool = match mode {
+                BrowserMode::Insert => true,
+                _ => false,
+            };
+            let nav_visible: bool = page_loaded and has_chrome and not show_full and not is_insert;
+            let nav_btn_w: i32 = if nav_visible { 36 } else { 0 };
+            let nav_gap: i32 = if nav_visible { 4 } else { 0 };
+            let nav_btn_x: i32 = th_btn_x - nav_btn_w - nav_gap;
+            if nav_visible {
+                f_btn_clicked = ui_button(nav_btn_x, fs_btn_y, nav_btn_w, fs_btn_h,
+                                          "Nav", prev_btn, ui_colors);
+            };
             // Pass key=0 to ui_textbox — we handle keyboard input outside arena.
             let show_focused: bool = match mode {
                 BrowserMode::Insert => url_focused,
                 _ => false,
             };
-            let url_bar_w: i32 = canvas_width() - 8 - fs_btn_w - 4 - tt_btn_w - 4 - th_btn_w - 4;
+            let url_bar_w: i32 = canvas_width() - 8 - fs_btn_w - 4 - tt_btn_w - 4 - th_btn_w - 4 - nav_btn_w - nav_gap;
             let mouse_focus: bool = ui_textbox(4, 4, url_bar_w, url_buf,
                                      show_focused, prev_btn, 0,
                                      url_cursor, url_select_all, ui_colors);
@@ -3916,26 +3933,8 @@ fn! main() {
                 " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}{reader_flag}{full_flag}{zoom_flag}",
                 theme[T_FG], FONT_DEFAULT);
 
-            // Floating "F for Nav" button — visible whenever the page has
-            // chrome (nav/header/footer/aside) that is currently trimmed.
-            // Gives mouse users a visible affordance equivalent to the F
-            // key toggle.
-            let mut f_btn_clicked: bool = false;
-            let is_insert: bool = match mode {
-                BrowserMode::Insert => true,
-                _ => false,
-            };
-            if page_loaded and has_chrome and not show_full and not is_insert {
-                let fb_label: str = "'F' for Nav";
-                let fb_w: i32 = gfx_text_width(fb_label, FONT_DEFAULT) + 16;
-                let fb_h: i32 = 22;
-                let fb_x: i32 = 8;
-                let fb_y: i32 = CHROME_TOP + 8;
-                // Simulated translucency: draw a darker shadow first so the
-                // button blends with page content beneath.
-                gfx_fill_rect(fb_x, fb_y, fb_w, fb_h, theme[T_STATUS_BG]);
-                f_btn_clicked = ui_button(fb_x, fb_y, fb_w, fb_h, fb_label, prev_btn, ui_colors);
-            };
+            // Floating "'F' for Nav" button moved to the top chrome (next to
+            // theme toggle).  f_btn_clicked is assigned there.
 
             prev_btn = canvas_mouse_btn();
                 render_dirty = false;
