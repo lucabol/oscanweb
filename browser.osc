@@ -432,6 +432,7 @@ enum BrowserMode {
     Follow,
     Search,
     FormFill,
+    FormPick,
 }
 
 // ─── Link Info ───────────────────────────────────────────
@@ -2660,12 +2661,13 @@ fn! main() {
                         status_msg = "Cookies cleared";
                         render_dirty = true;
                     } else if key == 102 and last_key == 103 {
-                        // gf — enter FormFill mode for the first <form>
-                        // on the current page.  Iterates editable fields
-                        // one at a time via the status bar; Enter commits
-                        // and advances, Esc aborts, final Enter submits.
+                        // gf — enter FormFill (or FormPick if there are
+                        // multiple forms on the page).
                         if len(page_forms) == 0 or len(page_fields) == 0 {
                             status_msg = "No form on this page";
+                        } else if len(page_forms) > 1 {
+                            mode = BrowserMode::FormPick;
+                            render_dirty = true;
                         } else {
                             form_fill_target = 0;
                             while len(form_fill_order) > 0 { pop(form_fill_order); };
@@ -2682,8 +2684,6 @@ fn! main() {
                                 status_msg = "Form has no editable fields";
                             } else {
                                 form_fill_pos = 0;
-                                // Preload current value into buffer so the
-                                // user can edit rather than retype.
                                 while len(form_input_buf) > 0 { pop(form_input_buf); };
                                 let init_f: FormField = page_fields[form_fill_order[0]];
                                 let init_chars: [i32] = str_to_chars(init_f.value);
@@ -3089,6 +3089,42 @@ fn! main() {
                         render_dirty = true;
                     };
                     // push/pop for form_input_buf handled outside arena
+                },
+                BrowserMode::FormPick => {
+                    if key == KEY_ESC {
+                        mode = BrowserMode::Normal;
+                        status_msg = "Form pick cancelled";
+                        render_dirty = true;
+                    } else if key >= 97 and key <= 122 {
+                        let pick: i32 = key - 97;
+                        if pick < len(page_forms) {
+                            form_fill_target = pick;
+                            while len(form_fill_order) > 0 { pop(form_fill_order); };
+                            for fpi in 0..len(page_fields) {
+                                let fp: FormField = page_fields[fpi];
+                                if fp.form_idx == form_fill_target and
+                                   form_kind_is_editable(fp.kind) and
+                                   not fp.disabled and
+                                   str_len(fp.name) > 0 {
+                                    push(form_fill_order, fpi);
+                                };
+                            };
+                            if len(form_fill_order) == 0 {
+                                status_msg = "Form has no editable fields";
+                                mode = BrowserMode::Normal;
+                            } else {
+                                form_fill_pos = 0;
+                                while len(form_input_buf) > 0 { pop(form_input_buf); };
+                                let pinit: FormField = page_fields[form_fill_order[0]];
+                                let pchars: [i32] = str_to_chars(pinit.value);
+                                for pci in 0..len(pchars) {
+                                    push(form_input_buf, pchars[pci]);
+                                };
+                                mode = BrowserMode::FormFill;
+                            };
+                            render_dirty = true;
+                        };
+                    };
                 },
             };
             };  // end if nav_pass == 0
@@ -3533,9 +3569,42 @@ fn! main() {
             };
             let show_form_bar: bool = match mode {
                 BrowserMode::FormFill => true,
+                BrowserMode::FormPick => true,
                 _ => false,
             };
-            if show_form_bar {
+            let is_form_pick: bool = match mode {
+                BrowserMode::FormPick => true,
+                _ => false,
+            };
+            if is_form_pick {
+                let psy: i32 = canvas_height() - CHROME_BOT - 24;
+                gfx_fill_rect(0, psy, canvas_width(), 24, theme[T_STATUS_BG]);
+                gfx_rect(0, psy, canvas_width(), 1, UI_BORDER);
+                let mut px: i32 = 4;
+                gfx_draw_text(px, psy + 8, "Pick form:", theme[T_FG], FONT_DEFAULT);
+                px = px + gfx_text_width("Pick form:", FONT_DEFAULT) + 8;
+                let nforms: i32 = len(page_forms);
+                let max_show: i32 = if nforms < 26 { nforms } else { 26 };
+                for fi in 0..max_show {
+                    let fm: Form = page_forms[fi];
+                    let mut nfields: i32 = 0;
+                    for fqi in 0..len(page_fields) {
+                        let fq: FormField = page_fields[fqi];
+                        if fq.form_idx == fi and form_kind_is_editable(fq.kind) and
+                           not fq.disabled and str_len(fq.name) > 0 {
+                            nfields = nfields + 1;
+                        };
+                    };
+                    let label_ch: i32 = 97 + fi;
+                    let label_buf: [i32] = [label_ch];
+                    let label: str = str_from_chars(label_buf);
+                    let method_up: str = if str_eq(fm.method, "post") { "POST" } else { "GET" };
+                    let seg: str = "[{label}] {method_up}({nfields}) ";
+                    gfx_draw_text(px, psy + 8, seg, theme[T_FG], FONT_DEFAULT);
+                    px = px + gfx_text_width(seg, FONT_DEFAULT);
+                    if px > canvas_width() - 80 { break; };
+                };
+            } else if show_form_bar {
                 let sy: i32 = canvas_height() - CHROME_BOT - 24;
                 gfx_fill_rect(0, sy, canvas_width(), 24, theme[T_STATUS_BG]);
                 gfx_rect(0, sy, canvas_width(), 1, UI_BORDER);
@@ -3674,6 +3743,7 @@ fn! main() {
                 BrowserMode::Follow => "FOLLOW",
                 BrowserMode::Search => "SEARCH",
                 BrowserMode::FormFill => "FORM",
+                BrowserMode::FormPick => "FORM?",
             };
             let scroll_pct: str = if max_scroll > 0 {
                 let pct: i32 = scroll_y * 100 / max_scroll;
