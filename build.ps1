@@ -57,6 +57,16 @@ if ($Test) {
         exit 0
     }
 
+    # Compile tests to a stable folder (build\tests\*.exe) and then execute
+    # them as separate steps. Using `oscan --run` compiles to an unpredictable
+    # %TEMP% path, which means antivirus scanners (Windows Defender, etc.)
+    # see a brand-new executable every invocation and stop to scan it — this
+    # made a full test run take 40+ minutes on some Windows machines. With a
+    # fixed output folder you can add ONE exclusion rule for
+    # <repo>\build\tests\ and get fast, predictable runs.
+    $TestBuildDir = Join-Path $BuildDir 'tests'
+    New-Item -ItemType Directory -Path $TestBuildDir -Force | Out-Null
+
     # Extra C flags for tests that need the JS engine
     $JsBridge = Join-Path $ProjectDir 'js_bridge.c'
     $QuickJs  = Join-Path $ProjectDir 'libs' 'quickjs' 'quickjs.c'
@@ -73,7 +83,9 @@ if ($Test) {
             continue
         }
         Write-Host "   Running $($tf.Name) ... " -NoNewline
-        $testArgs = @($tf.FullName, '--run')
+        $testExeName = if ($_isWin) { $tf.BaseName + '.exe' } else { $tf.BaseName }
+        $testExe = Join-Path $TestBuildDir $testExeName
+        $testArgs = @($tf.FullName, '-o', $testExe)
         if ($hasJs) {
             $testArgs += @('--extra-c', $JsBridge, '--extra-c', $QuickJs,
                            '--extra-cflags', "-I$ProjectDir")
@@ -88,10 +100,22 @@ if ($Test) {
                                '--extra-cflags', '-lc')
             }
         }
+        # Compile only (no --run) so the binary lands in $TestBuildDir.
         if ($Verbose) {
             & oscan @testArgs
         } else {
             & oscan @testArgs 2>&1 | Out-Null
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host 'FAIL (compile)' -ForegroundColor Red
+            $failed++
+            continue
+        }
+        # Execute the compiled test binary.
+        if ($Verbose) {
+            & $testExe
+        } else {
+            & $testExe 2>&1 | Out-Null
         }
         if ($LASTEXITCODE -eq 0) {
             Write-Host 'PASS' -ForegroundColor Green

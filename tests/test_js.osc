@@ -183,6 +183,74 @@ fn! main() {
     let d12: str = js_engine_eval(ctx, "document.getElementById('target').textContent");
     assert_eq_str(d12, "new", "script modifies DOM via getElementById");
 
+    // ── querySelector / querySelectorAll ──
+    let mut dom4: [HtmlNode] = [];
+    let dhtml4: str = "<div id=\"main\"><p class=\"note\">A</p><p class=\"note important\">B</p><span class=\"note\">C</span></div>";
+    let droot4: i32 = html_parse(dom4, dhtml4);
+    js_bridge_set_dom(dom4);
+
+    let q1: str = js_engine_eval(ctx, "document.querySelector('#main').tagName");
+    assert_eq_str(q1, "div", "querySelector #id works");
+
+    let q2: str = js_engine_eval(ctx, "document.querySelector('.note').tagName");
+    assert_eq_str(q2, "p", "querySelector .class returns first match");
+
+    let q3: str = js_engine_eval(ctx, "document.querySelectorAll('.note').length");
+    assert_eq_str(q3, "3", "querySelectorAll .class finds all");
+
+    let q4: str = js_engine_eval(ctx, "document.querySelector('p.important').tagName");
+    assert_eq_str(q4, "p", "querySelector compound tag.class works");
+
+    let q5: str = js_engine_eval(ctx, "document.querySelectorAll('#main p').length");
+    assert_eq_str(q5, "2", "querySelectorAll descendant combinator works");
+
+    let q6: str = js_engine_eval(ctx, "document.querySelector('.nope')");
+    assert_eq_str(q6, "", "querySelector no match returns null");
+
+    // getElementsByClassName
+    let q7: str = js_engine_eval(ctx, "document.getElementsByClassName('note').length");
+    assert_eq_str(q7, "3", "getElementsByClassName counts all");
+
+    // ── classList ──
+    let q8: str = js_engine_eval(ctx,
+        "var e = document.querySelector('.important'); e.classList.contains('important')");
+    assert_eq_str(q8, "true", "classList.contains existing token");
+
+    let q9: str = js_engine_eval(ctx,
+        "var e = document.querySelector('.important'); e.classList.contains('missing')");
+    assert_eq_str(q9, "false", "classList.contains missing token");
+
+    let _q10a: str = js_engine_eval(ctx,
+        "document.querySelector('.important').classList.add('highlighted')");
+    let q10: str = js_engine_eval(ctx,
+        "document.querySelector('.important').classList.contains('highlighted')");
+    assert_eq_str(q10, "true", "classList.add token");
+
+    let _q11a: str = js_engine_eval(ctx,
+        "document.querySelector('.important').classList.remove('note')");
+    let q11: str = js_engine_eval(ctx,
+        "document.querySelector('.important').classList.contains('note')");
+    assert_eq_str(q11, "false", "classList.remove token");
+
+    let q12: str = js_engine_eval(ctx,
+        "document.querySelector('.important').classList.toggle('zap')");
+    assert_eq_str(q12, "true", "classList.toggle adds new");
+    let q13: str = js_engine_eval(ctx,
+        "document.querySelector('.important').classList.toggle('zap')");
+    assert_eq_str(q13, "false", "classList.toggle removes");
+
+    // className getter
+    let _q14a: str = js_engine_eval(ctx,
+        "document.querySelector('.important').className = 'foo bar'");
+    let q14: str = js_engine_eval(ctx,
+        "document.querySelector('.foo').className");
+    assert_eq_str(q14, "foo bar", "className getter/setter");
+
+    // addEventListener stub (should not throw)
+    let q15: str = js_engine_eval(ctx,
+        "document.querySelector('#main').addEventListener('click', function(){{}}); 'ok'");
+    assert_eq_str(q15, "ok", "addEventListener stub does not throw");
+
     // ── Cleanup ──
     js_engine_destroy(ctx);
 

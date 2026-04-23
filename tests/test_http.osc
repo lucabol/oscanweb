@@ -1,0 +1,58 @@
+// Tests for http.osc — chunked transfer-encoding decoder.
+
+use "../http.osc"
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! main() {
+    // Simple two-chunk body.  "Wiki" then "pedia in\r\n\r\nchunks." then end.
+    let enc1: str = "4\r\nWiki\r\n5\r\npedia\r\nE\r\n in\r\n\r\nchunks.\r\n0\r\n\r\n";
+    assert_eq_str(http_decode_chunked(enc1), "Wikipedia in\r\n\r\nchunks.",
+                  "chunked classic RFC example");
+
+    // Hex-cased size and trailing CRLF should decode too.
+    let enc2: str = "A\r\n0123456789\r\n0\r\n\r\n";
+    assert_eq_str(http_decode_chunked(enc2), "0123456789",
+                  "chunked decimal-looking hex");
+
+    let enc3: str = "1a\r\nabcdefghijklmnopqrstuvwxyz\r\n0\r\n\r\n";
+    assert_eq_str(http_decode_chunked(enc3), "abcdefghijklmnopqrstuvwxyz",
+                  "chunked lowercase hex size");
+
+    // Chunk extension after size (semicolon) should be ignored.
+    let enc4: str = "5;name=foo\r\nhello\r\n0\r\n\r\n";
+    assert_eq_str(http_decode_chunked(enc4), "hello",
+                  "chunked with chunk-ext");
+
+    // Empty body (just terminator).
+    let enc5: str = "0\r\n\r\n";
+    assert_eq_str(http_decode_chunked(enc5), "",
+                  "chunked empty body");
+
+    // Truncated encoding (missing terminator): we should still recover
+    // the bytes we saw rather than crash.
+    let enc6: str = "4\r\nWiki\r\n5\r\npedia\r\n";
+    assert_eq_str(http_decode_chunked(enc6), "Wikipedia",
+                  "chunked truncated (no 0-terminator)");
+
+    // Hex helper spot-checks.
+    assert_eq_i32(http_hex_val(48), 0, "hex '0' -> 0");
+    assert_eq_i32(http_hex_val(57), 9, "hex '9' -> 9");
+    assert_eq_i32(http_hex_val(97), 10, "hex 'a' -> 10");
+    assert_eq_i32(http_hex_val(70), 15, "hex 'F' -> 15");
+    assert_eq_i32(http_hex_val(32), -1, "hex ' ' -> -1 (invalid)");
+}

@@ -86,6 +86,61 @@ fn! http_parse_headers(header_block: str) -> map {
     m
 }
 
+// Parse a single hex digit character into its numeric value, or -1 if
+// the character is not a valid hex digit.
+fn! http_hex_val(c: i32) -> i32 {
+    if c >= 48 and c <= 57  { return c - 48; };   // '0'..'9'
+    if c >= 97 and c <= 102 { return c - 87; };   // 'a'..'f'
+    if c >= 65 and c <= 70  { return c - 55; };   // 'A'..'F'
+    -1
+}
+
+// Decode HTTP/1.1 Transfer-Encoding: chunked per RFC 9112 §7.1.  Each
+// chunk is "<hex-len>[;ext]\r\n<data>\r\n" and the body ends with a
+// zero-length chunk.  We tolerate short/malformed input by returning
+// whatever we managed to decode rather than raising: real-world servers
+// occasionally truncate the final CRLF or the trailer block.
+fn! http_decode_chunked(encoded: str) -> str {
+    let chars: [i32] = str_to_chars(encoded);
+    let n: i32 = len(chars);
+    let mut out: [i32] = [];
+    let mut i: i32 = 0;
+    while i < n {
+        // Read hex length (stop at ';' for chunk-ext or '\r' for CRLF).
+        let mut size: i32 = 0;
+        let mut saw_digit: bool = false;
+        while i < n {
+            let c: i32 = chars[i];
+            let hv: i32 = http_hex_val(c);
+            if hv < 0 { break; };
+            size = size * 16 + hv;
+            saw_digit = true;
+            i = i + 1;
+        };
+        if not saw_digit { break; };
+        // Skip chunk-ext (anything up to CRLF).
+        while i < n and chars[i] != 13 { i = i + 1; };
+        if i + 1 < n and chars[i] == 13 and chars[i + 1] == 10 {
+            i = i + 2;
+        } else { break; };
+        if size == 0 { break; };                   // terminating chunk
+        // Copy `size` bytes of data.
+        let mut k: i32 = 0;
+        while k < size and i < n {
+            push(out, chars[i]);
+            i = i + 1;
+            k = k + 1;
+        };
+        // Trailing CRLF after data.
+        if i + 1 < n and chars[i] == 13 and chars[i + 1] == 10 {
+            i = i + 2;
+        } else if i < n and chars[i] == 10 {
+            i = i + 1;
+        };
+    };
+    str_from_chars(out)
+}
+
 // TLS fetch in its own function so defer tls_close is at function scope
 fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     vlog_msg("tls_connect", host);
@@ -107,9 +162,13 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
 
     // Receive response — parse headers to find Content-Length so we know
     // when the body is complete (some TLS servers never signal EOF).
+    // If the server uses Transfer-Encoding: chunked, terminate when we
+    // see the final zero-length chunk ("0\r\n\r\n") so we don't hang
+    // waiting for FIN.
     let mut raw_response: str = "";
     let mut headers_done: bool = false;
     let mut content_length: i32 = -1;
+    let mut is_chunked: bool = false;
     let mut body_start: i32 = 0;
     let mut done: bool = false;
     let mut recv_calls: i32 = 0;
@@ -128,6 +187,7 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
             raw_response = str_concat(raw_response, chunk);
 
             // Once we find the header/body separator, parse Content-Length
+            // and Transfer-Encoding.
             if not headers_done {
                 let sep: i32 = str_find(raw_response, "\r\n\r\n");
                 if sep >= 0 {
@@ -148,6 +208,16 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
                             Result::Err(_e) => {},
                         };
                     };
+                    let te_pos: i32 = str_find(header_block, "transfer-encoding:");
+                    if te_pos >= 0 {
+                        let after_te: str = str_slice(header_block, te_pos + 18, str_len(header_block));
+                        let te_end: i32 = str_find(after_te, "\r\n");
+                        let mut te_val: str = after_te;
+                        if te_end >= 0 { te_val = str_slice(after_te, 0, te_end); };
+                        if str_find(te_val, "chunked") >= 0 {
+                            is_chunked = true;
+                        };
+                    };
                 };
             };
 
@@ -164,6 +234,20 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
                     if str_len(raw_response) > expected_total {
                         raw_response = str_slice(raw_response, 0, expected_total);
                     };
+                    done = true;
+                };
+            };
+
+            // Chunked termination sentinel: the encoded body ends with a
+            // zero-length chunk followed by CRLF (and an optional trailer
+            // section, also CRLF-terminated).  We accept any of the common
+            // byte sequences "\r\n0\r\n\r\n" / "\n0\r\n\r\n" to be robust
+            // against minor server quirks.
+            if headers_done and is_chunked {
+                let tail: str = str_slice(raw_response,
+                    body_start, str_len(raw_response));
+                if str_find(tail, "\r\n0\r\n\r\n") >= 0 or
+                   str_find(tail, "\n0\r\n\r\n") >= 0 {
                     done = true;
                 };
             };
@@ -277,7 +361,10 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool, extra_headers: str)
     // `extra_headers` is the caller's opportunity to inject request-specific
     // headers (Cookie, Referer, etc.). It must include its own trailing
     // "\r\n" per header line, or be the empty string.
-    let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\n{extra_headers}\r\n";
+    // HTTP/1.1 + Connection: close — we advertise 1.1 so servers unlock
+    // chunked transfer-encoding and modern header behaviour, but we still
+    // close the socket after one response (no keep-alive pipelining).
+    let request: str = "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\n{extra_headers}\r\n";
 
     let mut raw_response: str = "";
 
@@ -367,9 +454,20 @@ fn! http_parse_raw_response(raw_response: str) -> HttpResponse {
     let headers: map = http_parse_headers(rest_headers);
     let set_cookies: [str] = http_extract_set_cookies(rest_headers);
 
+    // Decode Transfer-Encoding: chunked before returning the body so
+    // downstream code sees a plain octet stream.  Any `chunked` anywhere
+    // in the TE header value triggers decoding (RFC 9112 §6.1 allows a
+    // comma-separated list; chunked must be last but we don't validate).
     let mut content_type: str = "";
     if map_has(headers, "content-type") {
         content_type = map_get(headers, "content-type");
+    };
+    let mut te: str = "";
+    if map_has(headers, "transfer-encoding") {
+        te = str_to_lower(map_get(headers, "transfer-encoding"));
+    };
+    if str_find(te, "chunked") >= 0 {
+        body = http_decode_chunked(body);
     };
 
     let mut redirect_url: str = "";
@@ -398,7 +496,7 @@ fn! http_parse_raw_response(raw_response: str) -> HttpResponse {
 fn! http_post(host: str, port: i32, path: str, use_tls: bool,
               body: str, content_type: str, extra_headers: str) -> HttpResponse {
     let body_len: i32 = str_len(body);
-    let request: str = "POST {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{extra_headers}\r\n{body}";
+    let request: str = "POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{extra_headers}\r\n{body}";
 
     let mut raw_response: str = "";
     if use_tls {

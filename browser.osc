@@ -1760,7 +1760,33 @@ fn form_kind_is_editable(kind: str) -> bool {
     str_eq(kind, "text") or str_eq(kind, "search") or
     str_eq(kind, "email") or str_eq(kind, "url") or
     str_eq(kind, "tel") or str_eq(kind, "password") or
-    str_eq(kind, "number") or str_eq(kind, "textarea")
+    str_eq(kind, "number") or str_eq(kind, "textarea") or
+    str_eq(kind, "checkbox") or str_eq(kind, "radio") or
+    str_eq(kind, "select")
+}
+
+// True if `kind` is a checkbox or radio — these render a "[y/n]" prompt
+// in FormFill mode instead of free-text input.
+fn form_kind_is_toggle(kind: str) -> bool {
+    str_eq(kind, "checkbox") or str_eq(kind, "radio")
+}
+
+// What string to preload into form_input_buf when FormFill focuses this
+// field.  For toggles, we show the checked state as "y"/"n"; for
+// everything else we preload the field's current value.
+fn! form_display_value(f: FormField) -> str {
+    if form_kind_is_toggle(f.kind) {
+        if f.checked { "y" } else { "n" }
+    } else {
+        f.value
+    }
+}
+
+// Parse a toggle buffer string ("y"/"yes"/"on"/"1"/"true" → true).
+fn! form_parse_toggle(s: str) -> bool {
+    let low: str = str_to_lower(str_trim(s));
+    str_eq(low, "y") or str_eq(low, "yes") or
+    str_eq(low, "on") or str_eq(low, "1") or str_eq(low, "true")
 }
 
 // Resolve a form action string against the current page URL. Handles
@@ -1775,6 +1801,66 @@ fn! form_resolve_action(action: str, current_url: str) -> str {
         scheme: cu.scheme, host: cu.host, port: cu.port,
         path: rp, fragment: "",
     })
+}
+
+
+// Execute all <script> tags in DOM order. Inline scripts are eval'd
+// straight from their text content; external scripts (<script src="...">)
+// are fetched synchronously before execution using the current page's
+// fetch context.  This replaces the simpler js_run_scripts() path because
+// external scripts require url resolution + HTTP access, which js.osc
+// intentionally doesn't know about (it lives below http.osc in the import
+// graph).
+//
+// The function is recursive; it walks the whole subtree rooted at `idx`.
+fn! browser_exec_scripts(ctx: handle, nodes: [HtmlNode], idx: i32,
+                         fetch_host: str, fetch_port: i32, fetch_path: str,
+                         fetch_tls: bool, current_url: str) {
+    if idx < 0 { return; };
+    let node: HtmlNode = nodes[idx];
+    if str_eq(node.tag, "script") {
+        let src: str = html_get_attr(node, "src");
+        if str_len(src) > 0 {
+            // Resolve src against the current page and fetch.
+            let mut sc_host: str = fetch_host;
+            let mut sc_port: i32 = fetch_port;
+            let mut sc_path: str = src;
+            let mut sc_tls: bool = fetch_tls;
+            if str_contains(src, "://") {
+                let su: Url = url_parse(src);
+                sc_host = su.host;
+                sc_port = su.port;
+                sc_path = su.path;
+                sc_tls = str_eq(su.scheme, "https");
+            } else if str_starts_with(src, "//") {
+                let sch: str = if fetch_tls { "https" } else { "http" };
+                let su2: Url = url_parse(str_concat(sch, ":{src}"));
+                sc_host = su2.host;
+                sc_port = su2.port;
+                sc_path = su2.path;
+                sc_tls = str_eq(su2.scheme, "https");
+            } else {
+                sc_path = url_resolve_relative(fetch_path, src);
+            };
+            vlog_msg("js ext fetch", src);
+            let sresp: HttpResponse = http_get(sc_host, sc_port, sc_path, sc_tls, "");
+            if sresp.ok and str_len(sresp.body) > 0 {
+                let _r: str = js_engine_eval(ctx, sresp.body);
+            };
+        } else {
+            let content: str = html_get_text_content(nodes, idx);
+            if str_len(content) > 0 {
+                let _r: str = js_engine_eval(ctx, content);
+            };
+        };
+        return;
+    };
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        browser_exec_scripts(ctx, nodes, child,
+            fetch_host, fetch_port, fetch_path, fetch_tls, current_url);
+        child = nodes[child].next_sibling;
+    };
 }
 
 
@@ -1821,6 +1907,11 @@ fn! main() {
     let mut page_cache_bodies: [str] = [];
     let mut page_cache_cts: [str] = [];
     let mut page_cache_status: [i32] = [];
+
+    // Persistent cache: load text/* entries from previous session so
+    // repeat visits are instant even after a restart.
+    http_cache_load(page_cache_urls, page_cache_bodies,
+                    page_cache_cts, page_cache_status);
 
     // Cookie jar. Parallel arrays per repo convention (see cookies.osc
     // header for details). Loaded from %APPDATA%/oscaweb_cookies.txt at
@@ -2448,10 +2539,13 @@ fn! main() {
                         scroll_y = 0;
                         status_msg = current_url;
 
-                        // Set DOM for JS bridge and execute inline <script> tags
+                        // Set DOM for JS bridge and execute <script> tags
+                        // (both inline AND external <script src>).
                         js_bridge_set_dom(dom_nodes);
                         vlog_msg("js scripts start", "");
-                        js_run_scripts(js_ctx, dom_nodes, dom_root);
+                        browser_exec_scripts(js_ctx, dom_nodes, dom_root,
+                            fetch_host, fetch_port, fetch_path, fetch_tls,
+                            current_url);
                         vlog_msg("js scripts end", "");
                         if js_bridge_is_dom_dirty() > 0 {
                             js_bridge_clear_dom_dirty();
@@ -2703,7 +2797,7 @@ fn! main() {
                                 form_fill_pos = 0;
                                 while len(form_input_buf) > 0 { pop(form_input_buf); };
                                 let init_f: FormField = page_fields[form_fill_order[0]];
-                                let init_chars: [i32] = str_to_chars(init_f.value);
+                                let init_chars: [i32] = str_to_chars(form_display_value(init_f));
                                 for ici in 0..len(init_chars) {
                                     push(form_input_buf, init_chars[ici]);
                                 };
@@ -3068,7 +3162,19 @@ fn! main() {
                         // Commit current input buffer into the active field.
                         if form_fill_pos >= 0 and form_fill_pos < len(form_fill_order) {
                             let field_idx: i32 = form_fill_order[form_fill_pos];
-                            page_fields[field_idx].value = str_from_chars(form_input_buf);
+                            let buf_str: str = str_from_chars(form_input_buf);
+                            let fkind: str = page_fields[field_idx].kind;
+                            if form_kind_is_toggle(fkind) {
+                                page_fields[field_idx].checked = form_parse_toggle(buf_str);
+                                // Keep the existing value attr; fall back
+                                // to "on" when the page didn't set one so
+                                // forms_build_urlencoded emits name=on.
+                                if str_len(page_fields[field_idx].value) == 0 {
+                                    page_fields[field_idx].value = "on";
+                                };
+                            } else {
+                                page_fields[field_idx].value = buf_str;
+                            };
                         };
                         form_fill_pos = form_fill_pos + 1;
                         while len(form_input_buf) > 0 { pop(form_input_buf); };
@@ -3098,7 +3204,7 @@ fn! main() {
                             // Preload the next field's current value.
                             let next_f: FormField = page_fields[
                                 form_fill_order[form_fill_pos]];
-                            let next_chars: [i32] = str_to_chars(next_f.value);
+                            let next_chars: [i32] = str_to_chars(form_display_value(next_f));
                             for nci in 0..len(next_chars) {
                                 push(form_input_buf, next_chars[nci]);
                             };
@@ -3133,7 +3239,7 @@ fn! main() {
                                 form_fill_pos = 0;
                                 while len(form_input_buf) > 0 { pop(form_input_buf); };
                                 let pinit: FormField = page_fields[form_fill_order[0]];
-                                let pchars: [i32] = str_to_chars(pinit.value);
+                                let pchars: [i32] = str_to_chars(form_display_value(pinit));
                                 for pci in 0..len(pchars) {
                                     push(form_input_buf, pchars[pci]);
                                 };
@@ -3631,7 +3737,18 @@ fn! main() {
                                         form_fill_pos < len(form_fill_order) {
                     page_fields[form_fill_order[form_fill_pos]].name
                 } else { "" };
-                let prompt: str = "Form [{pos_disp}/{total}] {field_name}: ";
+                let field_kind: str = if form_fill_pos >= 0 and
+                                        form_fill_pos < len(form_fill_order) {
+                    page_fields[form_fill_order[form_fill_pos]].kind
+                } else { "" };
+                let kind_hint: str = if form_kind_is_toggle(field_kind) {
+                    " [y/n]"
+                } else if str_eq(field_kind, "select") {
+                    " [select]"
+                } else if str_eq(field_kind, "password") {
+                    " [password]"
+                } else { "" };
+                let prompt: str = "Form [{pos_disp}/{total}] {field_name}{kind_hint}: ";
                 gfx_draw_text(4, sy + 8, prompt, theme[T_FG], FONT_DEFAULT);
                 let prompt_w: i32 = gfx_text_width(prompt, FONT_DEFAULT);
                 let val: str = str_from_chars(form_input_buf);
@@ -3856,6 +3973,9 @@ fn! main() {
             sleep_ms(16);
     };
 
+    // Flush persistent HTTP cache to disk so next launch benefits.
+    http_cache_save(page_cache_urls, page_cache_bodies,
+                    page_cache_cts, page_cache_status);
     js_engine_destroy(js_ctx);
     canvas_close()
 }

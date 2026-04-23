@@ -332,13 +332,470 @@ static JSValue js_element_get_id(JSContext *ctx, JSValueConst this_val) {
     return JS_NewString(ctx, "");
 }
 
+/* element.className getter/setter (aliases class attribute) */
+static JSValue js_element_get_className(JSContext *ctx, JSValueConst this_val) {
+    int32_t *data = (int32_t *)JS_GetOpaque(this_val, js_element_class_id);
+    if (!data) return JS_EXCEPTION;
+    HtmlNode *node = dom_get_node(*data);
+    if (!node) return JS_NewString(ctx, "");
+    osc_str key = osc_str_from_cstr("class");
+    if (osc_map_has(node->attrs, key)) {
+        osc_str val = osc_map_get(node->attrs, key);
+        char *s = osc_str_to_cstr_alloc(val);
+        JSValue r = JS_NewString(ctx, s ? s : "");
+        free(s);
+        return r;
+    }
+    return JS_NewString(ctx, "");
+}
+
+static JSValue js_element_set_className(JSContext *ctx, JSValueConst this_val,
+                                         JSValueConst val) {
+    int32_t *data = (int32_t *)JS_GetOpaque(this_val, js_element_class_id);
+    if (!data) return JS_EXCEPTION;
+    HtmlNode *node = dom_get_node(*data);
+    if (!node) return JS_EXCEPTION;
+    const char *str = JS_ToCString(ctx, val);
+    if (!str) return JS_EXCEPTION;
+    osc_str key = osc_str_concat(osc_global_arena, osc_str_from_cstr("class"), osc_str_from_cstr(""));
+    osc_str v   = osc_str_concat(osc_global_arena, osc_str_from_cstr(str), osc_str_from_cstr(""));
+    JS_FreeCString(ctx, str);
+    osc_map_set(osc_global_arena, node->attrs, key, v);
+    g_dom_dirty = 1;
+    return JS_UNDEFINED;
+}
+
+/* ── classList helpers ─────────────────────────────────────
+ * Class list is a thin view over the `class` attribute.  We
+ * operate on whitespace-separated tokens.
+ */
+
+static int cl_has_token(const char *s, int slen, const char *tok, int tlen) {
+    if (tlen == 0) return 0;
+    int i = 0;
+    while (i < slen) {
+        while (i < slen && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
+        int start = i;
+        while (i < slen && s[i] != ' ' && s[i] != '\t' && s[i] != '\n' && s[i] != '\r') i++;
+        if (i - start == tlen && memcmp(s + start, tok, tlen) == 0) return 1;
+    }
+    return 0;
+}
+
+static osc_str cl_add_token(const char *s, int slen, const char *tok, int tlen) {
+    if (cl_has_token(s, slen, tok, tlen)) {
+        return osc_str_concat(osc_global_arena, (osc_str){s, slen}, osc_str_from_cstr(""));
+    }
+    char *buf = (char *)malloc(slen + tlen + 2);
+    int out = 0;
+    if (slen > 0) {
+        memcpy(buf, s, slen);
+        out = slen;
+        /* trim trailing whitespace */
+        while (out > 0 && (buf[out-1] == ' ' || buf[out-1] == '\t')) out--;
+        if (out > 0) buf[out++] = ' ';
+    }
+    memcpy(buf + out, tok, tlen);
+    out += tlen;
+    osc_str r = osc_str_concat(osc_global_arena, (osc_str){buf, out}, osc_str_from_cstr(""));
+    free(buf);
+    return r;
+}
+
+static osc_str cl_remove_token(const char *s, int slen, const char *tok, int tlen) {
+    char *buf = (char *)malloc(slen + 1);
+    int out = 0;
+    int i = 0;
+    while (i < slen) {
+        int ws_start = i;
+        while (i < slen && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
+        int tok_start = i;
+        while (i < slen && s[i] != ' ' && s[i] != '\t' && s[i] != '\n' && s[i] != '\r') i++;
+        int tok_end = i;
+        int this_len = tok_end - tok_start;
+        if (this_len == tlen && memcmp(s + tok_start, tok, tlen) == 0) {
+            /* drop token and preceding whitespace */
+            continue;
+        }
+        /* preserve separator unless this is the very first token */
+        if (out > 0) {
+            buf[out++] = ' ';
+        } else if (ws_start < tok_start) {
+            /* leading whitespace — skip */
+        }
+        memcpy(buf + out, s + tok_start, this_len);
+        out += this_len;
+    }
+    osc_str r = osc_str_concat(osc_global_arena, (osc_str){buf, out}, osc_str_from_cstr(""));
+    free(buf);
+    return r;
+}
+
+static JSClassID js_classlist_class_id;
+
+static JSClassDef js_classlist_class = {
+    "DOMTokenList",
+    .finalizer = js_element_finalizer,
+};
+
+static JSValue js_classlist_wrap(JSContext *ctx, int32_t node_idx) {
+    JSValue obj = JS_NewObjectClass(ctx, js_classlist_class_id);
+    if (JS_IsException(obj)) return obj;
+    int32_t *data = (int32_t *)malloc(sizeof(int32_t));
+    *data = node_idx;
+    JS_SetOpaque(obj, data);
+    return obj;
+}
+
+static int classlist_get_node_cls(JSValueConst this_val, HtmlNode **out_node, osc_str *out_cls) {
+    int32_t *data = (int32_t *)JS_GetOpaque(this_val, js_classlist_class_id);
+    if (!data) return 0;
+    HtmlNode *node = dom_get_node(*data);
+    if (!node) return 0;
+    *out_node = node;
+    osc_str key = osc_str_from_cstr("class");
+    if (osc_map_has(node->attrs, key)) {
+        *out_cls = osc_map_get(node->attrs, key);
+    } else {
+        out_cls->data = "";
+        out_cls->len = 0;
+    }
+    return 1;
+}
+
+static void classlist_write_back(HtmlNode *node, osc_str val) {
+    osc_str key = osc_str_concat(osc_global_arena, osc_str_from_cstr("class"), osc_str_from_cstr(""));
+    osc_map_set(osc_global_arena, node->attrs, key, val);
+    g_dom_dirty = 1;
+}
+
+static JSValue js_classlist_contains(JSContext *ctx, JSValueConst this_val,
+                                      int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_FALSE;
+    HtmlNode *node = NULL; osc_str cls = {"", 0};
+    if (!classlist_get_node_cls(this_val, &node, &cls)) return JS_FALSE;
+    const char *tok = JS_ToCString(ctx, argv[0]);
+    if (!tok) return JS_FALSE;
+    int r = cl_has_token(cls.data, cls.len, tok, (int)strlen(tok));
+    JS_FreeCString(ctx, tok);
+    return r ? JS_TRUE : JS_FALSE;
+}
+
+static JSValue js_classlist_add(JSContext *ctx, JSValueConst this_val,
+                                 int argc, JSValueConst *argv) {
+    HtmlNode *node = NULL; osc_str cls = {"", 0};
+    if (!classlist_get_node_cls(this_val, &node, &cls)) return JS_UNDEFINED;
+    for (int i = 0; i < argc; i++) {
+        const char *tok = JS_ToCString(ctx, argv[i]);
+        if (!tok) continue;
+        cls = cl_add_token(cls.data, cls.len, tok, (int)strlen(tok));
+        JS_FreeCString(ctx, tok);
+    }
+    classlist_write_back(node, cls);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_classlist_remove(JSContext *ctx, JSValueConst this_val,
+                                    int argc, JSValueConst *argv) {
+    HtmlNode *node = NULL; osc_str cls = {"", 0};
+    if (!classlist_get_node_cls(this_val, &node, &cls)) return JS_UNDEFINED;
+    for (int i = 0; i < argc; i++) {
+        const char *tok = JS_ToCString(ctx, argv[i]);
+        if (!tok) continue;
+        cls = cl_remove_token(cls.data, cls.len, tok, (int)strlen(tok));
+        JS_FreeCString(ctx, tok);
+    }
+    classlist_write_back(node, cls);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_classlist_toggle(JSContext *ctx, JSValueConst this_val,
+                                    int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_FALSE;
+    HtmlNode *node = NULL; osc_str cls = {"", 0};
+    if (!classlist_get_node_cls(this_val, &node, &cls)) return JS_FALSE;
+    const char *tok = JS_ToCString(ctx, argv[0]);
+    if (!tok) return JS_FALSE;
+    int tlen = (int)strlen(tok);
+    int has = cl_has_token(cls.data, cls.len, tok, tlen);
+    if (has) {
+        cls = cl_remove_token(cls.data, cls.len, tok, tlen);
+    } else {
+        cls = cl_add_token(cls.data, cls.len, tok, tlen);
+    }
+    JS_FreeCString(ctx, tok);
+    classlist_write_back(node, cls);
+    return has ? JS_FALSE : JS_TRUE;
+}
+
+static const JSCFunctionListEntry js_classlist_proto_funcs[] = {
+    JS_CFUNC_DEF("contains", 1, js_classlist_contains),
+    JS_CFUNC_DEF("add", 1, js_classlist_add),
+    JS_CFUNC_DEF("remove", 1, js_classlist_remove),
+    JS_CFUNC_DEF("toggle", 1, js_classlist_toggle),
+};
+
+/* element.classList getter */
+static JSValue js_element_get_classList(JSContext *ctx, JSValueConst this_val) {
+    int32_t *data = (int32_t *)JS_GetOpaque(this_val, js_element_class_id);
+    if (!data) return JS_EXCEPTION;
+    return js_classlist_wrap(ctx, *data);
+}
+
+/* ── querySelector / querySelectorAll ──────────────────────
+ * Minimal selector matcher in C.  Supports these selector
+ * shapes (comma list of any of these):
+ *   tag         e.g. div
+ *   #id         e.g. #main
+ *   .class      e.g. .btn
+ *   *           universal
+ *   compound    e.g. a.btn, div#main
+ *   descendant  e.g. nav a, #main .title
+ * Returns the first (querySelector) or all (querySelectorAll)
+ * matches in document order.
+ */
+
+static int qs_has_class(osc_str class_attr, const char *tok, int tlen) {
+    return cl_has_token(class_attr.data, class_attr.len, tok, tlen);
+}
+
+/* Match a single simple selector against a node. */
+static int qs_simple_match(HtmlNode *node, const char *s, int len) {
+    if (node->is_text) return 0;
+    if (len == 0) return 0;
+    if (len == 1 && s[0] == '*') return 1;
+    /* Split into tag / id / class pieces by scanning #/./ markers. */
+    int tag_start = 0, tag_end = 0;
+    if (s[0] != '#' && s[0] != '.') {
+        int i = 0;
+        while (i < len && s[i] != '#' && s[i] != '.') i++;
+        tag_end = i;
+    }
+    if (tag_end > tag_start) {
+        if (node->tag.len != tag_end - tag_start) return 0;
+        for (int j = 0; j < tag_end; j++) {
+            char a = node->tag.data[j];
+            if (a >= 'A' && a <= 'Z') a = a + ('a' - 'A');
+            if (a != s[j]) return 0;
+        }
+    }
+    int i = tag_end;
+    osc_str id_key = osc_str_from_cstr("id");
+    osc_str class_attr = {"", 0};
+    int have_class_attr = 0;
+    while (i < len) {
+        char marker = s[i];
+        i++;
+        int pstart = i;
+        while (i < len && s[i] != '#' && s[i] != '.') i++;
+        int plen = i - pstart;
+        if (plen == 0) return 0;
+        if (marker == '#') {
+            if (!osc_map_has(node->attrs, id_key)) return 0;
+            osc_str nid = osc_map_get(node->attrs, id_key);
+            if (nid.len != plen || memcmp(nid.data, s + pstart, plen) != 0) return 0;
+        } else if (marker == '.') {
+            if (!have_class_attr) {
+                osc_str ck = osc_str_from_cstr("class");
+                if (osc_map_has(node->attrs, ck)) class_attr = osc_map_get(node->attrs, ck);
+                have_class_attr = 1;
+            }
+            if (!qs_has_class(class_attr, s + pstart, plen)) return 0;
+        }
+    }
+    return 1;
+}
+
+/* Match a selector compound chain (space-separated descendants)
+ * against a node index; returns 1 if this node satisfies the
+ * rightmost compound AND each prior compound matches some
+ * ancestor (right-to-left, greedy).
+ */
+static int qs_chain_match(int32_t idx, const char *s, int len, int32_t *parent_of);
+
+static int qs_count_ancestors(int32_t idx, int32_t *parent_of) {
+    int n = 0;
+    while (parent_of[idx] >= 0) { idx = parent_of[idx]; n++; }
+    return n;
+}
+
+/* Split the selector string at top-level spaces (no commas here). */
+static int qs_chain_match(int32_t idx, const char *s, int len, int32_t *parent_of) {
+    /* Find last space in s — that's the subject. */
+    int last_space = -1;
+    for (int i = len - 1; i >= 0; i--) {
+        if (s[i] == ' ') { last_space = i; break; }
+    }
+    HtmlNode *node = dom_get_node(idx);
+    if (!node) return 0;
+    if (last_space < 0) {
+        return qs_simple_match(node, s, len);
+    }
+    /* subject part */
+    const char *subj = s + last_space + 1;
+    int subjlen = len - last_space - 1;
+    if (!qs_simple_match(node, subj, subjlen)) return 0;
+    /* remaining left part must match some ancestor chain */
+    int lhs_len = last_space;
+    /* trim trailing space */
+    while (lhs_len > 0 && s[lhs_len - 1] == ' ') lhs_len--;
+    /* Walk ancestors upward trying to satisfy the lhs chain recursively. */
+    int32_t cur = parent_of[idx];
+    while (cur >= 0) {
+        if (qs_chain_match(cur, s, lhs_len, parent_of)) return 1;
+        cur = parent_of[cur];
+    }
+    return 0;
+}
+
+/* Build parent_of[] for current DOM. Returns NULL on OOM. */
+static int32_t *qs_build_parents(int32_t *out_count) {
+    if (!g_dom_nodes) { *out_count = 0; return NULL; }
+    int32_t n = osc_array_len(g_dom_nodes);
+    int32_t *p = (int32_t *)malloc(sizeof(int32_t) * (n > 0 ? n : 1));
+    if (!p) { *out_count = 0; return NULL; }
+    for (int32_t i = 0; i < n; i++) p[i] = -1;
+    for (int32_t i = 0; i < n; i++) {
+        HtmlNode *node = (HtmlNode *)osc_array_get(g_dom_nodes, i);
+        int32_t c = node->first_child;
+        while (c != -1) {
+            if (c >= 0 && c < n) p[c] = i;
+            HtmlNode *cn = (HtmlNode *)osc_array_get(g_dom_nodes, c);
+            c = cn->next_sibling;
+        }
+    }
+    *out_count = n;
+    return p;
+}
+
+/* Iterate selector list (comma-separated) and invoke cb(idx) for matches.
+ * Returns the first matching index (for qs) or -1.
+ * If collect is not NULL, it's a JS array we append all matches to.
+ */
+static int32_t qs_run(JSContext *ctx, const char *sel, JSValue collect) {
+    int slen = (int)strlen(sel);
+    int32_t n = 0;
+    int32_t *parents = qs_build_parents(&n);
+    if (!parents) return -1;
+    int32_t first = -1;
+    uint32_t out_i = 0;
+    /* split selector at top-level commas */
+    int start = 0;
+    int i = 0;
+    while (i <= slen) {
+        if (i == slen || sel[i] == ',') {
+            /* trim */
+            int a = start, b = i;
+            while (a < b && (sel[a] == ' ' || sel[a] == '\t')) a++;
+            while (b > a && (sel[b-1] == ' ' || sel[b-1] == '\t')) b--;
+            if (b > a) {
+                /* try each node */
+                for (int32_t idx = 0; idx < n; idx++) {
+                    HtmlNode *node = (HtmlNode *)osc_array_get(g_dom_nodes, idx);
+                    if (node->is_text) continue;
+                    if (qs_chain_match(idx, sel + a, b - a, parents)) {
+                        if (first < 0) first = idx;
+                        if (!JS_IsUndefined(collect)) {
+                            JS_SetPropertyUint32(ctx, collect, out_i++, js_element_wrap(ctx, idx));
+                        } else {
+                            free(parents);
+                            return first;
+                        }
+                    }
+                }
+            }
+            start = i + 1;
+        }
+        i++;
+    }
+    free(parents);
+    return first;
+}
+
+static JSValue js_doc_querySelector(JSContext *ctx, JSValueConst this_val,
+                                     int argc, JSValueConst *argv) {
+    if (!g_dom_nodes || argc < 1) return JS_NULL;
+    const char *sel = JS_ToCString(ctx, argv[0]);
+    if (!sel) return JS_NULL;
+    int32_t idx = qs_run(ctx, sel, JS_UNDEFINED);
+    JS_FreeCString(ctx, sel);
+    return idx >= 0 ? js_element_wrap(ctx, idx) : JS_NULL;
+}
+
+static JSValue js_doc_querySelectorAll(JSContext *ctx, JSValueConst this_val,
+                                        int argc, JSValueConst *argv) {
+    JSValue arr = JS_NewArray(ctx);
+    if (!g_dom_nodes || argc < 1) return arr;
+    const char *sel = JS_ToCString(ctx, argv[0]);
+    if (!sel) return arr;
+    qs_run(ctx, sel, arr);
+    JS_FreeCString(ctx, sel);
+    return arr;
+}
+
+static JSValue js_element_querySelector(JSContext *ctx, JSValueConst this_val,
+                                         int argc, JSValueConst *argv) {
+    /* Simplification: element.querySelector behaves like document.querySelector
+     * for v1. Per-subtree scoping would need extra work. */
+    return js_doc_querySelector(ctx, this_val, argc, argv);
+}
+
+static JSValue js_element_querySelectorAll(JSContext *ctx, JSValueConst this_val,
+                                            int argc, JSValueConst *argv) {
+    return js_doc_querySelectorAll(ctx, this_val, argc, argv);
+}
+
+/* document.getElementsByClassName */
+static JSValue js_doc_getElementsByClassName(JSContext *ctx, JSValueConst this_val,
+                                              int argc, JSValueConst *argv) {
+    JSValue arr = JS_NewArray(ctx);
+    if (!g_dom_nodes || argc < 1) return arr;
+    const char *cls = JS_ToCString(ctx, argv[0]);
+    if (!cls) return arr;
+    int clen = (int)strlen(cls);
+    int32_t count = osc_array_len(g_dom_nodes);
+    uint32_t found = 0;
+    osc_str ck = osc_str_from_cstr("class");
+    for (int32_t i = 0; i < count; i++) {
+        HtmlNode *node = (HtmlNode *)osc_array_get(g_dom_nodes, i);
+        if (node->is_text) continue;
+        if (!osc_map_has(node->attrs, ck)) continue;
+        osc_str ca = osc_map_get(node->attrs, ck);
+        if (cl_has_token(ca.data, ca.len, cls, clen)) {
+            JS_SetPropertyUint32(ctx, arr, found++, js_element_wrap(ctx, i));
+        }
+    }
+    JS_FreeCString(ctx, cls);
+    return arr;
+}
+
+/* addEventListener stub — just accepts the call silently so scripts
+ * that register listeners (DOMContentLoaded, click, etc.) don't throw.
+ * We don't dispatch events in this renderer.
+ */
+static JSValue js_element_addEventListener(JSContext *ctx, JSValueConst this_val,
+                                            int argc, JSValueConst *argv) {
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_removeEventListener(JSContext *ctx, JSValueConst this_val,
+                                               int argc, JSValueConst *argv) {
+    return JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("tagName", js_element_get_tagName, NULL),
     JS_CGETSET_DEF("textContent", js_element_get_textContent, js_element_set_textContent),
     JS_CGETSET_DEF("children", js_element_get_children, NULL),
     JS_CGETSET_DEF("id", js_element_get_id, NULL),
+    JS_CGETSET_DEF("className", js_element_get_className, js_element_set_className),
+    JS_CGETSET_DEF("classList", js_element_get_classList, NULL),
     JS_CFUNC_DEF("getAttribute", 1, js_element_getAttribute),
     JS_CFUNC_DEF("setAttribute", 2, js_element_setAttribute),
+    JS_CFUNC_DEF("querySelector", 1, js_element_querySelector),
+    JS_CFUNC_DEF("querySelectorAll", 1, js_element_querySelectorAll),
+    JS_CFUNC_DEF("addEventListener", 2, js_element_addEventListener),
+    JS_CFUNC_DEF("removeEventListener", 2, js_element_removeEventListener),
 };
 
 /* ── document object ─────────────────────────────────────── */
@@ -402,6 +859,14 @@ static void js_register_dom(JSContext *ctx) {
                                 sizeof(js_element_proto_funcs) / sizeof(js_element_proto_funcs[0]));
     JS_SetClassProto(ctx, js_element_class_id, proto);
 
+    /* Register DOMTokenList (classList) class */
+    JS_NewClassID(JS_GetRuntime(ctx), &js_classlist_class_id);
+    JS_NewClass(JS_GetRuntime(ctx), js_classlist_class_id, &js_classlist_class);
+    JSValue cl_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, cl_proto, js_classlist_proto_funcs,
+                                sizeof(js_classlist_proto_funcs) / sizeof(js_classlist_proto_funcs[0]));
+    JS_SetClassProto(ctx, js_classlist_class_id, cl_proto);
+
     /* Register document object */
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue doc = JS_NewObject(ctx);
@@ -409,6 +874,14 @@ static void js_register_dom(JSContext *ctx) {
         JS_NewCFunction(ctx, js_doc_getElementById, "getElementById", 1));
     JS_SetPropertyStr(ctx, doc, "getElementsByTagName",
         JS_NewCFunction(ctx, js_doc_getElementsByTagName, "getElementsByTagName", 1));
+    JS_SetPropertyStr(ctx, doc, "getElementsByClassName",
+        JS_NewCFunction(ctx, js_doc_getElementsByClassName, "getElementsByClassName", 1));
+    JS_SetPropertyStr(ctx, doc, "querySelector",
+        JS_NewCFunction(ctx, js_doc_querySelector, "querySelector", 1));
+    JS_SetPropertyStr(ctx, doc, "querySelectorAll",
+        JS_NewCFunction(ctx, js_doc_querySelectorAll, "querySelectorAll", 1));
+    JS_SetPropertyStr(ctx, doc, "addEventListener",
+        JS_NewCFunction(ctx, js_element_addEventListener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, global, "document", doc);
     JS_FreeValue(ctx, global);
 }
