@@ -216,7 +216,17 @@ fn! url_looks_like_url(s: str) -> bool {
 }
 
 fn! url_resolve_relative(base_path: str, relative: str) -> str {
-    // If relative starts with "/", return it as-is
+    // Safety: if caller accidentally passes an absolute URL (scheme://...),
+    // return it unchanged rather than prepending the base directory.  This
+    // prevents malformed URLs like "/wiki/https://other.com/x" when link
+    // hrefs are passed directly without pre-filtering.
+    if str_contains(relative, "://") {
+        return relative;
+    };
+
+    // If relative starts with "/", return it as-is.  Note: this also matches
+    // protocol-relative URLs ("//host/path") — callers that need to honour
+    // those must pre-filter (see url_resolve_full).
     if str_starts_with(relative, "/") {
         return relative;
     };
@@ -236,4 +246,43 @@ fn! url_resolve_relative(base_path: str, relative: str) -> str {
     };
 
     str_concat(dir, relative)
+}
+
+// Resolve an href (from a link, form action, etc.) against the currently
+// loaded page URL, returning an absolute URL string.  Handles:
+//   - Absolute URLs with scheme ("https://...") -> returned unchanged
+//   - Protocol-relative ("//host/path") -> inherits scheme from current URL
+//   - Root-relative ("/path") -> reuses current scheme/host/port
+//   - Path-relative ("page.html") -> resolved against current directory
+//   - Fragment-only ("#section") -> keeps current path
+// This is the single correct entry point for navigation resolution; the
+// per-callsite inline variants miss at least one of these cases.
+fn! url_resolve_full(current_url: str, href: str) -> str {
+    if str_len(href) == 0 { return current_url; };
+
+    // Absolute URL — do not rewrite.
+    if str_contains(href, "://") { return href; };
+
+    let cu: Url = url_parse(current_url);
+
+    // Protocol-relative: inherit scheme, discard current host.
+    if str_starts_with(href, "//") {
+        let rest: str = str_slice(href, 2, str_len(href));
+        return "{cu.scheme}://{rest}";
+    };
+
+    // Fragment-only: keep the full current URL's path/query, swap fragment.
+    if str_starts_with(href, "#") {
+        let frag: str = str_slice(href, 1, str_len(href));
+        return url_to_string(Url {
+            scheme: cu.scheme, host: cu.host, port: cu.port,
+            path: cu.path, fragment: frag,
+        });
+    };
+
+    let rp: str = url_resolve_relative(cu.path, href);
+    url_to_string(Url {
+        scheme: cu.scheme, host: cu.host, port: cu.port,
+        path: rp, fragment: "",
+    })
 }

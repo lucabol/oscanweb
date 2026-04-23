@@ -1790,17 +1790,11 @@ fn! form_parse_toggle(s: str) -> bool {
 }
 
 // Resolve a form action string against the current page URL. Handles
-// absolute URLs (http[s]://), origin-relative (/foo), path-relative
-// (foo), and empty (submit to self).
+// absolute URLs (http[s]://), protocol-relative (//host/...),
+// origin-relative (/foo), path-relative (foo), and empty (submit to self).
 fn! form_resolve_action(action: str, current_url: str) -> str {
     if str_len(action) == 0 { return current_url; };
-    if str_contains(action, "://") { return action; };
-    let cu: Url = url_parse(current_url);
-    let rp: str = url_resolve_relative(cu.path, action);
-    url_to_string(Url {
-        scheme: cu.scheme, host: cu.host, port: cu.port,
-        path: rp, fragment: "",
-    })
+    url_resolve_full(current_url, action)
 }
 
 
@@ -2437,6 +2431,8 @@ fn! main() {
                 let mut fetch_path: str = u.path;
                 let mut fetch_tls: bool = use_tls;
                 let mut done: bool = false;
+                let mut load_failed: bool = false;
+                let mut load_error: str = "";
 
                 while not done and redir_count < MAX_REDIRECTS {
                     vlog_msg("fetch start", fetch_host);
@@ -2638,6 +2634,8 @@ fn! main() {
                         error_msg = resp.error;
                         status_msg = "Error: {resp.error}";
                         page_loaded = false;
+                        load_failed = true;
+                        load_error = resp.error;
                         done = true;
                     };
                 };
@@ -2645,6 +2643,47 @@ fn! main() {
                 if redir_count >= MAX_REDIRECTS {
                     error_msg = "Too many redirects";
                     status_msg = "Error: too many redirects";
+                    load_failed = true;
+                    load_error = "Too many redirects";
+                };
+
+                // If the fetch failed for any reason, synthesize a small
+                // error page so the URL bar, render pass, and input handlers
+                // are all in a consistent state. Without this, the previous
+                // page's DOM stays on screen while current_url points to the
+                // new URL, which looks like the browser silently "went back"
+                // or hung.
+                if load_failed {
+                    while len(dom_nodes) > 0 { pop(dom_nodes); };
+                    while len(dom_styles) > 0 { pop(dom_styles); };
+                    img_cache_idx = map_new();
+                    while len(img_cache_data) > 0 { pop(img_cache_data); };
+                    while len(img_cache_w) > 0 { pop(img_cache_w); };
+                    while len(img_cache_h) > 0 { pop(img_cache_h); };
+
+                    let err_body: str = "<html><body><h1>Failed to load page</h1><p><b>URL:</b> {nav_url}</p><p><b>Error:</b> {load_error}</p><p>Press <b>H</b> to go back, <b>o</b> to open a new URL, or <b>r</b> to retry.</p></body></html>";
+                    dom_root = html_parse(dom_nodes, err_body);
+                    page_loaded = true;
+                    scroll_y = 0;
+
+                    while len(page_forms) > 0 { pop(page_forms); };
+                    while len(page_fields) > 0 { pop(page_fields); };
+                    while len(form_fill_order) > 0 { pop(form_fill_order); };
+                    form_fill_target = -1;
+                    form_fill_pos = 0;
+                    while len(form_input_buf) > 0 { pop(form_input_buf); };
+
+                    let mut err_rules: [CssRule] = [];
+                    css_compute_all(dom_nodes, dom_root, err_rules, dom_styles);
+
+                    while len(outline_idx) > 0 { pop(outline_idx); };
+                    while len(outline_y) > 0 { pop(outline_y); };
+                    while len(outline_text) > 0 { pop(outline_text); };
+                    while len(outline_level) > 0 { pop(outline_level); };
+                    build_outline(dom_nodes, dom_root,
+                                  outline_idx, outline_level, outline_text);
+                    for _oy in 0..len(outline_idx) { push(outline_y, -1); };
+                    has_chrome = false;
                 };
 
                 while len(url_buf) > 0 { pop(url_buf); };
@@ -3087,17 +3126,7 @@ fn! main() {
                             if str_eq(follow_links[li].label, typed) {
                                 let href: str = follow_links[li].href;
                                 if str_len(href) > 0 {
-                                    if str_contains(href, "://") {
-                                        nav_url = href;
-                                    } else {
-                                        let cu: Url = url_parse(current_url);
-                                        let rp: str = url_resolve_relative(cu.path, href);
-                                        nav_url = url_to_string(Url {
-                                            scheme: cu.scheme, host: cu.host,
-                                            port: cu.port, path: rp,
-                                            fragment: "",
-                                        });
-                                    };
+                                    nav_url = url_resolve_full(current_url, href);
                                     needs_navigate = true;
                                 };
                                 mode = BrowserMode::Normal;
@@ -3306,17 +3335,7 @@ fn! main() {
                             if mx >= lk.x and mx < lk.x + lk.w and my >= lk.y and my < lk.y + lk.h {
                                 let href: str = lk.href;
                                 if str_len(href) > 0 {
-                                    if str_contains(href, "://") {
-                                        nav_url = href;
-                                    } else {
-                                        let cu: Url = url_parse(current_url);
-                                        let rp: str = url_resolve_relative(cu.path, href);
-                                        nav_url = url_to_string(Url {
-                                            scheme: cu.scheme, host: cu.host,
-                                            port: cu.port, path: rp,
-                                            fragment: "",
-                                        });
-                                    };
+                                    nav_url = url_resolve_full(current_url, href);
                                     needs_navigate = true;
                                 };
                                 break;

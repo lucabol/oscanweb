@@ -130,5 +130,39 @@ fn! main() {
     assert_eq_str(url_unwrap_tracking("https://example.com/page"), "https://example.com/page", "unwrap passthrough normal url");
     assert_eq_str(url_unwrap_tracking("/local/path"), "/local/path", "unwrap passthrough relative path");
 
+    // url_resolve_relative: safety for accidental absolute URLs
+    assert_eq_str(url_resolve_relative("/dir/page", "https://other.com/x"),
+                  "https://other.com/x",
+                  "resolve_relative passes through absolute https");
+    assert_eq_str(url_resolve_relative("/dir/page", "http://other.com/x"),
+                  "http://other.com/x",
+                  "resolve_relative passes through absolute http");
+
+    // url_resolve_full: the real entry point for link navigation
+    assert_eq_str(url_resolve_full("https://en.wikipedia.org/wiki/HTTP", "/wiki/Hypertext"),
+                  "https://en.wikipedia.org/wiki/Hypertext",
+                  "resolve_full root-relative");
+    assert_eq_str(url_resolve_full("https://en.wikipedia.org/wiki/HTTP", "Hypertext"),
+                  "https://en.wikipedia.org/wiki/Hypertext",
+                  "resolve_full path-relative");
+    assert_eq_str(url_resolve_full("https://en.wikipedia.org/wiki/HTTP", "https://example.com/x"),
+                  "https://example.com/x",
+                  "resolve_full absolute https unchanged");
+    assert_eq_str(url_resolve_full("https://en.wikipedia.org/wiki/HTTP", "http://example.com/x"),
+                  "http://example.com/x",
+                  "resolve_full absolute http unchanged");
+    assert_eq_str(url_resolve_full("https://en.wikipedia.org/wiki/HTTP", "//upload.wikimedia.org/foo.png"),
+                  "https://upload.wikimedia.org/foo.png",
+                  "resolve_full protocol-relative inherits https");
+    assert_eq_str(url_resolve_full("http://example.com/page", "//other.com/bar"),
+                  "http://other.com/bar",
+                  "resolve_full protocol-relative inherits http");
+    assert_eq_str(url_resolve_full("https://en.wikipedia.org/wiki/HTTP", "#History"),
+                  "https://en.wikipedia.org/wiki/HTTP#History",
+                  "resolve_full fragment-only keeps path");
+    assert_eq_str(url_resolve_full("https://example.com/a/b/c.html", "d.html"),
+                  "https://example.com/a/b/d.html",
+                  "resolve_full sibling resolution");
+
     println("=== URL Tests Complete ===");
 }
