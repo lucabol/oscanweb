@@ -25,7 +25,6 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - [CSS](#css)
 - [Networking](#networking)
 - [Testing](#testing)
-- [File Structure](#file-structure)
 - [Reader Mode, Bookmarks & Zoom](#reader-mode-bookmarks--zoom)
 - [Limitations](#limitations)
 - [Manual Test Plan](#manual-test-plan)
@@ -36,27 +35,28 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 
 ### Key Features
 
-- **Vim-like keyboard navigation** — scroll, follow links, search, and navigate entirely from the keyboard
-- **HTTP page cache** — 20-entry FIFO cache keyed by URL; back/forward and repeat visits are instant. Bypassed on `r` (reload).
-- **Cookie jar** — minimal RFC 6265 subset: `Set-Cookie` parsing (Max-Age, Expires, Secure, Domain, Path), `Cookie:` header injection on main-document fetches, persisted across restarts. Clear with `gC`.
-- **Form submission (GET and POST)** — press `gf` to fill `<form>` fields sequentially via status-bar prompts, then submit. Pages with multiple forms show a letter-labeled picker (`[a]`, `[b]`, …) so you can choose which form to fill. Supports text, search, email, url, tel, password, number, textarea, **checkbox**/**radio** (type `y`/`n` or `yes`/`no`/`on`/`off`/`1`/`0` at the prompt), and `<select>` (type the option value). The status-bar hint shows the field type in brackets, e.g. `agree [y/n]` or `country [select]`. Submit buttons and hidden fields are included automatically. POST forms dispatch `application/x-www-form-urlencoded` bodies; redirects after a POST follow as GETs.
-- **Omnibox search** — type any query in the address bar; non-URL input is sent to DuckDuckGo automatically, with autocomplete from your browsing history
-- **Readable article column** — when a page has `<main>` or `<article>`, that subtree is automatically narrowed to ~640 CSS px and centered, so long articles don't run edge-to-edge on wide canvases
-- **Chrome trimming** — navigation sidebars, hamburger menus, and site chrome (nav/header/footer/aside, `#mw-panel`, `.vector-*`, `.sidebar`, etc.) are hidden by default on heavy pages like Wikipedia; `gR` toggles the full page back on
-- **Outline / table of contents** — `t` opens a heading overlay (H1–H3); `1`–`9` jumps to a section. `gm` jumps straight to the main content.
-- **Reader mode** — `gr` strips navigation/header/footer/forms and renders the main content for distraction-free reading
-- **Fragment navigation** — `#section` anchors scroll to the matching element; same-page fragment links skip the network round-trip
-- **Persistent history & bookmarks** — history is saved to `%APPDATA%\oscaweb_history.txt` (500 entries); `b` bookmarks the current page, `B` opens the bookmarks panel, `1`–`9` jumps to a saved site
-- **Runtime zoom** — `+`/`-` zoom in/out, `0` resets (1×–4×)
-- **HTTP and HTTPS support** — TLS is built into Oscan (zero external dependencies)
-- **JavaScript execution** — inline `<script>` tags and `onclick` handlers via embedded QuickJS-ng
-- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed with a real cascade, descendant/child combinators, attribute selectors, and inheritance. See [CSS](#css) for the full supported subset.
-- **Image rendering** — PNG, JPEG, BMP, GIF, and SVG decoded, cached, and displayed inline
-- **Rich HTML rendering** — 30+ tags including headings, lists, tables, blockquotes, and code blocks (full list under [HTML Rendering](#html-rendering))
-- **Text selection & copy** — click-and-drag to select text, automatically copied to clipboard
-- **In-page search** — `/` to search with match highlighting and `n`/`N` navigation
-- **Dark theme** — purpose-built color scheme for comfortable reading
-- **Minimal dependencies** — only the Oscan compiler is required to build
+Ordered from coolest-first. Deeper detail under the linked sections.
+
+- **Vim-style keyboard navigation** — scroll, follow links, search, and navigate without ever reaching for the mouse. [Keyboard Shortcuts](#keyboard-shortcuts).
+- **Link hint mode** — press `f` and every link gets a 1–2 letter label; type the label to jump. `F` targets chrome-only links. [Link Hint Mode](#link-hint-mode).
+- **Reader mode + chrome trimming + article column** — `<main>`/`<article>` auto-narrows to a readable column; sidebars, hamburger menus, and footers are hidden by default. `gr` toggles reader mode, `gR` shows the full page. [Reader Mode, Bookmarks & Zoom](#reader-mode-bookmarks--zoom).
+- **Omnibox with DuckDuckGo + history autocomplete** — the address bar doubles as a search box; anything non-URL goes to DuckDuckGo. History substring matches auto-suggest as you type. [Omnibox & autocomplete](#omnibox--autocomplete).
+- **Embedded JavaScript (QuickJS-ng)** — inline `<script>`, external `<script src>`, `onclick`, plus a real DOM API (`querySelector`, `classList`, …). [JavaScript Engine](#javascript-engine).
+- **HTTP + HTTPS with zero external deps** — TLS is built into Oscan (SChannel on Windows, BearSSL on Linux). Chunked transfer-encoding and redirects included. [Networking](#networking).
+- **Inline images** — PNG, JPEG, BMP, GIF, and SVG decoded, cached, and drawn inline. [Image Pipeline](#image-pipeline).
+- **CSS with a real cascade** — inline `<style>`, external `<link rel="stylesheet">`, and inline `style=""` parsed with descendant/child combinators, attribute selectors, specificity, and inheritance. [CSS](#css).
+- **Rich HTML rendering** — 30+ tags including tables (auto-sized columns), lists, blockquotes, and code blocks. [HTML Rendering](#html-rendering).
+- **Form submission (GET + POST)** — `gf` fills `<form>` fields sequentially (text, textarea, checkbox, radio, select) and submits with URL-encoded bodies. [Browsing keys](#browsing).
+- **Persistent HTTP cache** — 20-slot FIFO cache survives restarts; back/forward and repeat visits are instant. `r` to force a refetch. [Networking](#networking).
+- **Cookie jar** — RFC 6265 subset with disk persistence. `gC` clears everything. [Networking](#networking).
+- **Persistent history & bookmarks** — 500 most-recent URLs on disk; `b` to bookmark, `B` for the bookmarks panel. [History & bookmarks](#history--bookmarks).
+- **Outline / table of contents** — `t` overlays H1–H3 headings; `1`–`9` jumps. [Outline / table of contents (`t`)](#outline--table-of-contents-t).
+- **In-page search** — `/` to search, `n`/`N` to navigate matches.
+- **Text selection & copy** — click-and-drag to select; released selections hit the clipboard automatically.
+- **Fragment navigation** — `#anchor` scrolls to the element; same-page fragments skip the network.
+- **Runtime zoom** — `+`/`-`/`0` between 1× and 4×.
+- **Dark theme** — purpose-built color scheme for comfortable reading.
+- **Minimal dependencies** — only the Oscan compiler is required to build.
 
 ## Screenshots
 
@@ -71,10 +71,6 @@ The default terminal-inspired theme uses an 8×8 bitmap font for that unmistakab
 Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern reading experience while keeping every Vim keybinding.
 
 ![OscaWeb in modern TrueType mode](ModernLook.jpg)
-
-### Home page
-
-![OscaWeb home page](Home.jpg)
 
 ## Prerequisites
 
@@ -281,51 +277,10 @@ The bottom bar shows at a glance:
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    Browser[browser.osc<br/>UI · keys · render loop]
-    URL[url.osc<br/>URL parse/resolve]
-    HTTP[http.osc<br/>HTTP/HTTPS · TLS]
-    Cache[http_cache.osc<br/>LRU page cache]
-    Cookies[cookies.osc<br/>Cookie jar RFC 6265]
-    HTML[html.osc<br/>Tokenizer · flat DOM]
-    CSS[css.osc<br/>Parser · cascade]
-    JS[js.osc<br/>JS FFI]
-    Bridge[js_bridge.c<br/>QuickJS-ng]
-    Forms[forms.osc<br/>Form collect · encode]
-    Storage[storage.osc<br/>History · bookmarks]
-    VLog[vlog.osc<br/>Verbose logging]
-    UI[libs/ui.osc<br/>Widgets]
-
-    Browser --> URL
-    Browser --> HTTP
-    HTTP --> Cache
-    HTTP --> Cookies
-    Browser --> HTML
-    Browser --> CSS
-    Browser --> JS
-    JS --> Bridge
-    Browser --> Forms
-    Browser --> Storage
-    Browser --> VLog
-    Browser --> UI
-```
-
-| Module           | Description |
-| ---------------- | ----------- |
-| `browser.osc`    | Main application — rendering engine, browser chrome, Vim keybindings, image pipeline, and page navigation |
-| `url.osc`        | URL parsing (scheme, host, port, path, query, fragment) and relative URL resolution |
-| `html.osc`       | State-machine-based HTML tokenizer and flat DOM tree builder |
-| `css.osc`        | CSS tokenizer, parser, selector matcher, and cascade engine |
-| `http.osc`       | HTTP/HTTPS client using Oscan's built-in TLS (`tls_connect`, `tls_send`, `tls_recv`) |
-| `http_cache.osc` | In-memory FIFO page cache (20 slots) for text documents; persisted to disk on exit |
-| `cookies.osc`    | Cookie jar — `Set-Cookie` parsing, `Cookie:` header injection, on-disk persistence |
-| `forms.osc`      | Form collection, field encoding (`application/x-www-form-urlencoded`), successful-control rules |
-| `js.osc`         | JavaScript engine FFI — walks the DOM to execute inline `<script>` tags |
-| `storage.osc`    | Flat-file persistence for history and bookmarks (APPDATA on Windows, HOME on Linux) |
-| `vlog.osc`       | Verbose diagnostic logging FFI (enabled with `--verbose`, appends to `browser.log`) |
-| `js_bridge.c`    | C bridge exposing QuickJS-ng engine lifecycle, console, and DOM bindings to Oscan |
-| `libs/ui.osc`    | Reusable UI widget library (panel, label, separator, button, checkbox, slider, textbox) |
+OscaWeb is split into focused Oscan modules (`browser.osc`, `html.osc`,
+`css.osc`, `http.osc`, `js.osc`, …) plus a single C bridge to QuickJS-ng.
+For the module graph, per-module descriptions, and the on-disk file
+layout, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## CSS
 
@@ -426,46 +381,6 @@ supported CSS feature.
 # Run individual test suites
 oscan tests/test_url.osc --run
 oscan tests/test_html.osc --run
-```
-
-## File Structure
-
-```
-oscanweb/
-├── browser.osc          # Main application (rendering, chrome, vim keys, navigation)
-├── url.osc              # URL parsing and resolution
-├── http.osc             # HTTP/HTTPS client (built-in TLS)
-├── http_cache.osc       # FIFO page cache (20 slots) with disk persistence
-├── cookies.osc          # Cookie jar (Set-Cookie / Cookie: / disk persistence)
-├── forms.osc            # Form collection + URL-encoding
-├── html.osc             # HTML tokenizer and DOM builder
-├── css.osc              # CSS tokenizer, parser, selector matcher, cascade
-├── js.osc               # JavaScript engine FFI (QuickJS-ng)
-├── storage.osc          # Flat-file persistence for history & bookmarks
-├── vlog.osc             # Verbose diagnostic logging FFI
-├── js_bridge.c          # C bridge for QuickJS-ng DOM bindings
-├── build.ps1            # Build script
-├── README.md            # This file
-├── LICENSE              # MIT license
-├── requirements.md      # Original requirements
-├── docs/
-│   └── MANUAL_TESTS.md  # End-to-end smoke-test recipes
-├── libs/
-│   ├── ui.osc           # UI widget library (panel, button, checkbox, slider, textbox)
-│   └── quickjs/         # QuickJS-ng engine source (quickjs.c, quickjs.h)
-└── tests/
-    ├── test_url.osc        # URL parser tests
-    ├── test_html.osc       # HTML parser tests
-    ├── test_css.osc        # CSS parser / cascade tests
-    ├── test_http.osc       # HTTP client tests
-    ├── test_http_cache.osc # HTTP cache tests
-    ├── test_cookies.osc    # Cookie jar tests
-    ├── test_forms.osc      # Form encoding tests
-    ├── test_render.osc     # Rendering tests
-    ├── test_js.osc         # JavaScript engine tests
-    ├── test_hints.osc      # Link hint label tests
-    ├── test_page_css.html  # Manual CSS smoke-test page
-    └── run_tests.ps1       # Test runner
 ```
 
 ## Reader Mode, Bookmarks & Zoom
