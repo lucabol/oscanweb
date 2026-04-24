@@ -105,10 +105,11 @@ fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32,
 
     // Center the label text (UI chrome stays on FONT_DEFAULT so column
     // alignment in URL/status bars is preserved).
-    let text_w: i32 = gfx_text_width(label, FONT_DEFAULT);
+    let ds: i32 = canvas_scale();
+    let text_w: i32 = gfx_text_width(label, FONT_DEFAULT) * ds;
     let tx: i32 = x + (w - text_w) / 2;
-    let ty: i32 = y + (h - 8) / 2;
-    gfx_draw_text(tx, ty, label, ui_colors[UI_C_FG], FONT_DEFAULT);
+    let ty: i32 = y + (h - 8 * ds) / 2;
+    gfx_draw_text_scaled(tx, ty, label, ui_colors[UI_C_FG], ds, ds, FONT_DEFAULT);
 
     clicked
 }
@@ -196,7 +197,8 @@ fn! ui_slider(x: i32, y: i32, w: i32, value: i32, min_val: i32, max_val: i32) ->
 // Returns new focused state (true if clicked on this textbox).
 fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32, key: i32,
                cursor_pos: i32, select_all: bool, ui_colors: [i32]) -> bool {
-    let h: i32 = 20;
+    let ds: i32 = canvas_scale();
+    let h: i32 = 20 * ds;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
     let btn: i32 = canvas_mouse_btn();
@@ -222,34 +224,36 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32,
     };
 
     // Compute horizontal scroll offset so cursor stays visible
-    let pad: i32 = 4;
+    let pad: i32 = 4 * ds;
+    let glyph_w: i32 = 8 * ds;
+    let glyph_h: i32 = 8 * ds;
     let text_area_w: i32 = w - pad * 2;
-    let cursor_px: i32 = cursor_pos * 8;
+    let cursor_px: i32 = cursor_pos * glyph_w;
     let mut scroll_off: i32 = 0;
     if cursor_px > text_area_w {
-        scroll_off = cursor_px - text_area_w + 8;
+        scroll_off = cursor_px - text_area_w + glyph_w;
     };
 
     // Convert buffer to string and draw text (clipped to textbox)
     let text: str = str_from_chars(buf);
-    let text_y: i32 = y + (h - 8) / 2;
+    let text_y: i32 = y + (h - glyph_h) / 2;
 
     // Draw select-all highlight
     if focused and select_all and len(buf) > 0 {
-        let sel_w: i32 = len(buf) * 8;
+        let sel_w: i32 = len(buf) * glyph_w;
         let sel_draw_w: i32 = if sel_w - scroll_off > text_area_w { text_area_w } else { sel_w - scroll_off };
         if sel_draw_w > 0 {
-            gfx_fill_rect(x + pad, text_y, sel_draw_w, 8, ui_colors[UI_C_ACCENT]);
+            gfx_fill_rect(x + pad, text_y, sel_draw_w, glyph_h, ui_colors[UI_C_ACCENT]);
         };
     };
 
-    gfx_draw_text(x + pad - scroll_off, text_y, text, ui_colors[UI_C_FG], FONT_DEFAULT);
+    gfx_draw_text_scaled(x + pad - scroll_off, text_y, text, ui_colors[UI_C_FG], ds, ds, FONT_DEFAULT);
 
     // Draw cursor when focused (thin rect at cursor position)
     if focused and not select_all {
         let cx: i32 = x + pad + cursor_px - scroll_off;
         if cx >= x + pad and cx < x + w - pad {
-            gfx_fill_rect(cx, text_y, 1, 8, ui_colors[UI_C_FG]);
+            gfx_fill_rect(cx, text_y, ds, glyph_h, ui_colors[UI_C_FG]);
         };
     };
 

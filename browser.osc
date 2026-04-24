@@ -19,7 +19,7 @@ let CHROME_TOP: i32 = 30;
 let CHROME_BOT: i32 = 20;
 let FONT_W: i32 = 8;
 // Body text defaults to the 12-row (_L) font variants — glyph advance stays
-// 8 px, but vertical cell is 12 rows.  FONT_H / LINE_H reflect that so the
+// 8 px, but vertical cell is 12 rows.  FONT_H * ds / LINE_H * ds reflect that so the
 // body layout reserves enough vertical room.
 let FONT_H: i32 = 12;
 let LINE_H: i32 = 20;
@@ -155,79 +155,79 @@ fn bitmap_font_of(font: i32) -> i32 {
     if font == FONT_HEADING_L { FONT_PROPORTIONAL_L } else { font }
 }
 
-// Bitmap line height: FONT_H is the glyph cell (12 rows); the +10 of leading
+// Bitmap line height: FONT_H * ds is the glyph cell (12 rows); the +10 of leading
 // gives room for the underline at gh+2 plus a visible gap before the next
 // line's glyph top.  Using +8 made underlined links in lists visually merge
 // with the next item.
-fn line_h_of(scale: i32) -> i32 { FONT_H * scale + 10 }
+fn line_h_of(scale: i32, ds: i32) -> i32 { (FONT_H * ds * scale + 10) * ds }
 
 // CSS line-height override helper: prefer computed style if set,
 // otherwise the scale-derived default.  A multiplier (unitless / %
 // / "normal") is resolved against the current rendered font size so
 // it tracks user-adjustable TT body size.  Absolute px values (set
 // via explicit px/em/pt) are used verbatim.
-fn effective_line_h(styles: [ComputedStyle], idx: i32, scale: i32,
+fn effective_line_h(styles: [ComputedStyle], idx: i32, scale: i32, ds: i32,
                     tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
     // Bitmap-mode minimum: the underline sits at gh+2, so any line-height
     // tighter than gh+4 makes underlined links touch the next line.  Floor
     // CSS line-height to this minimum in bitmap mode.
-    let bmp_min: i32 = if tt_on(tt_reg, tt_cfg) { 0 } else { FONT_H * scale + 8 };
+    let bmp_min: i32 = if tt_on(tt_reg, tt_cfg) { 0 } else { (FONT_H * ds * scale + 8) * ds };
     if idx >= 0 and idx < len(styles) {
         let mul: i32 = styles[idx].line_height_mul_x100;
         if mul > 0 {
             let em: i32 = if tt_on(tt_reg, tt_cfg) {
                 let px: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_PX] } else { tt_cfg[TTC_BODY_PX] };
-                px * scale
+                px * scale * ds
             } else {
-                FONT_H * scale
+                FONT_H * ds * scale * ds
             };
             let out: i32 = (em * mul + 50) / 100;
             let floored: i32 = if out < bmp_min { bmp_min } else { out };
             if floored > 0 { return floored; };
         };
         if styles[idx].line_height_px > 0 {
-            let px_out: i32 = styles[idx].line_height_px;
+            let px_out: i32 = styles[idx].line_height_px * ds;
             return if px_out < bmp_min { bmp_min } else { px_out };
         };
     };
-    tt_line_h_of(scale, tt_reg, tt_cfg, font)
+    tt_line_h_of(scale, ds, tt_reg, tt_cfg, font)
 }
-fn glyph_h_of(scale: i32) -> i32 { FONT_H * scale }
+fn glyph_h_of(scale: i32, ds: i32) -> i32 { FONT_H * ds * scale * ds }
 
 // TT-aware line/glyph height.  When TT is on, returns cached TT metrics
 // scaled by `scale`; otherwise bitmap metrics.
-fn tt_line_h_of(scale: i32, tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
+fn tt_line_h_of(scale: i32, ds: i32, tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
     if tt_on(tt_reg, tt_cfg) {
         if is_mono_font_id(font) {
-            tt_cfg[TTC_MONO_LINEH] * scale + 4
+            tt_cfg[TTC_MONO_LINEH] * scale * ds + 4 * ds
         } else if is_heading_font_id(font) and tt_cfg[TTC_HEAD_LINEH] > 0 {
-            tt_cfg[TTC_HEAD_LINEH] * scale + 4
+            tt_cfg[TTC_HEAD_LINEH] * scale * ds + 4 * ds
         } else {
-            tt_cfg[TTC_REG_LINEH] * scale + 4
+            tt_cfg[TTC_REG_LINEH] * scale * ds + 4 * ds
         }
     } else {
-        line_h_of(scale)
+        line_h_of(scale, ds)
     }
 }
 
-fn tt_glyph_h_of(scale: i32, tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
+fn tt_glyph_h_of(scale: i32, ds: i32, tt_reg: handle, tt_cfg: [i32], font: i32) -> i32 {
     if tt_on(tt_reg, tt_cfg) {
         if is_mono_font_id(font) {
-            tt_cfg[TTC_MONO_LINEH] * scale
+            tt_cfg[TTC_MONO_LINEH] * scale * ds
         } else if is_heading_font_id(font) and tt_cfg[TTC_HEAD_LINEH] > 0 {
-            tt_cfg[TTC_HEAD_LINEH] * scale
+            tt_cfg[TTC_HEAD_LINEH] * scale * ds
         } else {
-            tt_cfg[TTC_REG_LINEH] * scale
+            tt_cfg[TTC_REG_LINEH] * scale * ds
         }
     } else {
-        glyph_h_of(scale)
+        glyph_h_of(scale, ds)
     }
 }
 
 // Pure text width dispatcher.  When TT is off it's a simple multiply.
 // When TT is on it queries tt_text_width, which is impure; hence the
 // whole helper is `fn!`.
-fn! text_width_f(s: str, font: i32, scale: i32,
+fn! text_width_f(s: str, font: i32, scale: i32, ds: i32,
                  tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) -> i32 {
     if tt_on(tt_reg, tt_cfg) {
         let h: handle = if is_mono_font_id(font) {
@@ -239,12 +239,12 @@ fn! text_width_f(s: str, font: i32, scale: i32,
         };
         let px: i32 = if is_mono_font_id(font) { tt_cfg[TTC_MONO_PX] } else { tt_cfg[TTC_BODY_PX] };
         if (h as i64) != (0 as i64) {
-            tt_text_width(h, s, (px * scale) as f64)
+            tt_text_width(h, s, (px * scale * ds) as f64)
         } else {
-            gfx_text_width(ascii_fold_utf8(s), bitmap_font_of(font)) * scale
+            gfx_text_width(ascii_fold_utf8(s), bitmap_font_of(font)) * scale * ds
         }
     } else {
-        gfx_text_width(ascii_fold_utf8(s), bitmap_font_of(font)) * scale
+        gfx_text_width(ascii_fold_utf8(s), bitmap_font_of(font)) * scale * ds
     }
 }
 
@@ -261,7 +261,7 @@ fn is_mono_tag(tag: str) -> bool {
     str_eq(tag, "samp") or str_eq(tag, "tt") or str_eq(tag, "var")
 }
 
-fn! draw_text_f(x: i32, y: i32, s: str, color: i32, font: i32, scale: i32,
+fn! draw_text_f(x: i32, y: i32, s: str, color: i32, font: i32, scale: i32, ds: i32,
                 tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) -> i32 {
     if tt_on(tt_reg, tt_cfg) {
         let h: handle = if is_mono_font_id(font) {
@@ -283,27 +283,19 @@ fn! draw_text_f(x: i32, y: i32, s: str, color: i32, font: i32, scale: i32,
             } else {
                 tt_cfg[TTC_REG_ASCENT]
             };
-            let baseline: i32 = y + ascent * scale + 2;
+            let baseline: i32 = y + ascent * scale * ds + 2 * ds;
             // OscaWeb colors are packed as 0x00RRGGBB (alpha byte = 0).
             // tt_draw_text uses the alpha channel as coverage weight, so
             // we must force full alpha or the glyph renders invisibly.
             let tt_color: i32 = bor(color, bshl(255, 24));
-            tt_draw_text(x, baseline, s, h, (px * scale) as f64, tt_color)
+            tt_draw_text(x, baseline, s, h, (px * scale * ds) as f64, tt_color)
         } else {
             let folded: str = ascii_fold_utf8(s);
-            if scale <= 1 {
-                gfx_draw_text(x, y, folded, color, bitmap_font_of(font))
-            } else {
-                gfx_draw_text_scaled(x, y, folded, color, scale, scale, bitmap_font_of(font))
-            }
+            gfx_draw_text_scaled(x, y, folded, color, scale * ds, scale * ds, bitmap_font_of(font))
         }
     } else {
         let folded2: str = ascii_fold_utf8(s);
-        if scale <= 1 {
-            gfx_draw_text(x, y, folded2, color, bitmap_font_of(font))
-        } else {
-            gfx_draw_text_scaled(x, y, folded2, color, scale, scale, bitmap_font_of(font))
-        }
+        gfx_draw_text_scaled(x, y, folded2, color, scale * ds, scale * ds, bitmap_font_of(font))
     }
 }
 
@@ -653,22 +645,22 @@ fn html_is_skip_tag(tag: str) -> bool {
 // inside verbatim blocks.
 fn! flush_pre_segment(segment_chars: [i32], x_ptr: [i32], y_ptr: [i32],
                       vp_top: i32, line_right: i32, line_left: i32,
-                      color: i32, font: i32, scale: i32,
+                      color: i32, font: i32, scale: i32, ds: i32,
                       word_map: [WordInfo],
                       theme: [i32],
                       tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
-    let gh: i32 = tt_glyph_h_of(scale, tt_reg, tt_cfg, font);
-    let lh: i32 = tt_line_h_of(scale, tt_reg, tt_cfg, font);
-    let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-    let visible: bool = draw_y + gh >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT;
+    let gh: i32 = tt_glyph_h_of(scale, ds, tt_reg, tt_cfg, font);
+    let lh: i32 = tt_line_h_of(scale, ds, tt_reg, tt_cfg, font);
+    let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
+    let visible: bool = draw_y + gh >= CHROME_TOP * ds and draw_y < canvas_height() - CHROME_BOT * ds;
     if len(segment_chars) > 0 {
         let seg: str = str_from_chars(segment_chars);
-        let seg_w: i32 = text_width_f(seg, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+        let seg_w: i32 = text_width_f(seg, font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
         if visible {
             let bg_x: i32 = x_ptr[0];
             let bg_w: i32 = line_right - bg_x;
             if bg_w > 0 { gfx_fill_rect(bg_x, draw_y, bg_w, lh, theme[T_PRE_BG]); };
-            draw_text_f(x_ptr[0], draw_y, seg, color, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+            draw_text_f(x_ptr[0], draw_y, seg, color, font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
             let wi: WordInfo = WordInfo { x: x_ptr[0], y: draw_y, w: seg_w, text: seg };
             push(word_map, wi);
         };
@@ -686,7 +678,7 @@ fn! flush_pre_segment(segment_chars: [i32], x_ptr: [i32], y_ptr: [i32],
 // ─── Text rendering with word-wrap ──────────────────────
 
 fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
-                font: i32, scale: i32,
+                font: i32, scale: i32, ds: i32,
                 vp_top: i32, vp_width: i32, underline: bool,
                 links: [LinkInfo], href: str, search_q: str,
                 word_map: [WordInfo], strikethrough: bool, mark_bg: i32,
@@ -704,17 +696,17 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
     };
     let normalized: str = str_from_chars(norm_chars);
     let words: [str] = str_split(normalized, " ");
-    let max_x: i32 = vp_width - PAD;
-    let lh: i32 = tt_line_h_of(scale, tt_reg, tt_cfg, font);
-    let gh: i32 = tt_glyph_h_of(scale, tt_reg, tt_cfg, font);
+    let max_x: i32 = vp_width - PAD * ds;
+    let lh: i32 = tt_line_h_of(scale, ds, tt_reg, tt_cfg, font);
+    let gh: i32 = tt_glyph_h_of(scale, ds, tt_reg, tt_cfg, font);
     // Word gap: measured space width in current font, with a minimum so
     // proportional rendering doesn't collapse word boundaries.
-    let raw_gap: i32 = text_width_f(" ", font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
-    let gap: i32 = if raw_gap < 3 * scale { 3 * scale } else { raw_gap };
+    let raw_gap: i32 = text_width_f(" ", font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
+    let gap: i32 = if raw_gap < 3 * scale * ds { 3 * scale * ds } else { raw_gap };
 
     // Track link bounding box (first word position + accumulated width)
     let mut link_x: i32 = x_ptr[0];
-    let mut link_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+    let mut link_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
     let mut link_w: i32 = 0;
     let mut link_recorded: bool = false;
 
@@ -722,14 +714,14 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
         let word: str = words[word_idx];
         if str_len(word) == 0 { continue; };
 
-        let word_w: i32 = text_width_f(word, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+        let word_w: i32 = text_width_f(word, font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
 
         // Word wrap
-        if x_ptr[0] + word_w > max_x and x_ptr[0] > indent + PAD {
+        if x_ptr[0] + word_w > max_x and x_ptr[0] > indent + PAD * ds {
             // If we wrapped to a new line, emit link for the previous line segment
             if str_len(href) > 0 and link_w > 0 and not link_recorded {
                 let draw_y_check: i32 = link_y;
-                if draw_y_check + gh >= CHROME_TOP and draw_y_check < canvas_height() - CHROME_BOT {
+                if draw_y_check + gh >= CHROME_TOP * ds and draw_y_check < canvas_height() - CHROME_BOT * ds {
                     let li: LinkInfo = LinkInfo {
                         x: link_x, y: link_y, w: link_w, h: lh,
                         href: href, label: "", chrome: in_chrome,
@@ -738,13 +730,13 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                     link_recorded = true;
                 };
             };
-            x_ptr[0] = indent + PAD;
+            x_ptr[0] = indent + PAD * ds;
             y_ptr[0] = y_ptr[0] + lh;
         };
 
-        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
 
-        if draw_y + gh >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
+        if draw_y + gh >= CHROME_TOP * ds and draw_y < canvas_height() - CHROME_BOT * ds {
             // Mark background highlight
             if mark_bg >= 0 {
                 gfx_fill_rect(x_ptr[0], draw_y, word_w, lh, mark_bg);
@@ -752,9 +744,9 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
             // Highlight search matches in this word
             if str_len(search_q) > 0 and str_contains(str_to_lower(word), search_q) {
                 gfx_fill_rect(x_ptr[0], draw_y, word_w, lh, theme[T_SEARCH_HL]);
-                draw_text_f(x_ptr[0], draw_y, word, theme[T_HINT_FG], font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+                draw_text_f(x_ptr[0], draw_y, word, theme[T_HINT_FG], font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
             } else {
-                draw_text_f(x_ptr[0], draw_y, word, color, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+                draw_text_f(x_ptr[0], draw_y, word, color, font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
             };
             if underline {
                 // TT: draw just below the baseline (ascent + a few px of
@@ -767,11 +759,11 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                     } else {
                         tt_cfg[TTC_REG_ASCENT]
                     };
-                    draw_y + asc * scale + 5
+                    draw_y + asc * scale * ds + 5 * ds
                 } else {
                     // Bitmap: sit just below the glyph cell so descenders
                     // (p, g, y) don't touch the underline.
-                    draw_y + gh + 2
+                    draw_y + gh + 2 * ds
                 };
                 gfx_line(x_ptr[0], ul_y, x_ptr[0] + word_w, ul_y, color);
             };
@@ -786,7 +778,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
                     } else {
                         tt_cfg[TTC_REG_ASCENT]
                     };
-                    draw_y + asc2 * scale + 2 - (asc2 * scale * 35) / 100
+                    draw_y + asc2 * scale * ds + 2 * ds - (asc2 * scale * ds * 35) / 100
                 } else {
                     draw_y + gh / 2
                 };
@@ -807,7 +799,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
 
     // Emit single LinkInfo for the entire link text
     if str_len(href) > 0 and not link_recorded {
-        if link_y + gh >= CHROME_TOP and link_y < canvas_height() - CHROME_BOT {
+        if link_y + gh >= CHROME_TOP * ds and link_y < canvas_height() - CHROME_BOT * ds {
             let li: LinkInfo = LinkInfo {
                 x: link_x, y: link_y, w: link_w, h: lh,
                 href: href, label: "", chrome: in_chrome,
@@ -822,7 +814,7 @@ fn! render_text(text: str, x_ptr: [i32], y_ptr: [i32], color: i32,
 // centered/right-aligned blocks whose content fits on one line.  Uses
 // proportional font metrics via text_width_f.
 fn! measure_inline_text(nodes: [HtmlNode], idx: i32, styles: [ComputedStyle],
-                        font: i32, scale: i32, out: [i32],
+                        font: i32, scale: i32, ds: i32, out: [i32],
                         tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
     if idx < 0 or idx >= len(nodes) { return; };
     if idx < len(styles) and styles[idx].display_none { return; };
@@ -849,13 +841,13 @@ fn! measure_inline_text(nodes: [HtmlNode], idx: i32, styles: [ComputedStyle],
         while len(norm) > 0 and norm[len(norm) - 1] == 32 { pop(norm); };
         if len(norm) == 0 { return; };
         let collapsed: str = str_from_chars(norm);
-        out[0] = out[0] + text_width_f(collapsed, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+        out[0] = out[0] + text_width_f(collapsed, font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
         return;
     };
     if html_is_skip_tag(node.tag) { return; };
     let mut child: i32 = node.first_child;
     while child != -1 {
-        measure_inline_text(nodes, child, styles, font, scale, out, tt_reg, tt_mono, tt_head, tt_cfg);
+        measure_inline_text(nodes, child, styles, font, scale, ds, out, tt_reg, tt_mono, tt_head, tt_cfg);
         child = nodes[child].next_sibling;
     };
 }
@@ -920,19 +912,19 @@ fn! collect_cell_indices(nodes: [HtmlNode], tr_node: HtmlNode) -> [i32] {
 
 // Greedy word-wrap `text` into lines that each fit within max_px at the
 // given font/scale.  Returns at least one (possibly empty) line.
-fn! wrap_text_to_lines(text: str, max_px: i32, font: i32, scale: i32,
+fn! wrap_text_to_lines(text: str, max_px: i32, font: i32, scale: i32, ds: i32,
                        tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) -> [str] {
     let flat: str = normalize_ws(text);
     let mut lines: [str] = [];
     if str_len(flat) == 0 { push(lines, ""); return lines; };
     let words: [str] = str_split(flat, " ");
-    let space_w: i32 = text_width_f(" ", font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+    let space_w: i32 = text_width_f(" ", font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
     let mut cur: str = "";
     let mut cur_w: i32 = 0;
     for wi in 0..len(words) {
         let w: str = words[wi];
         if str_len(w) == 0 { continue; };
-        let ww: i32 = text_width_f(w, font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+        let ww: i32 = text_width_f(w, font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
         if str_len(cur) == 0 {
             cur = w;
             cur_w = ww;
@@ -954,7 +946,7 @@ fn! wrap_text_to_lines(text: str, max_px: i32, font: i32, scale: i32,
 
 fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 vp_top: i32, vp_width: i32, links: [LinkInfo],
-                color: i32, font: i32, scale: i32,
+                color: i32, font: i32, scale: i32, ds: i32,
                 is_link: bool, link_href: str,
                 indent: i32, in_pre: bool,
                 img_cache_idx: map, img_cache_data: [[i32]],
@@ -1041,9 +1033,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             // break at the end of each, which turned inline syntax-highlight
             // spans (e.g. Wikipedia code blocks) into one token per line.
             let raw: [i32] = str_to_chars(text);
-            let pre_lh: i32 = tt_line_h_of(scale, tt_reg, tt_cfg, font);
-            let line_left: i32 = indent + PAD;
-            let line_right: i32 = vp_width - PAD;
+            let pre_lh: i32 = tt_line_h_of(scale, ds, tt_reg, tt_cfg, font);
+            let line_left: i32 = indent + PAD * ds;
+            let line_right: i32 = vp_width - PAD * ds;
             let mut segment_chars: [i32] = [];
             let raw_len: i32 = len(raw);
             for ci in 0..raw_len {
@@ -1051,7 +1043,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 if c == 13 { continue; };
                 if c == 10 {
                     flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
-                                      line_right, line_left, color, font, scale, word_map,
+                                      line_right, line_left, color, font, scale, ds, word_map,
                                       theme,
                                       tt_reg, tt_mono, tt_head, tt_cfg);
                     while len(segment_chars) > 0 { pop(segment_chars); };
@@ -1068,12 +1060,12 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 };
             };
             flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
-                              line_right, line_left, color, font, scale, word_map,
+                              line_right, line_left, color, font, scale, ds, word_map,
                               theme,
                               tt_reg, tt_mono, tt_head, tt_cfg);
         } else {
             if str_len(str_trim(text)) == 0 { return; };
-            render_text(text, x_ptr, y_ptr, color, font, scale, vp_top, vp_width,
+            render_text(text, x_ptr, y_ptr, color, font, scale, ds, vp_top, vp_width,
                         is_link or force_underline, links, link_href, search_q, word_map,
                         strikethrough, mark_bg, indent, in_chrome,
                         theme,
@@ -1105,54 +1097,54 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         // an element with both properties set respects the stricter limit.
         let mut mw: i32 = -1;
         if csp.max_width_px >= 0 {
-            mw = csp.max_width_px;
+            mw = csp.max_width_px * ds;
         } else if csp.max_width_pct > 0 {
             mw = (vp_width * csp.max_width_pct) / 100;
         };
         let mut ww: i32 = -1;
         if csp.width_px >= 0 {
-            ww = csp.width_px;
+            ww = csp.width_px * ds;
         } else if csp.width_pct > 0 {
             ww = (vp_width * csp.width_pct) / 100;
         };
         if ww > 0 and (mw < 0 or ww < mw) { mw = ww; };
         if mw > 0 {
-            let avail: i32 = vp_width - indent - PAD * 2;
+            let avail: i32 = vp_width - indent - PAD * ds * 2;
             if mw < avail {
                 let extra: i32 = if csp.center_block == 1 {
                     (avail - mw) / 2
                 } else { 0 };
                 eff_indent = indent + extra;
-                eff_vp_width = eff_indent + PAD + mw + PAD;
+                eff_vp_width = eff_indent + PAD * ds + mw + PAD * ds;
                 if eff_vp_width > vp_width { eff_vp_width = vp_width; };
             };
         };
         // Padding: shift left/right edges inward.
-        if csp.pad_l > 0 { eff_indent = eff_indent + csp.pad_l; };
-        if csp.pad_r > 0 { eff_vp_width = eff_vp_width - csp.pad_r; };
-        if csp.pad_t > 0 { pad_top_px = csp.pad_t; };
-        if csp.pad_b > 0 { pad_bot_px = csp.pad_b; };
+        if csp.pad_l > 0 { eff_indent = eff_indent + csp.pad_l * ds; };
+        if csp.pad_r > 0 { eff_vp_width = eff_vp_width - csp.pad_r * ds; };
+        if csp.pad_t > 0 { pad_top_px = csp.pad_t * ds; };
+        if csp.pad_b > 0 { pad_bot_px = csp.pad_b * ds; };
         // Numeric margins: left/right shift the content edges inward
         // (in addition to any auto-centering above); top/bottom add
         // vertical space rendered as extra pad_{top,bot}_px since we
         // don't model a full margin box.
-        if csp.margin_l > 0 { eff_indent = eff_indent + csp.margin_l; };
-        if csp.margin_r > 0 { eff_vp_width = eff_vp_width - csp.margin_r; };
-        if csp.margin_t > 0 { pad_top_px = pad_top_px + csp.margin_t; };
-        if csp.margin_b > 0 { pad_bot_px = pad_bot_px + csp.margin_b; };
+        if csp.margin_l > 0 { eff_indent = eff_indent + csp.margin_l * ds; };
+        if csp.margin_r > 0 { eff_vp_width = eff_vp_width - csp.margin_r * ds; };
+        if csp.margin_t > 0 { pad_top_px = pad_top_px + csp.margin_t * ds; };
+        if csp.margin_b > 0 { pad_bot_px = pad_bot_px + csp.margin_b * ds; };
     };
 
-    let entry_line_h: i32 = effective_line_h(styles, idx, scale, tt_reg, tt_cfg, font);
+    let entry_line_h: i32 = effective_line_h(styles, idx, scale, ds, tt_reg, tt_cfg, font);
 
     if is_block {
-        if x_ptr[0] > eff_indent + PAD {
+        if x_ptr[0] > eff_indent + PAD * ds {
             y_ptr[0] = y_ptr[0] + entry_line_h;
         };
-        x_ptr[0] = eff_indent + PAD;
+        x_ptr[0] = eff_indent + PAD * ds;
     };
     if is_block and pad_top_px > 0 {
         y_ptr[0] = y_ptr[0] + pad_top_px;
-        x_ptr[0] = eff_indent + PAD;
+        x_ptr[0] = eff_indent + PAD * ds;
     };
 
     // Heading / paragraph pre-spacing
@@ -1164,19 +1156,19 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
     // HR
     if str_eq(tag, "hr") {
         y_ptr[0] = y_ptr[0] + entry_line_h / 2;
-        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if draw_y >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-            gfx_line(PAD, draw_y, eff_vp_width - PAD, draw_y, theme[T_HR]);
+        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
+        if draw_y >= CHROME_TOP * ds and draw_y < canvas_height() - CHROME_BOT * ds {
+            gfx_line(PAD * ds, draw_y, eff_vp_width - PAD * ds, draw_y, theme[T_HR]);
         };
         y_ptr[0] = y_ptr[0] + entry_line_h / 2;
-        x_ptr[0] = eff_indent + PAD;
+        x_ptr[0] = eff_indent + PAD * ds;
         return;
     };
 
     // BR
     if str_eq(tag, "br") {
         y_ptr[0] = y_ptr[0] + entry_line_h;
-        x_ptr[0] = eff_indent + PAD;
+        x_ptr[0] = eff_indent + PAD * ds;
         return;
     };
 
@@ -1188,7 +1180,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         let attr_h_str: str = html_get_attr(node, "height");
         let mut attr_w: i32 = 0;
         let mut attr_h: i32 = 0;
-        let avail_img_w: i32 = vp_width - indent - PAD * 2;
+        let avail_img_w: i32 = vp_width - indent - PAD * ds * 2;
         if str_len(attr_w_str) > 0 {
             if str_ends_with(attr_w_str, "%") {
                 let pct_str: str = str_slice(attr_w_str, 0, str_len(attr_w_str) - 1);
@@ -1203,7 +1195,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             if str_ends_with(attr_h_str, "%") {
                 let pct_h_str: str = str_slice(attr_h_str, 0, str_len(attr_h_str) - 1);
                 let pph: Result<i32, str> = parse_i32(pct_h_str);
-                match pph { Result::Ok(phv) => { attr_h = (canvas_height() - CHROME_TOP - CHROME_BOT) * phv / 100; }, Result::Err(_eph) => {}, };
+                match pph { Result::Ok(phv) => { attr_h = (canvas_height() - CHROME_TOP * ds - CHROME_BOT * ds) * phv / 100; }, Result::Err(_eph) => {}, };
             } else {
                 let ph: Result<i32, str> = parse_i32(attr_h_str);
                 match ph { Result::Ok(hv) => { attr_h = hv; }, Result::Err(_eh) => {}, };
@@ -1240,29 +1232,48 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                     };
                 };
 
-                // Start on new line for block images
-                if x_ptr[0] > indent + PAD {
-                    x_ptr[0] = indent + PAD;
-                    y_ptr[0] = y_ptr[0] + LINE_H;
+                // HiDPI: image cache stores native/logical pixels.
+                // Scale up to canvas pixels before blit.
+                if ds > 1 {
+                    draw_px = img_scale(draw_px, draw_w, draw_h, draw_w * ds, draw_h * ds);
+                    draw_w = draw_w * ds;
+                    draw_h = draw_h * ds;
                 };
 
-                let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                if draw_y + draw_h >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
+                // Final clamp: if draw_w exceeds the available content width
+                // (e.g. HTML attr width= forces oversized image), scale to fit.
+                if draw_w > avail_img_w and avail_img_w > 0 {
+                    let clamped_h: i32 = draw_h * avail_img_w / draw_w;
+                    if clamped_h > 0 {
+                        draw_px = img_scale(draw_px, draw_w, draw_h, avail_img_w, clamped_h);
+                        draw_w = avail_img_w;
+                        draw_h = clamped_h;
+                    };
+                };
+
+                // Start on new line for block images
+                if x_ptr[0] > indent + PAD * ds {
+                    x_ptr[0] = indent + PAD * ds;
+                    y_ptr[0] = y_ptr[0] + LINE_H * ds;
+                };
+
+                let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
+                if draw_y + draw_h >= CHROME_TOP * ds and draw_y < canvas_height() - CHROME_BOT * ds {
                     gfx_blit(x_ptr[0], draw_y, draw_w, draw_h, draw_px);
                 };
-                y_ptr[0] = y_ptr[0] + draw_h + 4;
-                x_ptr[0] = indent + PAD;
+                y_ptr[0] = y_ptr[0] + draw_h + 4 * ds;
+                x_ptr[0] = indent + PAD * ds;
                 return;
             };
         };
 
         // Fallback: show alt text placeholder
         let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
-        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if draw_y + FONT_H >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-            draw_text_f(x_ptr[0], draw_y, display, theme[T_HR], font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
+        if draw_y + FONT_H * ds >= CHROME_TOP * ds and draw_y < canvas_height() - CHROME_BOT * ds {
+            draw_text_f(x_ptr[0], draw_y, display, theme[T_HR], font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
         };
-        x_ptr[0] = x_ptr[0] + text_width_f(display, font, scale, tt_reg, tt_mono, tt_head, tt_cfg) + text_width_f(" ", font, scale, tt_reg, tt_mono, tt_head, tt_cfg);
+        x_ptr[0] = x_ptr[0] + text_width_f(display, font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg) + text_width_f(" ", font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
         return;
     };
 
@@ -1272,8 +1283,8 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         let tr_idxs: [i32] = collect_tr_indices(nodes, node);
         if len(tr_idxs) == 0 {
             // Empty table — skip default block handling.
-            y_ptr[0] = y_ptr[0] + LINE_H;
-            x_ptr[0] = eff_indent + PAD;
+            y_ptr[0] = y_ptr[0] + LINE_H * ds;
+            x_ptr[0] = eff_indent + PAD * ds;
             return;
         };
 
@@ -1287,9 +1298,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         };
         if max_cols == 0 { max_cols = 1; };
 
-        let avail_w: i32 = eff_vp_width - eff_indent - PAD * 2;
+        let avail_w: i32 = eff_vp_width - eff_indent - PAD * ds * 2;
         // Cell padding (per cell, split left + right).
-        let cell_pad: i32 = 8;
+        let cell_pad: i32 = 8 * ds;
 
         // Pass 1: measure.  col_max = natural width of longest line of text;
         // col_min = width of longest single word (ensures wrapping works).
@@ -1301,11 +1312,11 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             for ci1 in 0..len(cells1) {
                 let raw: str = html_get_text_content(nodes, cells1[ci1]);
                 let txt: str = normalize_ws(raw);
-                let w_nat: i32 = text_width_f(txt, body_mono_font, 1, tt_reg, tt_mono, tt_head, tt_cfg);
+                let w_nat: i32 = text_width_f(txt, body_mono_font, 1, ds, tt_reg, tt_mono, tt_head, tt_cfg);
                 let ws: [str] = str_split(txt, " ");
                 let mut max_word_w: i32 = 0;
                 for wi in 0..len(ws) {
-                    let ww: i32 = text_width_f(ws[wi], body_mono_font, 1, tt_reg, tt_mono, tt_head, tt_cfg);
+                    let ww: i32 = text_width_f(ws[wi], body_mono_font, 1, ds, tt_reg, tt_mono, tt_head, tt_cfg);
                     if ww > max_word_w { max_word_w = ww; };
                 };
                 if w_nat > col_max[ci1] { col_max[ci1] = w_nat; };
@@ -1360,18 +1371,18 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
         // Pre-compute column x-offsets.
         let mut col_x: [i32] = [];
-        let mut acc: i32 = eff_indent + PAD;
+        let mut acc: i32 = eff_indent + PAD * ds;
         for c8 in 0..max_cols {
             push(col_x, acc);
             acc = acc + col_w[c8];
         };
 
         // Draw top border.
-        let tbl_top_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if tbl_top_y >= CHROME_TOP and tbl_top_y < canvas_height() - CHROME_BOT {
-            gfx_line(eff_indent + PAD, tbl_top_y, eff_indent + PAD + avail_w, tbl_top_y, theme[T_TABLE_BORDER]);
+        let tbl_top_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
+        if tbl_top_y >= CHROME_TOP * ds and tbl_top_y < canvas_height() - CHROME_BOT * ds {
+            gfx_line(eff_indent + PAD * ds, tbl_top_y, eff_indent + PAD * ds + avail_w, tbl_top_y, theme[T_TABLE_BORDER]);
         };
-        y_ptr[0] = y_ptr[0] + 2;
+        y_ptr[0] = y_ptr[0] + 2 * ds;
 
         // Pass 2: render each row with word-wrap; row height = max line count.
         for ri2 in 0..len(rows_cells) {
@@ -1387,54 +1398,54 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             for ci3 in 0..len(cells2) {
                 let raw2: str = html_get_text_content(nodes, cells2[ci3]);
                 let inner_w: i32 = col_w[ci3] - cell_pad;
-                let ln: [str] = wrap_text_to_lines(raw2, inner_w, body_mono_font, 1, tt_reg, tt_mono, tt_head, tt_cfg);
+                let ln: [str] = wrap_text_to_lines(raw2, inner_w, body_mono_font, 1, ds, tt_reg, tt_mono, tt_head, tt_cfg);
                 if len(ln) > max_lines { max_lines = len(ln); };
                 push(cell_lines, ln);
             };
 
             // Draw each cell's lines.
             for ci4 in 0..len(cells2) {
-                let cx: i32 = col_x[ci4] + 4;
+                let cx: i32 = col_x[ci4] + 4 * ds;
                 let cell_tag: str = nodes[cells2[ci4]].tag;
                 let cc: i32 = if str_eq(cell_tag, "th") { theme[T_BOLD] } else { color };
                 // Fill header cell background (--color-table-header) behind
                 // the text so the heading row visibly separates from body
                 // rows in light mode.
                 if str_eq(cell_tag, "th") {
-                    let hdr_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                    let hdr_h: i32 = LINE_H * max_lines;
-                    if hdr_y + hdr_h >= CHROME_TOP and hdr_y < canvas_height() - CHROME_BOT {
+                    let hdr_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
+                    let hdr_h: i32 = LINE_H * ds * max_lines;
+                    if hdr_y + hdr_h >= CHROME_TOP * ds and hdr_y < canvas_height() - CHROME_BOT * ds {
                         gfx_fill_rect(col_x[ci4], hdr_y, col_w[ci4], hdr_h,
                                       theme[T_TABLE_HEADER_BG]);
                     };
                 };
                 let lines: [str] = cell_lines[ci4];
                 for li in 0..len(lines) {
-                    let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP + li * LINE_H;
-                    if cy + FONT_H >= CHROME_TOP and cy < canvas_height() - CHROME_BOT {
-                        draw_text_f(cx, cy, lines[li], cc, body_mono_font, 1, tt_reg, tt_mono, tt_head, tt_cfg);
+                    let cy: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds + li * LINE_H * ds;
+                    if cy + FONT_H * ds >= CHROME_TOP * ds and cy < canvas_height() - CHROME_BOT * ds {
+                        draw_text_f(cx, cy, lines[li], cc, body_mono_font, 1, ds, tt_reg, tt_mono, tt_head, tt_cfg);
                     };
                 };
             };
-            y_ptr[0] = y_ptr[0] + LINE_H * max_lines;
+            y_ptr[0] = y_ptr[0] + LINE_H * ds * max_lines;
 
             // Header separator: draw after the first row if it's all/mostly <th>.
             if ri2 == 0 and row_any_th {
-                let sep_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-                if sep_y >= CHROME_TOP and sep_y < canvas_height() - CHROME_BOT {
-                    gfx_line(eff_indent + PAD, sep_y, eff_indent + PAD + avail_w, sep_y, theme[T_TABLE_BORDER]);
+                let sep_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
+                if sep_y >= CHROME_TOP * ds and sep_y < canvas_height() - CHROME_BOT * ds {
+                    gfx_line(eff_indent + PAD * ds, sep_y, eff_indent + PAD * ds + avail_w, sep_y, theme[T_TABLE_BORDER]);
                 };
-                y_ptr[0] = y_ptr[0] + 2;
+                y_ptr[0] = y_ptr[0] + 2 * ds;
             };
         };
 
         // Draw bottom border.
-        let tbl_bot_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if tbl_bot_y >= CHROME_TOP and tbl_bot_y < canvas_height() - CHROME_BOT {
-            gfx_line(eff_indent + PAD, tbl_bot_y, eff_indent + PAD + avail_w, tbl_bot_y, theme[T_TABLE_BORDER]);
+        let tbl_bot_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
+        if tbl_bot_y >= CHROME_TOP * ds and tbl_bot_y < canvas_height() - CHROME_BOT * ds {
+            gfx_line(eff_indent + PAD * ds, tbl_bot_y, eff_indent + PAD * ds + avail_w, tbl_bot_y, theme[T_TABLE_BORDER]);
         };
-        y_ptr[0] = y_ptr[0] + LINE_H;
-        x_ptr[0] = eff_indent + PAD;
+        y_ptr[0] = y_ptr[0] + LINE_H * ds;
+        x_ptr[0] = eff_indent + PAD * ds;
         return;
     };
 
@@ -1480,29 +1491,29 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         child_color = theme[T_CODE_FG]; child_font = body_mono_font;
     }
     else if str_eq(tag, "ul") {
-        child_indent = eff_indent + 20;
+        child_indent = eff_indent + 20 * ds;
         child_ol = [0];
     }
     else if str_eq(tag, "ol") {
-        child_indent = eff_indent + 20;
+        child_indent = eff_indent + 20 * ds;
         child_ol = [1];
     }
     else if str_eq(tag, "blockquote") {
-        child_indent = eff_indent + 30;
+        child_indent = eff_indent + 30 * ds;
         child_color = theme[T_QUOTE];
         // Draw left accent bar
-        let bar_x: i32 = eff_indent + PAD + 10;
-        let bar_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
-        if bar_y >= CHROME_TOP and bar_y < canvas_height() - CHROME_BOT {
-            gfx_line(bar_x, bar_y, bar_x, bar_y + LINE_H * 2, theme[T_QUOTE_BAR]);
+        let bar_x: i32 = eff_indent + PAD * ds + 10 * ds;
+        let bar_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
+        if bar_y >= CHROME_TOP * ds and bar_y < canvas_height() - CHROME_BOT * ds {
+            gfx_line(bar_x, bar_y, bar_x, bar_y + LINE_H * ds * 2, theme[T_QUOTE_BAR]);
         };
     }
     else if str_eq(tag, "del") or str_eq(tag, "s") { child_strike = true; }
     else if str_eq(tag, "u") or str_eq(tag, "ins") { child_uline = true; }
     else if str_eq(tag, "mark") { child_markbg = theme[T_MARK_BG]; }
     else if str_eq(tag, "dt") { child_color = theme[T_DT]; }
-    else if str_eq(tag, "dd") { child_indent = eff_indent + 30; }
-    else if str_eq(tag, "figure") { child_indent = eff_indent + 20; }
+    else if str_eq(tag, "dd") { child_indent = eff_indent + 30 * ds; }
+    else if str_eq(tag, "figure") { child_indent = eff_indent + 20 * ds; }
     else if str_eq(tag, "figcaption") { child_color = theme[T_FIGCAP]; };
 
     // CSS overrides from stylesheet cascade + inline style="..."
@@ -1531,21 +1542,21 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     // List item: numbered or bulleted
     if str_eq(tag, "li") {
-        x_ptr[0] = eff_indent + PAD;
-        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        x_ptr[0] = eff_indent + PAD * ds;
+        let draw_y: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
         if ol_counter[0] > 0 {
             let num_str: str = i32_to_str(ol_counter[0]);
             let li_label: str = str_concat(num_str, ". ");
-            if draw_y + tt_glyph_h_of(child_scale, tt_reg, tt_cfg, child_font) >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-                draw_text_f(x_ptr[0], draw_y, li_label, child_color, child_font, child_scale, tt_reg, tt_mono, tt_head, tt_cfg);
+            if draw_y + tt_glyph_h_of(child_scale, ds, tt_reg, tt_cfg, child_font) >= CHROME_TOP * ds and draw_y < canvas_height() - CHROME_BOT * ds {
+                draw_text_f(x_ptr[0], draw_y, li_label, child_color, child_font, child_scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
             };
-            x_ptr[0] = x_ptr[0] + text_width_f(li_label, child_font, child_scale, tt_reg, tt_mono, tt_head, tt_cfg);
+            x_ptr[0] = x_ptr[0] + text_width_f(li_label, child_font, child_scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
             ol_counter[0] = ol_counter[0] + 1;
         } else {
-            if draw_y + tt_glyph_h_of(child_scale, tt_reg, tt_cfg, child_font) >= CHROME_TOP and draw_y < canvas_height() - CHROME_BOT {
-                draw_text_f(x_ptr[0], draw_y, "* ", child_color, child_font, child_scale, tt_reg, tt_mono, tt_head, tt_cfg);
+            if draw_y + tt_glyph_h_of(child_scale, ds, tt_reg, tt_cfg, child_font) >= CHROME_TOP * ds and draw_y < canvas_height() - CHROME_BOT * ds {
+                draw_text_f(x_ptr[0], draw_y, "* ", child_color, child_font, child_scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
             };
-            x_ptr[0] = x_ptr[0] + text_width_f("* ", child_font, child_scale, tt_reg, tt_mono, tt_head, tt_cfg);
+            x_ptr[0] = x_ptr[0] + text_width_f("* ", child_font, child_scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
         };
     };
 
@@ -1557,10 +1568,10 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         let ta: i32 = styles[idx].text_align;
         if ta == 1 or ta == 2 {
             let w_ptr: [i32] = [0];
-            measure_inline_text(nodes, idx, styles, child_font, child_scale, w_ptr, tt_reg, tt_mono, tt_head, tt_cfg);
+            measure_inline_text(nodes, idx, styles, child_font, child_scale, ds, w_ptr, tt_reg, tt_mono, tt_head, tt_cfg);
             let measured: i32 = w_ptr[0];
-            let line_start: i32 = eff_indent + PAD;
-            let line_end: i32 = eff_vp_width - PAD;
+            let line_start: i32 = eff_indent + PAD * ds;
+            let line_end: i32 = eff_vp_width - PAD * ds;
             let avail: i32 = line_end - line_start;
             if measured > 0 and measured <= avail {
                 if ta == 1 {
@@ -1574,14 +1585,14 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     // Track onclick elements — record y before children render
     let has_onclick: bool = str_len(html_get_attr(node, "onclick")) > 0;
-    let onclick_y_start: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+    let onclick_y_start: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
 
     // Render children via sibling walk
     let child_in_chrome: bool = in_chrome or node_is_chrome;
     let mut child: i32 = node.first_child;
     while child != -1 {
         render_node(nodes, child, x_ptr, y_ptr, vp_top, eff_vp_width,
-                    links, child_color, child_font, child_scale,
+                    links, child_color, child_font, child_scale, ds,
                     child_link, child_href,
                     child_indent, child_pre,
                     img_cache_idx, img_cache_data,
@@ -1601,14 +1612,14 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     // Record clickable element after children are rendered
     if has_onclick {
-        let onclick_y_end: i32 = y_ptr[0] - vp_top + CHROME_TOP;
+        let onclick_y_end: i32 = y_ptr[0] - vp_top + CHROME_TOP * ds;
         let mut onclick_h: i32 = onclick_y_end - onclick_y_start;
-        if onclick_h < LINE_H {
-            onclick_h = LINE_H;
+        if onclick_h < LINE_H * ds {
+            onclick_h = LINE_H * ds;
         };
         let cci: ClickInfo = ClickInfo {
-            x: eff_indent + PAD, y: onclick_y_start,
-            w: eff_vp_width - eff_indent - PAD * 2,
+            x: eff_indent + PAD * ds, y: onclick_y_start,
+            w: eff_vp_width - eff_indent - PAD * ds * 2,
             h: onclick_h,
             node_idx: idx,
         };
@@ -1617,13 +1628,13 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     // Block post-spacing (includes CSS padding-bottom).
     if is_block {
-        x_ptr[0] = eff_indent + PAD;
-        y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale, tt_reg, tt_cfg, child_font);
+        x_ptr[0] = eff_indent + PAD * ds;
+        y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale, ds, tt_reg, tt_cfg, child_font);
         if pad_bot_px > 0 {
             y_ptr[0] = y_ptr[0] + pad_bot_px;
         };
     };
-    if str_eq(tag, "h1") or str_eq(tag, "h2") { y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale, tt_reg, tt_cfg, child_font) / 2; };
+    if str_eq(tag, "h1") or str_eq(tag, "h2") { y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale, ds, tt_reg, tt_cfg, child_font) / 2; };
     // Paragraph spacing: pre-p already adds half a line (line ~945);
     // block post-spacing adds a full line.  That's 1.5 lines between
     // paragraph tops — a visible blank line gap without an extra
@@ -1866,6 +1877,11 @@ fn! main() {
         Result::Ok(_s) => {},
         Result::Err(e) => { println("Failed to open window: {e}"); exit(1); },
     };
+
+    // Device pixel scale for HiDPI.  canvas_open auto-scales by system DPI
+    // on Windows; canvas_scale() returns the factor so we can scale all
+    // drawing up from logical to canvas pixels.
+    let ds: i32 = canvas_scale();
 
     // State
     let mut mode: BrowserMode = BrowserMode::Normal;
@@ -2163,7 +2179,7 @@ fn! main() {
         // mean scroll up (content moves down, scroll_y decreases).
         let wheel: i32 = canvas_wheel();
         if wheel != 0 {
-            scroll_y -= wheel * LINE_H * 3;
+            scroll_y -= wheel * LINE_H * ds * 3;
             if scroll_y < 0 { scroll_y = 0; };
             if scroll_y > max_scroll { scroll_y = max_scroll; };
         };
@@ -2411,11 +2427,11 @@ fn! main() {
                 // recv loop (several seconds on slow hosts) and Windows marks
                 // the app as "Not Responding".
                 canvas_clear(theme[T_BG]);
-                gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP - 4, theme[T_STATUS_BG]);
-                gfx_draw_text(8, 10, "Loading: {nav_url}", theme[T_FG], FONT_DEFAULT);
-                let sty0: i32 = canvas_height() - CHROME_BOT;
-                gfx_fill_rect(0, sty0, canvas_width(), CHROME_BOT, theme[T_STATUS_BG]);
-                gfx_draw_text(4, sty0 + 6, " LOADING | {nav_url}", theme[T_FG], FONT_DEFAULT);
+                gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP * ds - 4 * ds, theme[T_STATUS_BG]);
+                gfx_draw_text_scaled(8 * ds, 10 * ds, "Loading: {nav_url}", theme[T_FG], ds, ds, FONT_DEFAULT);
+                let sty0: i32 = canvas_height() - CHROME_BOT * ds;
+                gfx_fill_rect(0, sty0, canvas_width(), CHROME_BOT * ds, theme[T_STATUS_BG]);
+                gfx_draw_text_scaled(4 * ds, sty0 + 6 * ds, " LOADING | {nav_url}", theme[T_FG], ds, ds, FONT_DEFAULT);
                 canvas_flush();
 
                 let u: Url = url_parse(nav_url);
@@ -2768,22 +2784,22 @@ fn! main() {
                         search_query = "";
                         while len(search_match_y) > 0 { pop(search_match_y); };
                     } else if key == 106 {
-                        scroll_y += LINE_H * 3;
+                        scroll_y += LINE_H * ds * 3;
                         if scroll_y > max_scroll { scroll_y = max_scroll; };
                     } else if key == 107 {
-                        scroll_y -= LINE_H * 3;
+                        scroll_y -= LINE_H * ds * 3;
                         if scroll_y < 0 { scroll_y = 0; };
                     } else if key == 100 or key == 32 {
                         // d or Space — scroll down one page (Space) / half page (d)
                         let scroll_amount: i32 = if key == 32 {
-                            canvas_height() - CHROME_TOP - CHROME_BOT
+                            canvas_height() - CHROME_TOP * ds - CHROME_BOT * ds
                         } else {
-                            (canvas_height() - CHROME_TOP - CHROME_BOT) / 2
+                            (canvas_height() - CHROME_TOP * ds - CHROME_BOT * ds) / 2
                         };
                         scroll_y += scroll_amount;
                         if scroll_y > max_scroll { scroll_y = max_scroll; };
                     } else if key == 117 {
-                        scroll_y -= (canvas_height() - CHROME_TOP - CHROME_BOT) / 2;
+                        scroll_y -= (canvas_height() - CHROME_TOP * ds - CHROME_BOT * ds) / 2;
                         if scroll_y < 0 { scroll_y = 0; };
                     } else if key == 71 {
                         scroll_y = max_scroll;
@@ -3198,10 +3214,10 @@ fn! main() {
                                 let found: i32 = str_find(str_slice(full_text, search_pos, str_len(full_text)), search_query);
                                 if found < 0 { break; };
                                 // Estimate y position: count chars up to match, divide by chars_per_line
-                                let chars_per_line: i32 = (canvas_width() - PAD * 2) / FONT_W;
+                                let chars_per_line: i32 = (canvas_width() - PAD * ds * 2) / FONT_W * ds;
                                 let char_pos: i32 = search_pos + found;
                                 let line_num: i32 = char_pos / max_i32(chars_per_line, 1);
-                                let match_y: i32 = line_num * LINE_H;
+                                let match_y: i32 = line_num * LINE_H * ds;
                                 push(search_match_y, match_y);
                                 search_pos = search_pos + found + str_len(search_query);
                             };
@@ -3389,7 +3405,7 @@ fn! main() {
                     for si in 0..len(word_map) {
                         let sw: WordInfo = word_map[si];
                         let wcx: i32 = sw.x + sw.w / 2;
-                        let wcy: i32 = sw.y + LINE_H / 2;
+                        let wcy: i32 = sw.y + LINE_H * ds / 2;
                         if wcx >= sx0 and wcx <= sx1 and wcy >= sy0 and wcy <= sy1 {
                             push(sel_words, sw.text);
                         };
@@ -3431,13 +3447,13 @@ fn! main() {
             canvas_clear(theme[T_BG]);
 
             // Address bar
-            gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP, theme[T_STATUS_BG]);
+            gfx_fill_rect(0, 0, canvas_width(), CHROME_TOP * ds, theme[T_STATUS_BG]);
             // Font-size toggle button on the right edge of the chrome.
             // Label shows the *current* size; clicking flips to the other.
-            let fs_btn_w: i32 = 44;
-            let fs_btn_h: i32 = 20;
-            let fs_btn_x: i32 = canvas_width() - fs_btn_w - 4;
-            let fs_btn_y: i32 = 4;
+            let fs_btn_w: i32 = 44 * ds;
+            let fs_btn_h: i32 = 20 * ds;
+            let fs_btn_x: i32 = canvas_width() - fs_btn_w - 4 * ds;
+            let fs_btn_y: i32 = 4 * ds;
             // Label: bitmap mode shows 8pt/12pt; TT mode shows the live
             // body pixel size so the user can see what each click produced.
             let fs_label: str = if tt_cfg[TTC_ENABLED] != 0 {
@@ -3473,8 +3489,8 @@ fn! main() {
             };
             // TrueType toggle button just to the left of the font-size button.
             // Disabled (greyed label) when no regular TT font loaded.
-            let tt_btn_w: i32 = 36;
-            let tt_btn_x: i32 = fs_btn_x - tt_btn_w - 4;
+            let tt_btn_w: i32 = 36 * ds;
+            let tt_btn_x: i32 = fs_btn_x - tt_btn_w - 4 * ds;
             let tt_label: str = if tt_cfg[TTC_ENABLED] != 0 { "TT" } else { "Bmp" };
             let tt_clicked: bool = ui_button(tt_btn_x, fs_btn_y, tt_btn_w, fs_btn_h,
                                              tt_label, prev_btn, ui_colors);
@@ -3491,8 +3507,8 @@ fn! main() {
             // Theme (light/dark) toggle, just left of the TT button.  Label is
             // the icon representing the *current* state — sun for light, moon
             // for dark.  Clicking flips it and persists to theme.cfg.
-            let th_btn_w: i32 = 28;
-            let th_btn_x: i32 = tt_btn_x - th_btn_w - 4;
+            let th_btn_w: i32 = 28 * ds;
+            let th_btn_x: i32 = tt_btn_x - th_btn_w - 4 * ds;
             let th_label: str = if light_mode { "Sun" } else { "Moon" };
             let th_clicked: bool = ui_button(th_btn_x, fs_btn_y, th_btn_w, fs_btn_h,
                                              th_label, prev_btn, ui_colors);
@@ -3514,8 +3530,8 @@ fn! main() {
                 _ => false,
             };
             let nav_visible: bool = page_loaded and has_chrome and not show_full and not is_insert;
-            let nav_btn_w: i32 = if nav_visible { 36 } else { 0 };
-            let nav_gap: i32 = if nav_visible { 4 } else { 0 };
+            let nav_btn_w: i32 = if nav_visible { 36 * ds } else { 0 };
+            let nav_gap: i32 = if nav_visible { 4 * ds } else { 0 };
             let nav_btn_x: i32 = th_btn_x - nav_btn_w - nav_gap;
             if nav_visible {
                 f_btn_clicked = ui_button(nav_btn_x, fs_btn_y, nav_btn_w, fs_btn_h,
@@ -3526,15 +3542,15 @@ fn! main() {
                 BrowserMode::Insert => url_focused,
                 _ => false,
             };
-            let url_bar_w: i32 = canvas_width() - 8 - fs_btn_w - 4 - tt_btn_w - 4 - th_btn_w - 4 - nav_btn_w - nav_gap;
-            let mouse_focus: bool = ui_textbox(4, 4, url_bar_w, url_buf,
+            let url_bar_w: i32 = canvas_width() - 8 * ds - fs_btn_w - 4 * ds - tt_btn_w - 4 * ds - th_btn_w - 4 * ds - nav_btn_w - nav_gap;
+            let mouse_focus: bool = ui_textbox(4 * ds, 4 * ds, url_bar_w, url_buf,
                                      show_focused, prev_btn, 0,
                                      url_cursor, url_select_all, ui_colors);
             // Detect actual click (button-down transition) inside the URL bar
             let url_bar_btn: i32 = canvas_mouse_btn();
             let url_bar_mx: i32 = canvas_mouse_x();
             let url_bar_my: i32 = canvas_mouse_y();
-            let url_bar_hover: bool = url_bar_mx >= 4 and url_bar_mx < 4 + url_bar_w and url_bar_my >= 4 and url_bar_my < 24;
+            let url_bar_hover: bool = url_bar_mx >= 4 * ds and url_bar_mx < 4 * ds + url_bar_w and url_bar_my >= 4 * ds and url_bar_my < 24 * ds;
             let url_bar_clicked: bool = url_bar_hover and band(url_bar_btn, 1) == 1 and band(prev_btn, 1) == 0;
 
             match mode {
@@ -3567,7 +3583,7 @@ fn! main() {
             if page_loaded and dom_root >= 0 {
                 while len(page_links) > 0 { pop(page_links); };
                 while len(page_clickables) > 0 { pop(page_clickables); };
-                let x_ptr: [i32] = [PAD];
+                let x_ptr: [i32] = [PAD * ds];
                 let y_ptr: [i32] = [0];
                 let pg_u: Url = url_parse(current_url);
                 while len(word_map) > 0 { pop(word_map); };
@@ -3617,7 +3633,7 @@ fn! main() {
                 let body_mono_eff: i32 = if small_font { FONT_DEFAULT } else { BODY_MONO_FONT };
                 render_node(dom_nodes, render_root, x_ptr, y_ptr,
                             scroll_y, canvas_width(), page_links,
-                            theme[T_FG], body_font_eff, body_scale, false, "", 0, false,
+                            theme[T_FG], body_font_eff, body_scale, ds, false, "", 0, false,
                             img_cache_idx, img_cache_data,
                             img_cache_w, img_cache_h,
                             pg_u.scheme, pg_u.host, pg_u.port, pg_u.path,
@@ -3638,7 +3654,7 @@ fn! main() {
                     dom_styles[narrow_idx].center_block = narrow_prev_center;
                 };
                 doc_height = y_ptr[0];
-                max_scroll = max_i32(doc_height - (canvas_height() - CHROME_TOP - CHROME_BOT), 0);
+                max_scroll = max_i32(doc_height - (canvas_height() - CHROME_TOP * ds - CHROME_BOT * ds), 0);
 
                 // Fragment scroll: if the pending fragment matched a node,
                 // set scroll_y to its y position and schedule another
@@ -3664,48 +3680,48 @@ fn! main() {
                     for hi in 0..len(word_map) {
                         let hw: WordInfo = word_map[hi];
                         let wcx: i32 = hw.x + hw.w / 2;
-                        let wcy: i32 = hw.y + LINE_H / 2;
+                        let wcy: i32 = hw.y + LINE_H * ds / 2;
                         // Check if word center is inside selection rectangle
                         if wcx >= sx0 and wcx <= sx1 and wcy >= sy0 and wcy <= sy1 {
-                            gfx_fill_rect(hw.x, hw.y, hw.w, LINE_H, theme[T_SEL]);
-                            gfx_draw_text(hw.x, hw.y, hw.text, theme[T_HINT_FG], FONT_DEFAULT);
+                            gfx_fill_rect(hw.x, hw.y, hw.w, LINE_H * ds, theme[T_SEL]);
+                            gfx_draw_text_scaled(hw.x, hw.y, hw.text, theme[T_HINT_FG], ds, ds, FONT_DEFAULT);
                         };
                     };
                 };
             } else if str_len(error_msg) > 0 {
-                gfx_draw_text(PAD, CHROME_TOP + PAD, "Error loading page:", theme[T_H1], FONT_DEFAULT);
-                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 2, error_msg, theme[T_FG], FONT_DEFAULT);
-                gfx_draw_text(PAD, CHROME_TOP + PAD + LINE_H * 4, "Press 'o' to enter a new URL", theme[T_HR], FONT_DEFAULT);
+                gfx_draw_text_scaled(PAD * ds, CHROME_TOP * ds + PAD * ds, "Error loading page:", theme[T_H1], ds, ds, FONT_DEFAULT);
+                gfx_draw_text_scaled(PAD * ds, CHROME_TOP * ds + PAD * ds + LINE_H * ds * 2, error_msg, theme[T_FG], ds, ds, FONT_DEFAULT);
+                gfx_draw_text_scaled(PAD * ds, CHROME_TOP * ds + PAD * ds + LINE_H * ds * 4, "Press 'o' to enter a new URL", theme[T_HR], ds, ds, FONT_DEFAULT);
             } else {
                 // ASCII art logo
-                let ax: i32 = PAD + 100;
-                let mut ay: i32 = CHROME_TOP + 60;
-                gfx_draw_text(ax, ay, "  ___            __      __   _", theme[T_H1], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, " / _ \\ ___ ___  \\ \\    / /__| |__", theme[T_H1], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "| (_) (_-</ __|  \\ \\/\\/ / -_) '_ \\", theme[T_H1], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, " \\___//__/\\___|   \\_/\\_/\\___|_.__/", theme[T_H1], FONT_DEFAULT); ay += LINE_H;
-                ay += LINE_H;
-                gfx_draw_text(ax, ay, "A minimal Vim-powered browser written in Oscan", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                ay += LINE_H * 2;
-                gfx_draw_text(ax, ay, "Press 'o' to open a URL", theme[T_LINK], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Press '?' for keyboard shortcuts", theme[T_LINK], FONT_DEFAULT); ay += LINE_H;
-                ay += LINE_H * 2;
-                gfx_draw_text(ax, ay, "Keyboard shortcuts:", theme[T_H2], FONT_DEFAULT); ay += LINE_H + 4;
-                gfx_draw_text(ax, ay, "j/k       Scroll down/up", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "d/u       Half page down/up", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Space     Full page down", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "gg / G    Top / bottom of page", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "f         Follow link (hint mode)", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "o         Open URL", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "p         Paste URL and go", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "yy        Copy URL to clipboard", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Ctrl+V    Paste in URL bar", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Ctrl+C    Copy URL", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "H / L     Back / forward", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "/         Search in page", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "r         Reload", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Q         Quit browser", theme[T_FG], FONT_DEFAULT); ay += LINE_H;
-                gfx_draw_text(ax, ay, "Esc       Normal mode", theme[T_FG], FONT_DEFAULT);
+                let ax: i32 = PAD * ds + 100 * ds;
+                let mut ay: i32 = CHROME_TOP * ds + 60 * ds;
+                gfx_draw_text_scaled(ax, ay, "  ___            __      __   _", theme[T_H1], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, " / _ \\ ___ ___  \\ \\    / /__| |__", theme[T_H1], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "| (_) (_-</ __|  \\ \\/\\/ / -_) '_ \\", theme[T_H1], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, " \\___//__/\\___|   \\_/\\_/\\___|_.__/", theme[T_H1], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "A minimal Vim-powered browser written in Oscan", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                ay += LINE_H * ds * 2;
+                gfx_draw_text_scaled(ax, ay, "Press 'o' to open a URL", theme[T_LINK], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "Press '?' for keyboard shortcuts", theme[T_LINK], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                ay += LINE_H * ds * 2;
+                gfx_draw_text_scaled(ax, ay, "Keyboard shortcuts:", theme[T_H2], ds, ds, FONT_DEFAULT); ay += LINE_H * ds + 4 * ds;
+                gfx_draw_text_scaled(ax, ay, "j/k       Scroll down/up", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "d/u       Half page down/up", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "Space     Full page down", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "gg / G    Top / bottom of page", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "f         Follow link (hint mode)", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "o         Open URL", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "p         Paste URL and go", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "yy        Copy URL to clipboard", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "Ctrl+V    Paste in URL bar", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "Ctrl+C    Copy URL", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "H / L     Back / forward", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "/         Search in page", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "r         Reload", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "Q         Quit browser", theme[T_FG], ds, ds, FONT_DEFAULT); ay += LINE_H * ds;
+                gfx_draw_text_scaled(ax, ay, "Esc       Normal mode", theme[T_FG], ds, ds, FONT_DEFAULT);
             };
 
             // URL-bar autocomplete dropdown (Insert mode only).  Matches
@@ -3730,16 +3746,16 @@ fn! main() {
             };
             if ac_selected >= len(ac_matches) { ac_selected = -1; };
             if len(ac_matches) > 0 {
-                let ady: i32 = CHROME_TOP;
-                let ad_h: i32 = len(ac_matches) * 14 + 4;
-                gfx_fill_rect(4, ady, canvas_width() - 8, ad_h, theme[T_STATUS_BG]);
-                gfx_rect(4, ady, canvas_width() - 8, ad_h, UI_BORDER);
+                let ady: i32 = CHROME_TOP * ds;
+                let ad_h: i32 = len(ac_matches) * 14 * ds + 4 * ds;
+                gfx_fill_rect(4 * ds, ady, canvas_width() - 8 * ds, ad_h, theme[T_STATUS_BG]);
+                gfx_rect(4 * ds, ady, canvas_width() - 8 * ds, ad_h, UI_BORDER);
                 for ami in 0..len(ac_matches) {
-                    let rowy: i32 = ady + 2 + ami * 14;
+                    let rowy: i32 = ady + 2 * ds + ami * 14 * ds;
                     if ami == ac_selected {
-                        gfx_fill_rect(4, rowy, canvas_width() - 8, 14, theme[T_SEL]);
+                        gfx_fill_rect(4 * ds, rowy, canvas_width() - 8 * ds, 14 * ds, theme[T_SEL]);
                     };
-                    gfx_draw_text(10, rowy + 3, ac_matches[ami], theme[T_FG], FONT_DEFAULT);
+                    gfx_draw_text_scaled(10 * ds, rowy + 3 * ds, ac_matches[ami], theme[T_FG], ds, ds, FONT_DEFAULT);
                 };
             };
 
@@ -3749,9 +3765,9 @@ fn! main() {
                     for li in 0..len(follow_links) {
                         let fl: LinkInfo = follow_links[li];
                         if str_len(fl.label) > 0 {
-                            let lw: i32 = str_len(fl.label) * FONT_W + 4;
-                            gfx_fill_rect(fl.x - 2, fl.y - 1, lw, FONT_H + 2, theme[T_HINT_BG]);
-                            gfx_draw_text(fl.x, fl.y, fl.label, theme[T_HINT_FG], FONT_DEFAULT);
+                            let lw: i32 = str_len(fl.label) * FONT_W * ds + 4 * ds;
+                            gfx_fill_rect(fl.x - 2 * ds, fl.y - 1 * ds, lw, FONT_H * ds + 2 * ds, theme[T_HINT_BG]);
+                            gfx_draw_text_scaled(fl.x, fl.y, fl.label, theme[T_HINT_FG], ds, ds, FONT_DEFAULT);
                         };
                     };
                 },
@@ -3773,12 +3789,12 @@ fn! main() {
                 _ => false,
             };
             if is_form_pick {
-                let psy: i32 = canvas_height() - CHROME_BOT - 24;
-                gfx_fill_rect(0, psy, canvas_width(), 24, theme[T_STATUS_BG]);
+                let psy: i32 = canvas_height() - CHROME_BOT * ds - 24 * ds;
+                gfx_fill_rect(0, psy, canvas_width(), 24 * ds, theme[T_STATUS_BG]);
                 gfx_rect(0, psy, canvas_width(), 1, UI_BORDER);
-                let mut px: i32 = 4;
-                gfx_draw_text(px, psy + 8, "Pick form:", theme[T_FG], FONT_DEFAULT);
-                px = px + gfx_text_width("Pick form:", FONT_DEFAULT) + 8;
+                let mut px: i32 = 4 * ds;
+                gfx_draw_text_scaled(px, psy + 8 * ds, "Pick form:", theme[T_FG], ds, ds, FONT_DEFAULT);
+                px = px + gfx_text_width("Pick form:", FONT_DEFAULT) * ds + 8 * ds;
                 let nforms: i32 = len(page_forms);
                 let max_show: i32 = if nforms < 26 { nforms } else { 26 };
                 for fi in 0..max_show {
@@ -3796,13 +3812,13 @@ fn! main() {
                     let label: str = str_from_chars(label_buf);
                     let method_up: str = if str_eq(fm.method, "post") { "POST" } else { "GET" };
                     let seg: str = "[{label}] {method_up}({nfields}) ";
-                    gfx_draw_text(px, psy + 8, seg, theme[T_FG], FONT_DEFAULT);
-                    px = px + gfx_text_width(seg, FONT_DEFAULT);
-                    if px > canvas_width() - 80 { break; };
+                    gfx_draw_text_scaled(px, psy + 8 * ds, seg, theme[T_FG], ds, ds, FONT_DEFAULT);
+                    px = px + gfx_text_width(seg, FONT_DEFAULT) * ds;
+                    if px > canvas_width() - 80 * ds { break; };
                 };
             } else if show_form_bar {
-                let sy: i32 = canvas_height() - CHROME_BOT - 24;
-                gfx_fill_rect(0, sy, canvas_width(), 24, theme[T_STATUS_BG]);
+                let sy: i32 = canvas_height() - CHROME_BOT * ds - 24 * ds;
+                gfx_fill_rect(0, sy, canvas_width(), 24 * ds, theme[T_STATUS_BG]);
                 gfx_rect(0, sy, canvas_width(), 1, UI_BORDER);
                 let pos_disp: i32 = form_fill_pos + 1;
                 let total: i32 = len(form_fill_order);
@@ -3822,84 +3838,84 @@ fn! main() {
                     " [password]"
                 } else { "" };
                 let prompt: str = "Form [{pos_disp}/{total}] {field_name}{kind_hint}: ";
-                gfx_draw_text(4, sy + 8, prompt, theme[T_FG], FONT_DEFAULT);
-                let prompt_w: i32 = gfx_text_width(prompt, FONT_DEFAULT);
+                gfx_draw_text_scaled(4 * ds, sy + 8 * ds, prompt, theme[T_FG], ds, ds, FONT_DEFAULT);
+                let prompt_w: i32 = gfx_text_width(prompt, FONT_DEFAULT) * ds;
                 let val: str = str_from_chars(form_input_buf);
-                gfx_draw_text(4 + prompt_w, sy + 8, val, theme[T_FG], FONT_DEFAULT);
+                gfx_draw_text_scaled(4 * ds + prompt_w, sy + 8 * ds, val, theme[T_FG], ds, ds, FONT_DEFAULT);
                 // Cursor
-                gfx_fill_rect(4 + prompt_w + len(form_input_buf) * FONT_W,
-                              sy + 8, 1, FONT_H, theme[T_FG]);
+                gfx_fill_rect(4 * ds + prompt_w + len(form_input_buf) * FONT_W * ds,
+                              sy + 8 * ds, 1 * ds, FONT_H * ds, theme[T_FG]);
             } else if show_search_bar {
-                let sy: i32 = canvas_height() - CHROME_BOT - 24;
-                gfx_fill_rect(0, sy, canvas_width(), 24, theme[T_STATUS_BG]);
+                let sy: i32 = canvas_height() - CHROME_BOT * ds - 24 * ds;
+                gfx_fill_rect(0, sy, canvas_width(), 24 * ds, theme[T_STATUS_BG]);
                 gfx_rect(0, sy, canvas_width(), 1, UI_BORDER);
-                gfx_draw_text(4, sy + 8, "/", theme[T_FG], FONT_DEFAULT);
+                gfx_draw_text_scaled(4 * ds, sy + 8 * ds, "/", theme[T_FG], ds, ds, FONT_DEFAULT);
                 let st: str = str_from_chars(search_buf);
-                gfx_draw_text(12, sy + 8, st, theme[T_FG], FONT_DEFAULT);
+                gfx_draw_text_scaled(12 * ds, sy + 8 * ds, st, theme[T_FG], ds, ds, FONT_DEFAULT);
                 // Cursor
-                gfx_fill_rect(12 + len(search_buf) * FONT_W, sy + 8, 1, FONT_H, theme[T_FG]);
+                gfx_fill_rect(12 * ds + len(search_buf) * FONT_W * ds, sy + 8 * ds, 1 * ds, FONT_H * ds, theme[T_FG]);
             } else if search_active and str_len(search_query) > 0 {
                 // Show match count in status area
-                let sy: i32 = canvas_height() - CHROME_BOT - 16;
+                let sy: i32 = canvas_height() - CHROME_BOT * ds - 16 * ds;
                 let match_info: str = if len(search_match_y) > 0 {
                     let idx_display: i32 = search_match_idx + 1;
                     "/{search_query}  [{idx_display}/{len(search_match_y)}]  (n/N to navigate, Esc to clear)"
                 } else {
                     "/{search_query}  [no matches]"
                 };
-                gfx_fill_rect(0, sy, canvas_width(), 16, theme[T_STATUS_BG]);
-                gfx_draw_text(4, sy + 4, match_info, theme[T_SEARCH_HL], FONT_DEFAULT);
+                gfx_fill_rect(0, sy, canvas_width(), 16 * ds, theme[T_STATUS_BG]);
+                gfx_draw_text_scaled(4 * ds, sy + 4 * ds, match_info, theme[T_SEARCH_HL], ds, ds, FONT_DEFAULT);
             };
 
             // Help overlay
             if show_help {
-                let hx: i32 = 200;
-                let hy: i32 = 60;
-                gfx_fill_rect(hx, hy, 600, 440, theme[T_STATUS_BG]);
-                gfx_rect(hx, hy, 600, 440, UI_BORDER);
-                gfx_draw_text(hx + 10, hy + 10, "OscaWeb Keyboard Shortcuts", theme[T_H1], FONT_DEFAULT);
-                let mut ky: i32 = hy + 30;
-                gfx_draw_text(hx + 10, ky, "j / k        Scroll down / up", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "d / u        Half page down / up", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "gg / G       Top / bottom", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "gm           Jump to <main>/<article>", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "f / F        Follow link (all / chrome only)", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "t            Toggle outline (ToC); 1-9 jumps", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "o / O        Open / edit URL  (type to search)", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "r            Reload page", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "gr           Toggle reader mode", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "gR           Toggle show-full (disables chrome trim)", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "b / B        Bookmark / bookmarks list", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "+ / - / 0    Zoom in / out / reset", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "p            Paste URL and go", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "yy           Copy URL to clipboard", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Ctrl+V       Paste in URL bar", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Ctrl+C       Copy URL", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "H / L        Back / forward", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "/            Search in page", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Esc          Normal mode", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Q            Quit browser", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "?            Toggle this help", theme[T_FG], FONT_DEFAULT); ky += LINE_H;
-                ky += LINE_H;
-                gfx_draw_text(hx + 10, ky, "Mouse click on links also works!", theme[T_LINK], FONT_DEFAULT);
+                let hx: i32 = 200 * ds;
+                let hy: i32 = 60 * ds;
+                gfx_fill_rect(hx, hy, 600 * ds, 440 * ds, theme[T_STATUS_BG]);
+                gfx_rect(hx, hy, 600 * ds, 440 * ds, UI_BORDER);
+                gfx_draw_text_scaled(hx + 10 * ds, hy + 10 * ds, "OscaWeb Keyboard Shortcuts", theme[T_H1], ds, ds, FONT_DEFAULT);
+                let mut ky: i32 = hy + 30 * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "j / k        Scroll down / up", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "d / u        Half page down / up", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "gg / G       Top / bottom", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "gm           Jump to <main>/<article>", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "f / F        Follow link (all / chrome only)", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "t            Toggle outline (ToC); 1-9 jumps", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "o / O        Open / edit URL  (type to search)", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "r            Reload page", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "gr           Toggle reader mode", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "gR           Toggle show-full (disables chrome trim)", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "b / B        Bookmark / bookmarks list", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "+ / - / 0    Zoom in / out / reset", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "p            Paste URL and go", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "yy           Copy URL to clipboard", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "Ctrl+V       Paste in URL bar", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "Ctrl+C       Copy URL", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "H / L        Back / forward", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "/            Search in page", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "Esc          Normal mode", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "Q            Quit browser", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "?            Toggle this help", theme[T_FG], ds, ds, FONT_DEFAULT); ky += LINE_H * ds;
+                ky += LINE_H * ds;
+                gfx_draw_text_scaled(hx + 10 * ds, ky, "Mouse click on links also works!", theme[T_LINK], ds, ds, FONT_DEFAULT);
             };
 
             // Outline (table of contents) overlay
             if show_outline {
-                let ox: i32 = 200;
-                let oy0: i32 = 100;
+                let ox: i32 = 200 * ds;
+                let oy0: i32 = 100 * ds;
                 let on_cap: i32 = if len(outline_idx) < 9 { len(outline_idx) } else { 9 };
-                let oh: i32 = 40 + max_i32(on_cap, 1) * LINE_H;
-                gfx_fill_rect(ox, oy0, 600, oh, theme[T_STATUS_BG]);
-                gfx_rect(ox, oy0, 600, oh, UI_BORDER);
-                gfx_draw_text(ox + 10, oy0 + 10,
+                let oh: i32 = 40 * ds + max_i32(on_cap, 1) * LINE_H * ds;
+                gfx_fill_rect(ox, oy0, 600 * ds, oh, theme[T_STATUS_BG]);
+                gfx_rect(ox, oy0, 600 * ds, oh, UI_BORDER);
+                gfx_draw_text_scaled(ox + 10 * ds, oy0 + 10 * ds,
                     "Outline (press 1-9 to jump, t to close)",
-                    theme[T_H1], FONT_DEFAULT);
+                    theme[T_H1], ds, ds, FONT_DEFAULT);
                 if len(outline_idx) == 0 {
-                    gfx_draw_text(ox + 10, oy0 + 30,
-                        "No headings on this page.", theme[T_HR], FONT_DEFAULT);
+                    gfx_draw_text_scaled(ox + 10 * ds, oy0 + 30 * ds,
+                        "No headings on this page.", theme[T_HR], ds, ds, FONT_DEFAULT);
                 } else {
-                    let mut oky: i32 = oy0 + 30;
+                    let mut oky: i32 = oy0 + 30 * ds;
                     for oki in 0..on_cap {
                         let orn: i32 = oki + 1;
                         let olv: i32 = outline_level[oki];
@@ -3910,40 +3926,40 @@ fn! main() {
                                            else if olv == 2 { theme[T_H2] }
                                            else { theme[T_H3] };
                         let o_row: str = "{orn}. {indent_str}{outline_text[oki]}";
-                        gfx_draw_text(ox + 10, oky, o_row, color_h, FONT_DEFAULT);
-                        oky += LINE_H;
+                        gfx_draw_text_scaled(ox + 10 * ds, oky, o_row, color_h, ds, ds, FONT_DEFAULT);
+                        oky += LINE_H * ds;
                     };
                 };
             };
 
             // Bookmarks overlay
             if show_bookmarks {
-                let bx: i32 = 200;
-                let by: i32 = 100;
-                let bh: i32 = 40 + max_i32(len(bookmarks), 1) * LINE_H;
-                gfx_fill_rect(bx, by, 600, bh, theme[T_STATUS_BG]);
-                gfx_rect(bx, by, 600, bh, UI_BORDER);
-                gfx_draw_text(bx + 10, by + 10, "Bookmarks (press 1-9 to open, B to close)",
-                              theme[T_H1], FONT_DEFAULT);
+                let bx: i32 = 200 * ds;
+                let by: i32 = 100 * ds;
+                let bh: i32 = 40 * ds + max_i32(len(bookmarks), 1) * LINE_H * ds;
+                gfx_fill_rect(bx, by, 600 * ds, bh, theme[T_STATUS_BG]);
+                gfx_rect(bx, by, 600 * ds, bh, UI_BORDER);
+                gfx_draw_text_scaled(bx + 10 * ds, by + 10 * ds, "Bookmarks (press 1-9 to open, B to close)",
+                              theme[T_H1], ds, ds, FONT_DEFAULT);
                 if len(bookmarks) == 0 {
-                    gfx_draw_text(bx + 10, by + 30,
+                    gfx_draw_text_scaled(bx + 10 * ds, by + 30 * ds,
                                   "No bookmarks yet. Press 'b' on a page to save one.",
-                                  theme[T_HR], FONT_DEFAULT);
+                                  theme[T_HR], ds, ds, FONT_DEFAULT);
                 } else {
-                    let mut bky: i32 = by + 30;
+                    let mut bky: i32 = by + 30 * ds;
                     let cap: i32 = if len(bookmarks) < 9 { len(bookmarks) } else { 9 };
                     for bki in 0..cap {
                         let row_num: i32 = bki + 1;
                         let bm_row: str = "{row_num}. {bookmarks[bki]}";
-                        gfx_draw_text(bx + 10, bky, bm_row, theme[T_LINK], FONT_DEFAULT);
-                        bky += LINE_H;
+                        gfx_draw_text_scaled(bx + 10 * ds, bky, bm_row, theme[T_LINK], ds, ds, FONT_DEFAULT);
+                        bky += LINE_H * ds;
                     };
                 };
             };
 
             // Status bar
-            let sty: i32 = canvas_height() - CHROME_BOT;
-            gfx_fill_rect(0, sty, canvas_width(), CHROME_BOT, theme[T_STATUS_BG]);
+            let sty: i32 = canvas_height() - CHROME_BOT * ds;
+            gfx_fill_rect(0, sty, canvas_width(), CHROME_BOT * ds, theme[T_STATUS_BG]);
             let mode_str: str = match mode {
                 BrowserMode::Normal => "NORMAL",
                 BrowserMode::Insert => "INSERT",
@@ -3961,9 +3977,9 @@ fn! main() {
             let reader_flag: str = if reader_on { " | READER" } else { "" };
             let full_flag: str = if show_full { " | FULL" } else { "" };
             let zoom_flag: str = if body_scale > 1 { " | zoom {body_scale}x" } else { "" };
-            gfx_draw_text(4, sty + 6,
+            gfx_draw_text_scaled(4 * ds, sty + 6 * ds,
                 " {mode_str} | {status_msg} | {scroll_pct} | Links: {len(page_links)}{reader_flag}{full_flag}{zoom_flag}",
-                theme[T_FG], FONT_DEFAULT);
+                theme[T_FG], ds, ds, FONT_DEFAULT);
 
             // Floating "'F' for Nav" button moved to the top chrome (next to
             // theme toggle).  f_btn_clicked is assigned there.
