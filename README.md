@@ -1,8 +1,38 @@
 # OscaWeb
 
-**A minimal, Vim-powered web browser written in [Oscan](https://github.com/lucabol/Oscan)**
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Language: Oscan](https://img.shields.io/badge/language-Oscan-6e40c9.svg)](https://github.com/lucabol/Oscan)
+[![Platform: Windows | Linux](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue.svg)]()
 
-OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboard-driven navigation inspired by [Vimium](https://github.com/philc/vimium). It supports HTTP and HTTPS (TLS built into Oscan — SChannel on Windows, BearSSL on Linux), renders images inline (PNG, JPEG, BMP, GIF, SVG), and executes inline JavaScript via an embedded [QuickJS-ng](https://github.com/nicotordev/quickjs-ng) engine — all with zero external dependencies beyond the Oscan compiler.
+**A minimal, Vim-powered web browser written in [Oscan](https://github.com/lucabol/Oscan).**
+
+OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboard-driven navigation inspired by [Vimium](https://github.com/philc/vimium). It supports HTTP/HTTPS (TLS built into Oscan — SChannel on Windows, BearSSL on Linux), renders images inline (PNG, JPEG, BMP, GIF, SVG), and runs inline JavaScript via an embedded [QuickJS-ng](https://github.com/nicotordev/quickjs-ng) engine — all with zero external dependencies beyond the Oscan compiler.
+
+## Table of Contents
+
+- [Key Features](#key-features)
+- [Screenshots](#screenshots)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
+- [HTML Rendering](#html-rendering)
+- [Image Pipeline](#image-pipeline)
+- [JavaScript Engine](#javascript-engine)
+- [Mouse Interaction](#mouse-interaction)
+- [Link Hint Mode](#link-hint-mode)
+- [Status Bar](#status-bar)
+- [Architecture](#architecture)
+- [CSS](#css)
+- [Networking](#networking)
+- [Testing](#testing)
+- [File Structure](#file-structure)
+- [Reader Mode, Bookmarks & Zoom](#reader-mode-bookmarks--zoom)
+- [Limitations](#limitations)
+- [Manual Test Plan](#manual-test-plan)
+- [Design Philosophy](#design-philosophy)
+- [Contributing](#contributing)
+- [Built With](#built-with)
+- [License](#license)
 
 ### Key Features
 
@@ -20,17 +50,31 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 - **Runtime zoom** — `+`/`-` zoom in/out, `0` resets (1×–4×)
 - **HTTP and HTTPS support** — TLS is built into Oscan (zero external dependencies)
 - **JavaScript execution** — inline `<script>` tags and `onclick` handlers via embedded QuickJS-ng
-- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed and applied (color, background, font-weight, font-style, text-decoration, text-align, `display:none`, `padding`, `max-width`, `width` (px/%), `line-height`, `margin` (px and `0 auto` centering), and `@media (prefers-color-scheme)`) with a real cascade, descendant combinator, and inheritance. Tables now auto-size columns to content and wrap long cells.
+- **Basic CSS styling** — inline `<style>` blocks, external `<link rel="stylesheet">` stylesheets, and inline `style=""` attributes are parsed with a real cascade, descendant/child combinators, attribute selectors, and inheritance. See [CSS](#css) for the full supported subset.
 - **Image rendering** — PNG, JPEG, BMP, GIF, and SVG decoded, cached, and displayed inline
-- **Rich HTML rendering** — headings, lists, tables, blockquotes, code blocks, and 30+ tags
+- **Rich HTML rendering** — 30+ tags including headings, lists, tables, blockquotes, and code blocks (full list under [HTML Rendering](#html-rendering))
 - **Text selection & copy** — click-and-drag to select text, automatically copied to clipboard
 - **In-page search** — `/` to search with match highlighting and `n`/`N` navigation
 - **Dark theme** — purpose-built color scheme for comfortable reading
 - **Minimal dependencies** — only the Oscan compiler is required to build
 
-## Screenshot
+## Screenshots
 
-![OscaWeb Browser](Home.jpg)
+### Retro look — monospace bitmap font (default)
+
+The default terminal-inspired theme uses an 8×8 bitmap font for that unmistakable DOS/VT100 feel.
+
+![OscaWeb in retro bitmap mode](RetroLook.jpg)
+
+### Modern look — TrueType font at larger sizes
+
+Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern reading experience while keeping every Vim keybinding.
+
+![OscaWeb in modern TrueType mode](ModernLook.jpg)
+
+### Home page
+
+![OscaWeb home page](Home.jpg)
 
 ## Prerequisites
 
@@ -44,7 +88,7 @@ OscaWeb is a Single Document Interface (SDI) web browser that prioritizes keyboa
 .\build.ps1 -Run
 
 # Navigate to a URL on startup
-build/browser.exe http://example.com
+.\build\browser.exe http://example.com
 ```
 
 Press `o` once the browser is running to open a URL, or pass one on the command line.
@@ -80,10 +124,9 @@ OscaWeb uses Vimium-inspired keybindings. Press `?` in the browser to toggle the
 | `gf`  | Fill form on the current page (sequential prompts, Enter advances, Esc aborts) |
 | `gm`  | Jump to `<main>`/`<article>` / first heading |
 | `t`   | Toggle outline (table of contents) |
-| `1`–`9` | Jump to Nth heading (when outline is open) |
 | `b`   | Bookmark / un-bookmark current URL|
 | `B`   | Toggle bookmarks panel            |
-| `1`–`9` | Open Nth bookmark (when bookmarks panel is open) |
+| `1`–`9` | Jump to Nth item (context: outline headings, or bookmarks when panel is open) |
 | `p`   | Paste URL from clipboard and go   |
 | `yy`  | Copy current URL to clipboard     |
 | `H`   | Go back in history                |
@@ -225,6 +268,8 @@ Press `f` to enter Follow mode. Each link gets a hint label:
 - Type the hint letters to navigate to the corresponding link
 - If no labels match your typed prefix, Follow mode exits automatically
 
+Press `F` (capital) to label only **chrome** links (nav/header/footer/aside) — useful for jumping to "edit", "talk", or site-nav items that are hidden by the default chrome trimming.
+
 ## Status Bar
 
 The bottom bar shows at a glance:
@@ -236,28 +281,34 @@ The bottom bar shows at a glance:
 
 ## Architecture
 
-```
-┌────────────┐     ┌──────────┐     ┌──────────┐
-│ browser.osc│────▶│ http.osc │────▶│ url.osc  │
-│ (UI, keys, │     │ (HTTP +  │     │ (parser) │
-│  rendering)│     │  TLS)    │     └──────────┘
-└────────────┘     └──────────┘
-      │
-      ├───────────▶┌──────────┐
-      │            │ js.osc   │
-      │            │ (JS FFI) │
-      │            └──────────┘
-      │                 │
-      │            ┌──────────┐
-      │            │js_bridge.c│
-      │            │(QuickJS) │
-      │            └──────────┘
-      ▼
-┌────────────┐     ┌──────────┐
-│ html.osc   │     │libs/     │
-│ (tokenizer │     │ ui.osc   │
-│  + DOM)    │     │ (widgets)│
-└────────────┘     └──────────┘
+```mermaid
+flowchart TD
+    Browser[browser.osc<br/>UI · keys · render loop]
+    URL[url.osc<br/>URL parse/resolve]
+    HTTP[http.osc<br/>HTTP/HTTPS · TLS]
+    Cache[http_cache.osc<br/>LRU page cache]
+    Cookies[cookies.osc<br/>Cookie jar RFC 6265]
+    HTML[html.osc<br/>Tokenizer · flat DOM]
+    CSS[css.osc<br/>Parser · cascade]
+    JS[js.osc<br/>JS FFI]
+    Bridge[js_bridge.c<br/>QuickJS-ng]
+    Forms[forms.osc<br/>Form collect · encode]
+    Storage[storage.osc<br/>History · bookmarks]
+    VLog[vlog.osc<br/>Verbose logging]
+    UI[libs/ui.osc<br/>Widgets]
+
+    Browser --> URL
+    Browser --> HTTP
+    HTTP --> Cache
+    HTTP --> Cookies
+    Browser --> HTML
+    Browser --> CSS
+    Browser --> JS
+    JS --> Bridge
+    Browser --> Forms
+    Browser --> Storage
+    Browser --> VLog
+    Browser --> UI
 ```
 
 | Module           | Description |
@@ -267,8 +318,12 @@ The bottom bar shows at a glance:
 | `html.osc`       | State-machine-based HTML tokenizer and flat DOM tree builder |
 | `css.osc`        | CSS tokenizer, parser, selector matcher, and cascade engine |
 | `http.osc`       | HTTP/HTTPS client using Oscan's built-in TLS (`tls_connect`, `tls_send`, `tls_recv`) |
+| `http_cache.osc` | In-memory FIFO page cache (20 slots) for text documents; persisted to disk on exit |
+| `cookies.osc`    | Cookie jar — `Set-Cookie` parsing, `Cookie:` header injection, on-disk persistence |
+| `forms.osc`      | Form collection, field encoding (`application/x-www-form-urlencoded`), successful-control rules |
 | `js.osc`         | JavaScript engine FFI — walks the DOM to execute inline `<script>` tags |
 | `storage.osc`    | Flat-file persistence for history and bookmarks (APPDATA on Windows, HOME on Linux) |
+| `vlog.osc`       | Verbose diagnostic logging FFI (enabled with `--verbose`, appends to `browser.log`) |
 | `js_bridge.c`    | C bridge exposing QuickJS-ng engine lifecycle, console, and DOM bindings to Oscan |
 | `libs/ui.osc`    | Reusable UI widget library (panel, label, separator, button, checkbox, slider, textbox) |
 
@@ -289,15 +344,22 @@ cascade, and propagates inheritable properties.
 - **Properties** — `color`, `background-color` / `background`,
   `font-weight`, `font-style`, `text-decoration`
   (`underline` / `line-through` / `none`), `text-align`
-  (`left`/`center`/`right`), `display: none`
+  (`left` / `center` / `right`), `display: none`, `padding` (shorthand +
+  T/R/B/L), `width` and `max-width` (px or %), `line-height` (unitless
+  multiplier, px, or `normal`), and `margin: 0 auto` (sentinel for block
+  centering; full margin box is not otherwise modelled)
 - **Values** — named colors (subset), `#rgb`, `#rrggbb`, `rgb(r, g, b)`,
-  `bold`/`normal` (and numeric weights), `italic`, `!important`
+  `bold` / `normal` (and numeric weights), `italic`, `!important`
 - **Cascade** — specificity + source order across inline `<style>` and
-  external `<link rel="stylesheet">` blocks in document order, inline
-  `style=""` wins over stylesheet rules, `!important` wins over
+  external `<link rel="stylesheet">` blocks in document order; inline
+  `style=""` wins over stylesheet rules; `!important` wins over
   non-`!important`
 - **Inheritance** — `color`, `font-weight`, `font-style`,
-  `text-decoration`, `text-align` propagate from parent to child
+  `text-decoration`, `text-align`, `line-height` propagate from parent
+  to child
+- **`@media`** — `prefers-color-scheme: dark` applies (OscaWeb is
+  always-dark); `prefers-color-scheme: light` is dropped; all other
+  at-rule preludes (`print`, `min-width`, …) are dropped
 
 Because OscaWeb is a terminal-style renderer with a monospace bitmap
 font, `font-weight: bold` and `font-style: italic` are approximated by
@@ -325,7 +387,7 @@ back to left alignment).
 cd tests
 python -m http.server 8000
 # in another shell:
-build/browser.exe http://localhost:8000/test_page_css.html
+.\build\browser.exe http://localhost:8000/test_page_css.html
 ```
 
 See `tests/test_page_css.html` for a compact page that exercises every
@@ -373,14 +435,21 @@ oscanweb/
 ├── browser.osc          # Main application (rendering, chrome, vim keys, navigation)
 ├── url.osc              # URL parsing and resolution
 ├── http.osc             # HTTP/HTTPS client (built-in TLS)
+├── http_cache.osc       # FIFO page cache (20 slots) with disk persistence
+├── cookies.osc          # Cookie jar (Set-Cookie / Cookie: / disk persistence)
+├── forms.osc            # Form collection + URL-encoding
 ├── html.osc             # HTML tokenizer and DOM builder
 ├── css.osc              # CSS tokenizer, parser, selector matcher, cascade
 ├── js.osc               # JavaScript engine FFI (QuickJS-ng)
 ├── storage.osc          # Flat-file persistence for history & bookmarks
+├── vlog.osc             # Verbose diagnostic logging FFI
 ├── js_bridge.c          # C bridge for QuickJS-ng DOM bindings
 ├── build.ps1            # Build script
 ├── README.md            # This file
+├── LICENSE              # MIT license
 ├── requirements.md      # Original requirements
+├── docs/
+│   └── MANUAL_TESTS.md  # End-to-end smoke-test recipes
 ├── libs/
 │   ├── ui.osc           # UI widget library (panel, button, checkbox, slider, textbox)
 │   └── quickjs/         # QuickJS-ng engine source (quickjs.c, quickjs.h)
@@ -388,6 +457,10 @@ oscanweb/
     ├── test_url.osc        # URL parser tests
     ├── test_html.osc       # HTML parser tests
     ├── test_css.osc        # CSS parser / cascade tests
+    ├── test_http.osc       # HTTP client tests
+    ├── test_http_cache.osc # HTTP cache tests
+    ├── test_cookies.osc    # Cookie jar tests
+    ├── test_forms.osc      # Form encoding tests
     ├── test_render.osc     # Rendering tests
     ├── test_js.osc         # JavaScript engine tests
     ├── test_hints.osc      # Link hint label tests
@@ -488,10 +561,6 @@ headings, paragraphs, code blocks, and tables uniformly.
   selectors (`[attr]`, `[attr=v]`, `[attr~=v]`, `[attr^=v]`, `[attr$=v]`,
   `[attr*=v]`). Sibling combinators (`+`, `~`) and pseudo-classes
   (`:hover`, `::before`) are not matched
-- **External stylesheets** — `<link rel="stylesheet">` is fetched and
-  parsed alongside inline `<style>` blocks
-- **External scripts** — `<script src="...">` is fetched and evaluated
-  after inline scripts
 - **Limited form submission** — GET and POST forms supported via `gf` with text, textarea, checkbox, radio, and select fields (no visual inline rendering of the fields; prompting is status-bar-driven)
 - **No HTTP Content-Encoding** — `Accept-Encoding` is not advertised
   (no gzip/deflate/brotli decoding); responses are expected to be
@@ -501,94 +570,10 @@ headings, paragraphs, code blocks, and tables uniformly.
 
 ## Manual Test Plan
 
-After a build, these short smoke tests exercise the higher-impact
-features end-to-end. All can be run against a local Python server
-(`python -m http.server 8000`) or against the real Internet.
-
-1. **HTTP/1.1 + chunked transfer-encoding**
-   - `build\browser.exe https://www.wikipedia.org`
-   - **Expect:** page renders without garbage characters at the end or
-     a hang. Wikipedia streams responses as `Transfer-Encoding: chunked`
-     without `Content-Length`.
-
-2. **External `<script src>`**
-   - Create `tests/scratch_script.html`:
-     ```html
-     <p id="target">old</p>
-     <script src="scratch_external.js"></script>
-     ```
-     and `tests/scratch_external.js`:
-     ```js
-     document.getElementById("target").textContent = "loaded externally";
-     ```
-   - Serve with `python -m http.server 8000` in `tests/`, then
-     `build\browser.exe http://localhost:8000/scratch_script.html`.
-   - **Expect:** page text reads `loaded externally`.
-
-3. **Checkbox / radio / select via `gf`**
-   - Save as `tests/scratch_form.html`:
-     ```html
-     <form method="get" action="/scratch_form.html">
-       <input name="agree" type="checkbox"> agree
-       <input name="tier" type="radio" value="pro"> pro
-       <input name="tier" type="radio" value="free"> free
-       <select name="country">
-         <option value="us">US</option>
-         <option value="jp">JP</option>
-       </select>
-       <button>Submit</button>
-     </form>
-     ```
-   - `gf`, at each prompt type `y`, then `pro`, then `jp`, Enter.
-   - **Expect:** the URL becomes
-     `...?agree=on&tier=pro&country=jp` after submit. The status-bar
-     prompt shows `[y/n]` next to the first field and `[select]` next
-     to the dropdown.
-
-4. **CSS attribute + child selectors**
-   - `tests/scratch_css.html`:
-     ```html
-     <style>
-       a[href^="https://"] { color: #00ff00; }
-       a[href$=".pdf"]     { color: #ffff00; }
-       div > p             { color: #00ffff; }
-       div p               { color: #ff00ff; }
-     </style>
-     <div><p>child</p><section><p>grandchild</p></section></div>
-     <a href="https://example.com/file.pdf">both</a>
-     ```
-   - **Expect:** "child" paragraph renders cyan (`div > p`),
-     "grandchild" paragraph renders magenta (`div p` only),
-     and "both" link renders yellow (`$=".pdf"` beats `^="https://"`
-     because it is later in source order at equal specificity).
-
-5. **JS DOM APIs (`querySelector`, `classList`)**
-   - `tests/scratch_js_dom.html`:
-     ```html
-     <ul id="list">
-       <li class="item">one</li>
-       <li class="item selected">two</li>
-       <li class="item">three</li>
-     </ul>
-     <script>
-       var sel = document.querySelectorAll("#list .item");
-       for (var i = 0; i < sel.length; i++)
-         sel[i].classList.add("seen");
-       document.querySelector(".selected").textContent = "picked";
-     </script>
-     ```
-   - **Expect:** second `<li>` shows `picked`; internally all three
-     `<li>` elements now carry `class="item seen"` (or `item selected
-     seen`).
-
-6. **Persistent HTTP cache**
-   - Fresh launch: `build\browser.exe https://en.wikipedia.org/wiki/Oscar_Wilde`
-     — note the page load time.
-   - Quit with `q`.
-   - Relaunch `build\browser.exe https://en.wikipedia.org/wiki/Oscar_Wilde`.
-   - **Expect:** the page appears instantly (cached). The file
-     `%APPDATA%\oscanweb_cache.txt` exists and contains `U:`/`C:`/`S:`/
-     `B:` lines. Press `r` to force a refetch.
+End-to-end smoke-test recipes live in [`docs/MANUAL_TESTS.md`](docs/MANUAL_TESTS.md).
+They cover chunked transfer-encoding, external `<script src>`,
+checkbox/radio/select form flows, CSS attribute + child selectors, JS DOM
+APIs, and the persistent HTTP cache.
 
 ## Design Philosophy
 
@@ -596,6 +581,17 @@ features end-to-end. All can be run against a local Python server
 - **Keyboard-first** — Vim-inspired navigation means your hands never leave the home row
 - **Oscan showcase** — demonstrates the language's ability to build real applications with C interop
 - **Zero external dependencies** — only the Oscan compiler is needed; TLS, image decoding, and JS are all built in
+
+## Contributing
+
+1. Build & test before sending a change:
+
+   ```powershell
+   .\build.ps1 -Test
+   ```
+
+2. Match the existing Oscan style — see [`.github/copilot-instructions.md`](.github/copilot-instructions.md) if present, or the conventions documented throughout this README (no `arena { }` around `push()` on persistent arrays, in-place `while len(arr) > 0 { pop(arr); };` clearing, etc.).
+3. Keep commits focused and include a short description of what and why.
 
 ## Built With
 
@@ -605,4 +601,4 @@ features end-to-end. All can be run against a local Python server
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the [MIT License](LICENSE).
