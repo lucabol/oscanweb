@@ -10,9 +10,9 @@
 //                 attribute selectors are intentionally NOT matched —
 //                 rules containing them are skipped.)
 //   properties:  color, background-color, background, font-weight,
-//                font-style, text-decoration, text-align, display
+//                font-style, font-size, text-decoration, text-align, display
 //   values:      named colors (subset), #rgb, #rrggbb, rgb(r,g,b),
-//                bold/normal, italic/normal,
+//                bold/normal, italic/normal, font-size keywords/percent,
 //                underline/line-through/none, none (for display),
 //                left/center/right/justify (for text-align)
 //   cascade:     specificity + source order, inline style=""  wins over
@@ -106,6 +106,7 @@ struct ComputedStyle {
     margin_r: i32,
     line_height_px: i32,   // -1 unset; positive absolute pixel value; inherits
     line_height_mul_x100: i32, // -1 unset; multiplier × 100 for unitless / % / normal; inherits
+    font_scale_x100: i32,  // -1 unset; percent of inherited size; inherits
     center_block: i32,     // 1 = margin:auto centering sentinel, -1 unset, 0 explicit non-center
 }
 
@@ -133,6 +134,7 @@ fn! css_empty_style() -> ComputedStyle {
         margin_r: -1,
         line_height_px: -1,
         line_height_mul_x100: -1,
+        font_scale_x100: -1,
         center_block: -1,
     }
 }
@@ -966,6 +968,27 @@ fn! css_apply_decl(styles: [ComputedStyle], idx: i32, d: CssDecl) {
         };
         return;
     };
+    if str_eq(prop, "font-size") {
+        if str_eq(val, "medium") or str_eq(val, "normal") {
+            styles[idx].font_scale_x100 = 100;
+            return;
+        };
+        if str_eq(val, "small") or str_eq(val, "smaller") {
+            styles[idx].font_scale_x100 = 85;
+            return;
+        };
+        if str_eq(val, "large") or str_eq(val, "larger") {
+            styles[idx].font_scale_x100 = 120;
+            return;
+        };
+        let px_p: [i32] = [-1];
+        let pct_p: [i32] = [-1];
+        css_parse_length(d.value, px_p, pct_p);
+        if pct_p[0] > 0 {
+            styles[idx].font_scale_x100 = pct_p[0];
+        };
+        return;
+    };
     if str_eq(prop, "text-decoration") or str_eq(prop, "text-decoration-line") {
         // Value may list multiple keywords, e.g. "underline line-through"
         let toks: [str] = str_split(val, " ");
@@ -1317,6 +1340,7 @@ fn! css_inherit(styles: [ComputedStyle], idx: i32, parent: ComputedStyle) {
     if styles[idx].text_align == -1 { styles[idx].text_align = parent.text_align; };
     if styles[idx].line_height_px == -1 { styles[idx].line_height_px = parent.line_height_px; };
     if styles[idx].line_height_mul_x100 == -1 { styles[idx].line_height_mul_x100 = parent.line_height_mul_x100; };
+    if styles[idx].font_scale_x100 == -1 { styles[idx].font_scale_x100 = parent.font_scale_x100; };
     // bg_color, display_none, padding, max_width, center_block do NOT inherit.
 }
 

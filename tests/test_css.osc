@@ -418,6 +418,43 @@ fn! main() {
     let mut sp3c: [ComputedStyle] = [];
     css_compute_all(np3c, 0, rp3c, sp3c);
     assert_eq_i32(sp3c[0].line_height_mul_x100, 150, "line-height 1.5 -> mul 150");
+
+    println("=== CSS DuckDuckGo result selectors ===");
+    let mut ddg_dom: [HtmlNode] = [];
+    let ddg_root: i32 = html_parse(ddg_dom,
+        "<div class=\"results\"><div class=\"result\"><div class=\"result__body\"><h2 class=\"result__title\"><a class=\"result__a\" href=\"/l/?uddg=https%3A%2F%2Fexample.com\">Example</a></h2><div class=\"result__extras\"><span class=\"result__icon\"><img class=\"result__icon__img\" src=\"i.ico\"></span><a class=\"result__url\" href=\"/l/?uddg=https%3A%2F%2Fexample.com\">example.com</a></div><a class=\"result__snippet\" href=\"/l/?uddg=https%3A%2F%2Fexample.com\">Snippet</a></div></div></div>");
+    assert_true(ddg_root >= 0, "parsed DuckDuckGo-like result HTML");
+    let mut ddg_rules: [CssRule] = [];
+    let ddg_css: str = ".results {{ max-width: 860px !important; margin: 0 auto !important; }} .result {{ max-width: 860px !important; margin: 4px auto !important; padding: 0 0 4px 0 !important; line-height: 1.25 !important; font-size: 100% !important; }} .result__title {{ margin: 0 !important; line-height: 1.1 !important; font-size: 100% !important; font-weight: normal !important; }} .result__icon {{ display: none !important; }} .result__snippet {{ text-decoration: none !important; line-height: 1.25 !important; }}";
+    let _oddg: i32 = css_parse(ddg_rules, ddg_css, 0);
+    let mut ddg_styles: [ComputedStyle] = [];
+    css_compute_all(ddg_dom, ddg_root, ddg_rules, ddg_styles);
+    let mut ddg_results: i32 = -1;
+    let mut ddg_result: i32 = -1;
+    let mut ddg_title: i32 = -1;
+    let mut ddg_icon: i32 = -1;
+    let mut ddg_snippet: i32 = -1;
+    for ddi in 0..len(ddg_dom) {
+        if not ddg_dom[ddi].is_text {
+            let dcls: str = html_get_attr(ddg_dom[ddi], "class");
+            if str_eq(dcls, "results") { ddg_results = ddi; };
+            if str_eq(dcls, "result") { ddg_result = ddi; };
+            if str_eq(dcls, "result__title") { ddg_title = ddi; };
+            if str_eq(dcls, "result__icon") { ddg_icon = ddi; };
+            if str_eq(dcls, "result__snippet") { ddg_snippet = ddi; };
+        };
+    };
+    assert_true(ddg_results >= 0 and ddg_result >= 0 and ddg_title >= 0 and ddg_icon >= 0 and ddg_snippet >= 0,
+                "found DuckDuckGo result nodes");
+    assert_eq_i32(ddg_styles[ddg_results].max_width_px, 860, "DDG results max-width");
+    assert_eq_i32(ddg_styles[ddg_results].center_block, 1, "DDG results centered");
+    assert_eq_i32(ddg_styles[ddg_result].margin_t, 4, "DDG result compact top margin");
+    assert_eq_i32(ddg_styles[ddg_result].pad_t, 0, "DDG result padding top");
+    assert_eq_i32(ddg_styles[ddg_title].margin_t, 0, "DDG title zero top margin");
+    assert_eq_i32(ddg_styles[ddg_title].margin_b, 0, "DDG title zero bottom margin");
+    assert_eq_i32(ddg_styles[ddg_title].font_scale_x100, 100, "DDG title normal font size");
+    assert_true(ddg_styles[ddg_icon].display_none, "DDG icon hidden");
+    assert_eq_i32(ddg_styles[ddg_snippet].underline, 0, "DDG snippet underline removed");
     assert_eq_i32(sp3c[0].line_height_px, -1, "line-height 1.5 leaves px unset");
 
     // line-height inherits; padding/max-width/center do NOT.

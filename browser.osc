@@ -1198,11 +1198,18 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         x_ptr[0] = eff_indent + PAD * ds;
     };
 
-    // Heading / paragraph pre-spacing
-    if str_eq(tag, "h1") or str_eq(tag, "h2") or str_eq(tag, "h3") {
+    let css_margin_top_zero: bool = idx >= 0 and idx < len(styles) and styles[idx].margin_t == 0;
+    let css_margin_bottom_zero: bool = idx >= 0 and idx < len(styles) and styles[idx].margin_b == 0;
+
+    // Heading / paragraph pre-spacing. Explicit CSS margin-top:0 suppresses
+    // the built-in user-agent spacing for dense surfaces like search results.
+    if (str_eq(tag, "h1") or str_eq(tag, "h2") or str_eq(tag, "h3")) and
+       not css_margin_top_zero {
         y_ptr[0] = y_ptr[0] + entry_line_h;
     };
-    if str_eq(tag, "p") { y_ptr[0] = y_ptr[0] + entry_line_h / 2; };
+    if str_eq(tag, "p") and not css_margin_top_zero {
+        y_ptr[0] = y_ptr[0] + entry_line_h / 2;
+    };
 
     // HR
     if str_eq(tag, "hr") {
@@ -1637,6 +1644,10 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         if cs.underline == 1 { child_uline = true; };
         if cs.strike == 1 { child_strike = true; };
         if cs.bg_color >= 0 and not is_block { child_markbg = cs.bg_color; };
+        if cs.font_scale_x100 > 0 {
+            let scaled_font: i32 = (scale * cs.font_scale_x100 + 50) / 100;
+            child_scale = if scaled_font < 1 { 1 } else { scaled_font };
+        };
     };
 
     // Anchors always use the browser's link color.  Many pages ship a
@@ -1742,7 +1753,9 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             y_ptr[0] = y_ptr[0] + pad_bot_px;
         };
     };
-    if str_eq(tag, "h1") or str_eq(tag, "h2") { y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale, ds, tt_reg, tt_cfg, child_font) / 2; };
+    if (str_eq(tag, "h1") or str_eq(tag, "h2")) and not css_margin_bottom_zero {
+        y_ptr[0] = y_ptr[0] + effective_line_h(styles, idx, child_scale, ds, tt_reg, tt_cfg, child_font) / 2;
+    };
     // Paragraph spacing: pre-p already adds half a line (line ~945);
     // block post-spacing adds a full line.  That's 1.5 lines between
     // paragraph tops — a visible blank line gap without an extra
@@ -1870,6 +1883,18 @@ fn! build_outline(nodes: [HtmlNode], start_idx: i32,
 // works as an escape hatch.
 fn user_stylesheet() -> str {
     "nav {{ display: none !important; }} aside {{ display: none !important; }} .sidebar {{ display: none !important; }} .site-header {{ display: none !important; }} .global-nav {{ display: none !important; }} .skip-link {{ display: none !important; }} .cookie-banner {{ display: none !important; }} .cookie-notice {{ display: none !important; }} .hamburger {{ display: none !important; }} .menu-toggle {{ display: none !important; }} #mw-navigation {{ display: none !important; }} #mw-panel {{ display: none !important; }} .mw-panel {{ display: none !important; }} .mw-jump-link {{ display: none !important; }} .vector-main-menu {{ display: none !important; }} .vector-pinned-container {{ display: none !important; }} .vector-header-container {{ display: none !important; }} .vector-sticky-header {{ display: none !important; }} .vector-toc {{ display: none !important; }} .mw-footer {{ display: none !important; }} #p-lang {{ display: none !important; }} .navbox {{ display: none !important; }} .sister-project {{ display: none !important; }} .interlanguage-link {{ display: none !important; }}"
+}
+
+fn! is_duckduckgo_results_url(raw: str) -> bool {
+    let u: Url = url_parse(raw);
+    let host_l: str = str_to_lower(u.host);
+    (str_eq(host_l, "html.duckduckgo.com") or str_eq(host_l, "duckduckgo.com")) and
+    str_starts_with(u.path, "/html/") and
+    str_contains(u.path, "q=")
+}
+
+fn duckduckgo_results_stylesheet() -> str {
+    ".header {{ display: none !important; }} .site-wrapper-border {{ display: none !important; }} .frm__select {{ display: none !important; }} .clear {{ display: none !important; }} .result__icon {{ display: none !important; }} .result__icon__img {{ display: none !important; }} .zci__image {{ display: none !important; }} .results {{ max-width: 860px !important; margin: 0 auto !important; }} .msg {{ margin: 0 0 4px 0 !important; padding: 0 !important; line-height: 1.15 !important; font-size: 100% !important; }} #did_you_mean {{ line-height: 1.15 !important; }} .zci-wrapper {{ max-width: 860px !important; margin: 0 auto 6px auto !important; padding: 4px 0 !important; line-height: 1.25 !important; font-size: 100% !important; }} .zci {{ line-height: 1.25 !important; }} .zci__heading {{ margin: 0 0 2px 0 !important; line-height: 1.1 !important; font-size: 100% !important; }} .zci__result {{ line-height: 1.25 !important; }} .result {{ max-width: 860px !important; margin: 4px auto !important; padding: 0 0 4px 0 !important; line-height: 1.25 !important; font-size: 100% !important; }} .result__body {{ padding: 0 !important; line-height: 1.25 !important; }} .result__title {{ margin: 0 !important; line-height: 1.1 !important; font-size: 100% !important; font-weight: normal !important; }} .result__extras {{ margin: 0 !important; line-height: 1.05 !important; }} .result__url {{ text-decoration: none !important; line-height: 1.05 !important; }} .result__snippet {{ text-decoration: none !important; line-height: 1.25 !important; }}"
 }
 
 // Returns true if `kind` is an editable text-like field whose value the
@@ -2786,6 +2811,9 @@ fn! main() {
                         // unless the user has toggled show_full.
                         if not show_full {
                             css_order = css_parse(css_rules, user_stylesheet(), css_order);
+                        };
+                        if is_duckduckgo_results_url(current_url) {
+                            css_order = css_parse(css_rules, duckduckgo_results_stylesheet(), css_order);
                         };
                         css_compute_all(dom_nodes, dom_root, css_rules, dom_styles);
 
