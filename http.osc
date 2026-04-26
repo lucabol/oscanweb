@@ -19,6 +19,21 @@ extern {
     fn! host_was_primed(host: str) -> i32;
     fn! mark_host_primed(host: str);
     fn! reset_prime_cache();
+
+    // Resolve a hostname to an IPv4 address (network byte order, 0 on
+    // failure).  Implemented via getaddrinfo in js_bridge.c.
+    fn! net_resolve_ipv4(host: str) -> i32;
+
+    // Connect a socket with a bounded timeout (ms).  Returns 0 on success,
+    // nonzero on timeout / refused / error.  Implemented via non-blocking
+    // connect + select() in js_bridge.c.  Lets us fail fast on hosts that
+    // silently drop SYN packets instead of hanging the whole UI.
+    fn! net_connect_timeout_ipv4(sock: i32, ip_be: i32, port: i32, ms: i32) -> i32;
+
+    // Inflate a gzip / zlib-deflate / raw-deflate payload. Returns the
+    // decoded body on success or an empty string on failure. Implemented
+    // in gzip_bridge.c using miniz.
+    fn! gzip_decode(input: str) -> str;
 }
 
 struct HttpResponse {
@@ -266,26 +281,35 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     }
 }
 
-// Prime the TLS network path with a bounded TCP connect to :443 in its own
-// function so `defer socket_close` is at function scope (avoids the oscan
-// "socket_tcp without matching defer socket_close" warning).  Empirically
-// this makes the subsequent (untimeoutable) tls_connect succeed reliably on
-// hosts like text.npr.org where it otherwise hangs indefinitely on cold start.
-fn! http_prime_tls(host: str) {
+// Prime the TLS network path with a bounded TCP connect to :443.  Returns
+// true on a successful connect, false on timeout / unreachable.  We use
+// the bounded `net_connect_timeout_ipv4` instead of the untimeoutable
+// `socket_connect` so a host that silently drops :443 (firewall, dead
+// CDN edge) can no longer hang the UI for 21 s of SYN retries — let
+// alone forever.  The caller can then refuse to issue tls_connect (which
+// has no timeout itself) and surface a fast error to the user.
+fn! http_prime_tls(host: str) -> bool {
     vlog_msg("tls prime", host);
+    let ip: i32 = net_resolve_ipv4(host);
+    if ip == 0 {
+        vlog_msg("tls prime dns_fail", host);
+        return false;
+    };
     let prime_result: Result<i32, str> = socket_tcp();
     let mut ps: i32 = 0;
     match prime_result {
         Result::Ok(s) => { ps = s; },
-        Result::Err(_e) => { return; },
+        Result::Err(_e) => { return false; },
     };
     defer socket_close(ps);
-    let _tor: i32 = net_set_recv_timeout(ps, 3000);
-    let pc: Result<str, str> = socket_connect(ps, host, 443);
-    match pc {
-        Result::Ok(_s) => { vlog_msg("tls prime ok", ""); },
-        Result::Err(e) => { vlog_msg("tls prime err", e); },
+    let _tor: i32 = net_set_recv_timeout(ps, 5000);
+    let rc: i32 = net_connect_timeout_ipv4(ps, ip, 443, 5000);
+    if rc == 0 {
+        vlog_msg("tls prime ok", "");
+        return true;
     };
+    vlog_int("tls prime err", rc);
+    false
 }
 
 // Plain TCP fetch in its own function so defer socket_close is at function scope
@@ -364,7 +388,7 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool, extra_headers: str)
     // HTTP/1.1 + Connection: close — we advertise 1.1 so servers unlock
     // chunked transfer-encoding and modern header behaviour, but we still
     // close the socket after one response (no keep-alive pipelining).
-    let request: str = "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\n{extra_headers}\r\n";
+    let request: str = "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip\r\n{extra_headers}\r\n";
 
     let mut raw_response: str = "";
 
@@ -386,8 +410,11 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool, extra_headers: str)
         //     response on misconfigured edges (www.microsoft.com returned
         //     a 403 body on :80 that the probe originally accepted).
         if host_was_primed(host) == 0 {
-            http_prime_tls(host);
+            let prime_ok: bool = http_prime_tls(host);
             mark_host_primed(host);
+            if not prime_ok {
+                return http_make_error("Connection to {host}:443 timed out (host unreachable or firewalled)");
+            };
         };
 
         vlog_msg("tls_connect", host);
@@ -470,6 +497,26 @@ fn! http_parse_raw_response(raw_response: str) -> HttpResponse {
         body = http_decode_chunked(body);
     };
 
+    // We don't advertise Accept-Encoding, but some servers (e.g. S3 with
+    // pre-gzipped objects) send Content-Encoding: gzip anyway. Decode
+    // gzip / deflate transparently via miniz (gzip_bridge.c).  Anything
+    // we don't recognise (e.g. brotli) returns an error.
+    let mut ce: str = "";
+    if map_has(headers, "content-encoding") {
+        ce = str_to_lower(str_trim(map_get(headers, "content-encoding")));
+    };
+    if str_len(ce) > 0 and not str_eq(ce, "identity") {
+        if str_eq(ce, "gzip") or str_eq(ce, "deflate") or str_eq(ce, "x-gzip") {
+            let decoded: str = gzip_decode(body);
+            if str_len(decoded) == 0 and str_len(body) > 0 {
+                return http_make_error("Failed to decode Content-Encoding: {ce}");
+            };
+            body = decoded;
+        } else {
+            return http_make_error("Unsupported Content-Encoding: {ce} (no brotli decoder)");
+        };
+    };
+
     let mut redirect_url: str = "";
     if status_code == 301 or status_code == 302 or status_code == 307 {
         if map_has(headers, "location") {
@@ -496,13 +543,16 @@ fn! http_parse_raw_response(raw_response: str) -> HttpResponse {
 fn! http_post(host: str, port: i32, path: str, use_tls: bool,
               body: str, content_type: str, extra_headers: str) -> HttpResponse {
     let body_len: i32 = str_len(body);
-    let request: str = "POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{extra_headers}\r\n{body}";
+    let request: str = "POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{extra_headers}\r\n{body}";
 
     let mut raw_response: str = "";
     if use_tls {
         if host_was_primed(host) == 0 {
-            http_prime_tls(host);
+            let prime_ok: bool = http_prime_tls(host);
             mark_host_primed(host);
+            if not prime_ok {
+                return http_make_error("Connection to {host}:443 timed out (host unreachable or firewalled)");
+            };
         };
         vlog_msg("tls_connect (POST)", host);
         let tls_resp: HttpResponse = http_get_tls(host, port, request);

@@ -1,0 +1,406 @@
+// Layout engine (v1) for OscaWeb.
+//
+// Produces a [LayoutBox] array parallel to the flat DOM in html.osc,
+// indexed by node index.  Computes block-flow positions and heights
+// that mirror browser.osc's render_node rules, without touching pixels.
+//
+// The renderer in browser.osc still owns painting.  This module is a
+// separate, testable pass: run css_compute_all first, then call
+// layout_compute, then (future work) feed the boxes into render_node.
+//
+// Design constraints (see .github/instructions / README):
+//   - No self-referential structs — layout tree is stored as a flat
+//     [LayoutBox] indexed by node idx.
+//   - All work is pure i32 arithmetic; no canvas, no network, no FS.
+//   - Monospace bitmap font: text width is approximated as
+//     char_count * font_w * ds.  This matches OscaWeb's default
+//     8 px-advance bitmap.
+//   - Block-flow only for v1.  Floats / flex / grid / borders /
+//     margin collapsing / multi-line text-align are out of scope.
+
+use "html.osc"
+use "css.osc"
+
+// ─── Types ────────────────────────────────────────────────
+
+struct LayoutBox {
+    node_idx: i32,        // DOM node index (-1 for unused slots)
+    x: i32,               // Left edge of border box (document coords, px)
+    y: i32,               // Top edge of border box
+    width: i32,           // Full width  (indent .. indent+width)
+    height: i32,          // Full height (includes top/bottom padding + margins)
+    content_x: i32,       // Left edge of content box (after indent + pad_l + margin_l)
+    content_width: i32,   // Width of content box
+    line_count: i32,      // Wrapped text-line count contributed by this block
+                          // (0 for pure containers without direct text)
+    is_block: bool,
+    display_none: bool,
+}
+
+fn! layout_empty_box() -> LayoutBox {
+    LayoutBox {
+        node_idx: -1, x: 0, y: 0, width: 0, height: 0,
+        content_x: 0, content_width: 0, line_count: 0,
+        is_block: false, display_none: false,
+    }
+}
+
+// ─── Helpers ──────────────────────────────────────────────
+
+fn layout_is_skip_tag(tag: str) -> bool {
+    str_eq(tag, "head") or str_eq(tag, "script") or str_eq(tag, "style") or
+    str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title")
+}
+
+fn layout_is_block_tag(tag: str) -> bool {
+    str_eq(tag, "div") or str_eq(tag, "p") or str_eq(tag, "h1") or
+    str_eq(tag, "h2") or str_eq(tag, "h3") or str_eq(tag, "h4") or
+    str_eq(tag, "h5") or str_eq(tag, "h6") or str_eq(tag, "ul") or
+    str_eq(tag, "ol") or str_eq(tag, "li") or str_eq(tag, "pre") or
+    str_eq(tag, "blockquote") or str_eq(tag, "table") or str_eq(tag, "tr") or
+    str_eq(tag, "section") or str_eq(tag, "article") or str_eq(tag, "nav") or
+    str_eq(tag, "header") or str_eq(tag, "footer") or str_eq(tag, "main") or
+    str_eq(tag, "dl") or str_eq(tag, "dt") or str_eq(tag, "dd") or
+    str_eq(tag, "figure") or str_eq(tag, "figcaption") or str_eq(tag, "hr")
+}
+
+// Relative scale for heading line-height, matching browser.osc's
+// heading_scale.
+fn layout_heading_scale(tag: str) -> i32 {
+    if str_eq(tag, "h1") { 3 }
+    else if str_eq(tag, "h2") { 2 }
+    else if str_eq(tag, "h3") { 2 }
+    else if str_eq(tag, "h4") { 1 }
+    else if str_eq(tag, "h5") { 1 }
+    else if str_eq(tag, "h6") { 1 }
+    else { 1 }
+}
+
+// Extract direct (shallow) text content of a node: text from the node
+// itself and from any non-block descendant.  Stops at block boundaries
+// so that e.g. a <div> containing <p>foo</p><p>bar</p> returns "",
+// not "foobar".  This matches the rule that inline text belongs to its
+// nearest block container.  The starting node is always entered (even
+// if it is itself a block); only block *descendants* terminate the walk.
+fn! layout_shallow_text_inner(nodes: [HtmlNode], idx: i32, out: [i32], is_start: bool) {
+    if idx < 0 or idx >= len(nodes) { return; };
+    let n: HtmlNode = nodes[idx];
+    if n.is_text {
+        let chars: [i32] = str_to_chars(n.text);
+        for ci in 0..len(chars) { push(out, chars[ci]); };
+        return;
+    };
+    if layout_is_skip_tag(n.tag) { return; };
+    // Stop at block descendants — but always enter the starting node.
+    if not is_start and layout_is_block_tag(n.tag) { return; };
+    let mut c: i32 = n.first_child;
+    while c != -1 {
+        layout_shallow_text_inner(nodes, c, out, false);
+        c = nodes[c].next_sibling;
+    };
+}
+
+fn! layout_shallow_text(nodes: [HtmlNode], idx: i32, out: [i32]) {
+    layout_shallow_text_inner(nodes, idx, out, true);
+}
+
+// Normalize whitespace: collapse runs of space/tab/newline into a
+// single 0x20, trim leading/trailing.  Produces a char codepoint array.
+fn! layout_normalize_ws(chars: [i32]) -> [i32] {
+    let mut out: [i32] = [];
+    let mut in_ws: bool = true;
+    for i in 0..len(chars) {
+        let c: i32 = chars[i];
+        let is_ws: bool = c == 32 or c == 9 or c == 10 or c == 13;
+        if is_ws {
+            if not in_ws {
+                push(out, 32);
+                in_ws = true;
+            };
+        } else {
+            push(out, c);
+            in_ws = false;
+        };
+    };
+    // Trim trailing space
+    while len(out) > 0 and out[len(out) - 1] == 32 { pop(out); };
+    out
+}
+
+// Count wrapped lines for `chars` inside a content box of `content_w`
+// pixels, assuming monospace glyph advance `glyph_px`.  Words are
+// split on 0x20.  A single word wider than the content box occupies
+// its own line (never split mid-word for v1).
+// Returns at least 1 if `chars` is non-empty.
+fn! layout_wrap_line_count(chars: [i32], content_w: i32, glyph_px: i32) -> i32 {
+    if len(chars) == 0 { return 0; };
+    if content_w <= 0 or glyph_px <= 0 { return 1; };
+    let max_chars: i32 = content_w / glyph_px;
+    let cap: i32 = if max_chars < 1 { 1 } else { max_chars };
+    let mut lines: i32 = 1;
+    let mut col: i32 = 0;
+    let mut word_len: i32 = 0;
+    for i in 0..len(chars) {
+        let c: i32 = chars[i];
+        if c == 32 {
+            // End of a word.
+            if col == 0 {
+                // No previous word on line yet: place this word.
+                col = word_len;
+            } else if col + 1 + word_len <= cap {
+                // Fits with a separating space.
+                col = col + 1 + word_len;
+            } else {
+                // Wrap.
+                lines = lines + 1;
+                col = word_len;
+            };
+            word_len = 0;
+        } else {
+            word_len = word_len + 1;
+        };
+    };
+    // Flush last word.
+    if word_len > 0 {
+        if col == 0 {
+            col = word_len;
+        } else if col + 1 + word_len <= cap {
+            col = col + 1 + word_len;
+        } else {
+            lines = lines + 1;
+            // col irrelevant after last word
+        };
+    };
+    lines
+}
+
+// ─── Core computation ────────────────────────────────────
+
+// Mirrors the "Compute effective indent/viewport/padding" block in
+// render_node (browser.osc:1086-1135) but produces numeric outputs
+// rather than mutating a cursor.
+//
+// Returns via out-params (single-element arrays):
+//   eff_indent_out[0] — left edge of this block's padding box
+//   eff_vp_width_out[0] — right edge of this block's padding box
+//                         (i.e. the next block's `vp_width`)
+//   pad_top_out[0], pad_bot_out[0] — extra vertical space above/below
+//                                    the content, including numeric
+//                                    margin_t / margin_b.
+fn! layout_resolve_block_geometry(styles: [ComputedStyle], idx: i32,
+                                   indent: i32, vp_width: i32, ds: i32,
+                                   pad_px: i32,
+                                   eff_indent_out: [i32], eff_vp_width_out: [i32],
+                                   pad_top_out: [i32], pad_bot_out: [i32]) {
+    let mut eff_indent: i32 = indent;
+    let mut eff_vp_width: i32 = vp_width;
+    let mut pad_top: i32 = 0;
+    let mut pad_bot: i32 = 0;
+
+    if idx >= 0 and idx < len(styles) {
+        let csp: ComputedStyle = styles[idx];
+
+        // Resolve max-width / width to pixels, pick the stricter.
+        let mut mw: i32 = -1;
+        if csp.max_width_px >= 0 {
+            mw = csp.max_width_px * ds;
+        } else if csp.max_width_pct > 0 {
+            mw = (vp_width * csp.max_width_pct) / 100;
+        };
+        let mut ww: i32 = -1;
+        if csp.width_px >= 0 {
+            ww = csp.width_px * ds;
+        } else if csp.width_pct > 0 {
+            ww = (vp_width * csp.width_pct) / 100;
+        };
+        if ww > 0 and (mw < 0 or ww < mw) { mw = ww; };
+
+        if mw > 0 {
+            let avail: i32 = vp_width - indent - pad_px * ds * 2;
+            if mw < avail {
+                let extra: i32 = if csp.center_block == 1 {
+                    (avail - mw) / 2
+                } else { 0 };
+                eff_indent = indent + extra;
+                eff_vp_width = eff_indent + pad_px * ds + mw + pad_px * ds;
+                if eff_vp_width > vp_width { eff_vp_width = vp_width; };
+            };
+        };
+
+        // Padding shrinks the content box.
+        if csp.pad_l > 0 { eff_indent = eff_indent + csp.pad_l * ds; };
+        if csp.pad_r > 0 { eff_vp_width = eff_vp_width - csp.pad_r * ds; };
+        if csp.pad_t > 0 { pad_top = csp.pad_t * ds; };
+        if csp.pad_b > 0 { pad_bot = csp.pad_b * ds; };
+
+        // Numeric margins — left/right shift inward, top/bottom add to pad.
+        if csp.margin_l > 0 { eff_indent = eff_indent + csp.margin_l * ds; };
+        if csp.margin_r > 0 { eff_vp_width = eff_vp_width - csp.margin_r * ds; };
+        if csp.margin_t > 0 { pad_top = pad_top + csp.margin_t * ds; };
+        if csp.margin_b > 0 { pad_bot = pad_bot + csp.margin_b * ds; };
+    };
+
+    eff_indent_out[0] = eff_indent;
+    eff_vp_width_out[0] = eff_vp_width;
+    pad_top_out[0] = pad_top;
+    pad_bot_out[0] = pad_bot;
+}
+
+// Recursively lay out the subtree rooted at `idx`.  Writes its box to
+// `out[idx]` and advances `y_cursor[0]` past the subtree.
+//
+//   indent     — left edge of this block's border box (px, doc coords)
+//   vp_width   — right edge of the containing block (px, doc coords)
+//   ds         — device scale (1 or 2)
+//   pad_px     — horizontal padding between successive block levels (px, pre-ds)
+//   font_w     — monospace glyph advance in CSS pixels (typically 8)
+//   line_h     — line height in CSS pixels (typically 20)
+fn! layout_walk(nodes: [HtmlNode], idx: i32, styles: [ComputedStyle],
+                indent: i32, vp_width: i32, ds: i32,
+                pad_px: i32, font_w: i32, line_h: i32,
+                y_cursor: [i32], out: [LayoutBox]) {
+    if idx < 0 or idx >= len(nodes) { return; };
+    let node: HtmlNode = nodes[idx];
+
+    // Text nodes and inline elements: no box of their own.  Their
+    // contribution folds into the enclosing block's line_count (handled
+    // by the parent's layout_shallow_text).  Leave out[idx] as the
+    // default empty box.
+    if node.is_text { return; };
+
+    if layout_is_skip_tag(node.tag) { return; };
+
+    // display:none — zero-size box, skip subtree.
+    if idx >= 0 and idx < len(styles) and styles[idx].display_none {
+        let mut b: LayoutBox = out[idx];
+        b.node_idx = idx;
+        b.display_none = true;
+        b.x = indent;
+        b.y = y_cursor[0];
+        b.width = 0;
+        b.height = 0;
+        b.content_x = indent;
+        b.content_width = 0;
+        b.is_block = layout_is_block_tag(node.tag);
+        out[idx] = b;
+        return;
+    };
+
+    let is_block: bool = layout_is_block_tag(node.tag);
+    if not is_block {
+        // Inline element: no box; recurse into children so descendant
+        // blocks still get laid out.  (A stray block inside an inline
+        // parent is rare in valid HTML but html.osc can produce it for
+        // malformed pages.)
+        let mut c0: i32 = node.first_child;
+        while c0 != -1 {
+            layout_walk(nodes, c0, styles, indent, vp_width, ds,
+                        pad_px, font_w, line_h, y_cursor, out);
+            c0 = nodes[c0].next_sibling;
+        };
+        return;
+    };
+
+    // Resolve geometry from CSS.
+    let eff_indent_a: [i32] = [0];
+    let eff_vp_width_a: [i32] = [0];
+    let pad_top_a: [i32] = [0];
+    let pad_bot_a: [i32] = [0];
+    layout_resolve_block_geometry(styles, idx, indent, vp_width, ds, pad_px,
+                                  eff_indent_a, eff_vp_width_a,
+                                  pad_top_a, pad_bot_a);
+    let eff_indent: i32 = eff_indent_a[0];
+    let eff_vp_width: i32 = eff_vp_width_a[0];
+    let pad_top: i32 = pad_top_a[0];
+    let pad_bot: i32 = pad_bot_a[0];
+
+    // Record this block's entry y.
+    let entry_y: i32 = y_cursor[0];
+
+    // Apply top padding (pad + numeric margin-top).
+    y_cursor[0] = y_cursor[0] + pad_top;
+
+    // Heading / paragraph pre-spacing (render_node:1151-1154).
+    let h_scale: i32 = layout_heading_scale(node.tag);
+    let block_line_h: i32 = line_h * ds * h_scale;
+    if str_eq(node.tag, "h1") or str_eq(node.tag, "h2") or str_eq(node.tag, "h3") {
+        y_cursor[0] = y_cursor[0] + block_line_h;
+    };
+    if str_eq(node.tag, "p") {
+        y_cursor[0] = y_cursor[0] + (line_h * ds) / 2;
+    };
+
+    // <hr> and <br>-like blocks contribute a fixed line.
+    if str_eq(node.tag, "hr") {
+        y_cursor[0] = y_cursor[0] + line_h * ds;
+    };
+
+    // Shallow text of this block — normalize, wrap, count lines.
+    let mut text_line_count: i32 = 0;
+    let raw_chars: [i32] = [];
+    layout_shallow_text(nodes, idx, raw_chars);
+    if len(raw_chars) > 0 {
+        let norm: [i32] = layout_normalize_ws(raw_chars);
+        let content_w_here: i32 = eff_vp_width - eff_indent - pad_px * ds * 2;
+        let glyph_px: i32 = font_w * ds * h_scale;
+        text_line_count = layout_wrap_line_count(norm, content_w_here, glyph_px);
+        y_cursor[0] = y_cursor[0] + text_line_count * block_line_h;
+    };
+
+    // Recurse into block children.
+    let child_indent: i32 = eff_indent + pad_px * ds;
+    let child_vp_width: i32 = eff_vp_width;
+    let mut c1: i32 = node.first_child;
+    while c1 != -1 {
+        let cn: HtmlNode = nodes[c1];
+        // Only recurse for element children that might contain blocks.
+        // Text / inline children are already folded into text_line_count.
+        if not cn.is_text {
+            let ctag: str = cn.tag;
+            if not layout_is_skip_tag(ctag) {
+                let is_block_child: bool = layout_is_block_tag(ctag);
+                if is_block_child {
+                    layout_walk(nodes, c1, styles, child_indent, child_vp_width,
+                                ds, pad_px, font_w, line_h, y_cursor, out);
+                } else {
+                    // Inline element may hide block descendants (rare).
+                    layout_walk(nodes, c1, styles, child_indent, child_vp_width,
+                                ds, pad_px, font_w, line_h, y_cursor, out);
+                };
+            };
+        };
+        c1 = nodes[c1].next_sibling;
+    };
+
+    // Bottom padding.
+    y_cursor[0] = y_cursor[0] + pad_bot;
+
+    // Finalize this block's box.
+    let mut bb: LayoutBox = out[idx];
+    bb.node_idx = idx;
+    bb.x = eff_indent;
+    bb.y = entry_y;
+    bb.width = eff_vp_width - eff_indent;
+    bb.height = y_cursor[0] - entry_y;
+    bb.content_x = eff_indent + pad_px * ds;
+    bb.content_width = eff_vp_width - eff_indent - pad_px * ds * 2;
+    bb.line_count = text_line_count;
+    bb.is_block = true;
+    bb.display_none = false;
+    out[idx] = bb;
+}
+
+// Public entry point.  Pre-fills `out` with empty boxes for every node
+// (parallel to `css_compute_all`'s handling of `styles`), then walks
+// the tree.  Safe to call with an empty `rules`/`styles` — a caller
+// that hasn't run css_compute_all yet will get pure-HTML layout.
+fn! layout_compute(nodes: [HtmlNode], root: i32, styles: [ComputedStyle],
+                   vp_width: i32, ds: i32,
+                   pad_px: i32, font_w: i32, line_h: i32,
+                   out: [LayoutBox]) {
+    while len(out) < len(nodes) { push(out, layout_empty_box()); };
+    if root < 0 or root >= len(nodes) { return; };
+    let y_cursor: [i32] = [0];
+    layout_walk(nodes, root, styles, 0, vp_width, ds,
+                pad_px, font_w, line_h, y_cursor, out);
+}

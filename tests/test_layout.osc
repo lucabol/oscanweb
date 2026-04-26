@@ -1,0 +1,179 @@
+// Tests for layout.osc — v1 block-flow layout engine.
+use "../layout.osc"
+use "../html.osc"
+use "../css.osc"
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! assert_true(cond: bool, test_name: str) {
+    if cond {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name}");
+    };
+}
+
+// Compute layout with sensible defaults: vp_width = 1000 px, ds = 1,
+// pad = 10 px, font_w = 8 px, line_h = 20 px.  Uses an empty ruleset
+// (HTML-only layout).
+fn! layout_for(source: str, nodes: [HtmlNode], boxes: [LayoutBox]) -> i32 {
+    let root: i32 = html_parse(nodes, source);
+    let rules: [CssRule] = [];
+    let styles: [ComputedStyle] = [];
+    css_compute_all(nodes, root, rules, styles);
+    layout_compute(nodes, root, styles, 1000, 1, 10, 8, 20, boxes);
+    root
+}
+
+// Find first element node with the given tag.
+fn! find_tag(nodes: [HtmlNode], tag: str) -> i32 {
+    for i in 0..len(nodes) {
+        if not nodes[i].is_text and str_eq(nodes[i].tag, tag) {
+            return i;
+        };
+    };
+    -1
+}
+
+fn! main() {
+    println("=== Layout: empty doc ===");
+    {
+        let nodes: [HtmlNode] = [];
+        let boxes: [LayoutBox] = [];
+        let root: i32 = layout_for("", nodes, boxes);
+        assert_true(root >= 0, "empty doc has synthetic root");
+        assert_eq_i32(boxes[root].height, 0, "empty doc root height is 0");
+    };
+
+    println("=== Layout: single <p> ===");
+    {
+        let nodes: [HtmlNode] = [];
+        let boxes: [LayoutBox] = [];
+        layout_for("<p>hello world</p>", nodes, boxes);
+        let p_idx: i32 = find_tag(nodes, "p");
+        assert_true(p_idx >= 0, "found <p>");
+        let pb: LayoutBox = boxes[p_idx];
+        assert_true(pb.is_block, "<p> is a block");
+        assert_true(pb.line_count == 1, "short <p> is 1 line");
+        assert_true(pb.width > 0, "<p> has positive width");
+        assert_true(pb.height > 0, "<p> has positive height");
+    };
+
+    println("=== Layout: wrapping <p> ===");
+    {
+        // ~40 chars repeated to exceed the ~98-char content width
+        // (content_width = 1000 - 2 blocks of pad - 2*pad ≈ 960 px;
+        // at 8 px/char that's 120 chars).  Use 250 chars to force wrap.
+        let longtext: str = "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word";
+        let nodes: [HtmlNode] = [];
+        let boxes: [LayoutBox] = [];
+        layout_for("<p>{longtext}</p>", nodes, boxes);
+        let p_idx: i32 = find_tag(nodes, "p");
+        assert_true(p_idx >= 0, "found wrapping <p>");
+        let pb: LayoutBox = boxes[p_idx];
+        assert_true(pb.line_count >= 2, "long <p> wraps to >=2 lines");
+    };
+
+    println("=== Layout: stacked <li> advance y ===");
+    {
+        let nodes: [HtmlNode] = [];
+        let boxes: [LayoutBox] = [];
+        layout_for("<ul><li>a</li><li>b</li><li>c</li></ul>", nodes, boxes);
+        // Collect all <li> boxes in document order.
+        let mut ys: [i32] = [];
+        for i in 0..len(nodes) {
+            if not nodes[i].is_text and str_eq(nodes[i].tag, "li") {
+                push(ys, boxes[i].y);
+            };
+        };
+        assert_eq_i32(len(ys), 3, "three <li> boxes");
+        assert_true(ys[0] < ys[1], "li 0 above li 1");
+        assert_true(ys[1] < ys[2], "li 1 above li 2");
+    };
+
+    println("=== Layout: display:none ===");
+    {
+        let src: str = "<div><p style=\"display:none\">hidden</p><p>visible</p></div>";
+        let nodes: [HtmlNode] = [];
+        let boxes: [LayoutBox] = [];
+        layout_for(src, nodes, boxes);
+        // Find both <p>s.
+        let mut first_p: i32 = -1;
+        let mut second_p: i32 = -1;
+        for i in 0..len(nodes) {
+            if not nodes[i].is_text and str_eq(nodes[i].tag, "p") {
+                if first_p < 0 { first_p = i; }
+                else if second_p < 0 { second_p = i; };
+            };
+        };
+        assert_true(first_p >= 0 and second_p >= 0, "found both <p> nodes");
+        assert_true(boxes[first_p].display_none, "first <p> is display_none");
+        assert_eq_i32(boxes[first_p].height, 0, "hidden <p> has zero height");
+        assert_true(boxes[second_p].height > 0, "visible <p> has height");
+        // Visible <p> must not be pushed down by the hidden one.
+        assert_true(boxes[second_p].y <= boxes[first_p].y + 100,
+                    "visible <p> not pushed down by display:none");
+    };
+
+    println("=== Layout: max-width centers block ===");
+    {
+        let src: str = "<div style=\"max-width:200px; margin:0 auto\">hi</div>";
+        let nodes: [HtmlNode] = [];
+        let boxes: [LayoutBox] = [];
+        layout_for(src, nodes, boxes);
+        let d_idx: i32 = find_tag(nodes, "div");
+        assert_true(d_idx >= 0, "found <div>");
+        let db: LayoutBox = boxes[d_idx];
+        // With vp_width=1000, pad=10, ds=1:
+        //   avail = 1000 - 0 - 20 = 980
+        //   mw = 200; extra = (980 - 200) / 2 = 390
+        //   eff_indent = 0 + 390 = 390
+        //   eff_vp_width = 390 + 10 + 200 + 10 = 610
+        //   width = 610 - 390 = 220  (including left+right pad)
+        assert_eq_i32(db.x, 390, "centered div left edge");
+        assert_eq_i32(db.width, 220, "centered div border-box width");
+        assert_eq_i32(db.content_x, 400, "centered div content x");
+        assert_eq_i32(db.content_width, 200, "centered div content width");
+    };
+
+    println("=== Layout: heading height > paragraph ===");
+    {
+        // Same text content, different tags.  <h1> uses scale 3 so its
+        // line-height is 3× a <p>'s.
+        let nodes1: [HtmlNode] = [];
+        let boxes1: [LayoutBox] = [];
+        layout_for("<h1>title</h1>", nodes1, boxes1);
+        let h_idx: i32 = find_tag(nodes1, "h1");
+
+        let nodes2: [HtmlNode] = [];
+        let boxes2: [LayoutBox] = [];
+        layout_for("<p>title</p>", nodes2, boxes2);
+        let p_idx: i32 = find_tag(nodes2, "p");
+
+        assert_true(boxes1[h_idx].height > boxes2[p_idx].height,
+                    "<h1> taller than <p>");
+    };
+
+    println("=== Layout: sibling blocks stack ===");
+    {
+        let nodes: [HtmlNode] = [];
+        let boxes: [LayoutBox] = [];
+        layout_for("<p>one</p><p>two</p><p>three</p>", nodes, boxes);
+        let mut ys: [i32] = [];
+        for i in 0..len(nodes) {
+            if not nodes[i].is_text and str_eq(nodes[i].tag, "p") {
+                push(ys, boxes[i].y);
+            };
+        };
+        assert_eq_i32(len(ys), 3, "three <p> boxes");
+        assert_true(ys[0] < ys[1] and ys[1] < ys[2], "paragraphs stack vertically");
+    };
+
+    println("=== Layout tests complete ===");
+}

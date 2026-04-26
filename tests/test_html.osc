@@ -328,5 +328,19 @@ fn! main() {
         "/w/load.php?lang=en&modules=site.styles",
         "attr entity: &amp; decoded in href");
 
+    // 25. Unquoted attribute values containing slashes (HTML5 allows '/' in
+    // unquoted values; danluu.com-style markup like <a href=https://x.com/p/>
+    // must NOT be parsed as self-closing or have href truncated at first '/').
+    let mut nodes_uq: [HtmlNode] = [];
+    let root_uq: i32 = html_parse(nodes_uq, "<a href=https://danluu.com/ballmer/>Ballmer</a>");
+    let a_uq: i32 = nodes_uq[root_uq].first_child;
+    assert_eq_str(nodes_uq[a_uq].tag, "a", "unquoted slash href: tag");
+    assert_eq_str(html_get_attr(nodes_uq[a_uq], "href"),
+        "https://danluu.com/ballmer/",
+        "unquoted slash href: full URL preserved");
+    let txt_uq: i32 = nodes_uq[a_uq].first_child;
+    assert_true(txt_uq != -1, "unquoted slash href: <a> has child text");
+    assert_eq_str(nodes_uq[txt_uq].text, "Ballmer", "unquoted slash href: child text");
+
     println("=== HTML Tests Complete ===");
 }

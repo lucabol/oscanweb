@@ -477,9 +477,10 @@ headings, paragraphs, code blocks, and tables uniformly.
   `[attr*=v]`). Sibling combinators (`+`, `~`) and pseudo-classes
   (`:hover`, `::before`) are not matched
 - **Limited form submission** — GET and POST forms supported via `gf` with text, textarea, checkbox, radio, and select fields (no visual inline rendering of the fields; prompting is status-bar-driven)
-- **No HTTP Content-Encoding** — `Accept-Encoding` is not advertised
-  (no gzip/deflate/brotli decoding); responses are expected to be
-  identity-encoded
+- **HTTP Content-Encoding: gzip / deflate** are decoded transparently
+  via miniz (RFC 1952 gzip and RFC 1950 zlib).  Brotli and other
+  encodings are not supported and produce a clear error rather than a
+  hang.
 - **Fixed viewport** — 1024×768 window with 8×8 monospace bitmap font
 - **Single-threaded** — synchronous page fetching
 

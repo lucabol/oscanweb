@@ -509,7 +509,12 @@ fn! html_parse(nodes: [HtmlNode], source: str) -> i32 {
                         attr_value = str_from_chars(val_chars);
                     } else {
                         let mut val_chars: [i32] = [];
-                        while i < n and chars[i] != 62 and chars[i] != 47 and not char_is_space(chars[i]) {
+                        // Per HTML5: unquoted attribute values stop at whitespace
+                        // or '>'. Slash '/' is allowed (URLs frequently contain
+                        // slashes). Stopping at '/' would break href values like
+                        // "https://example.com/path/" which would also wrongly
+                        // mark the tag as self-closing.
+                        while i < n and chars[i] != 62 and not char_is_space(chars[i]) {
                             push(val_chars, chars[i]);
                             i += 1;
                         };

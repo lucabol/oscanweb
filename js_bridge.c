@@ -1165,12 +1165,31 @@ int32_t net_connect_timeout_ipv4(int32_t sock, int32_t ip_be, int32_t port, int3
 #endif
 }
 
+/* Ensure Winsock is initialized before any direct socket API call from
+ * this file.  Oscan's runtime calls WSAStartup the first time `socket_tcp`
+ * is invoked, but `net_resolve_ipv4` calls getaddrinfo without ever
+ * touching the runtime's socket helpers, so on a cold path (resolve
+ * happens before any socket_tcp) WSANOTINITIALISED could be returned.
+ * Idempotent — WSAStartup ref-counts internally.
+ */
+#ifdef _WIN32
+static void net_ensure_winsock(void) {
+    static int initialized = 0;
+    if (!initialized) {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        initialized = 1;
+    }
+}
+#endif
+
 /* Resolve a hostname to an IPv4 address in network byte order.
  * Returns 0 on failure.  Uses getaddrinfo which has its own internal
  * timeouts on Windows but those are short enough in practice.
  */
 int32_t net_resolve_ipv4(osc_str host) {
 #ifdef _WIN32
+    net_ensure_winsock();
     char *h = osc_str_to_cstr_alloc(host);
     if (!h) return 0;
     struct addrinfo hints, *res = NULL;

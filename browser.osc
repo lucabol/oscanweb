@@ -647,6 +647,7 @@ fn! flush_pre_segment(segment_chars: [i32], x_ptr: [i32], y_ptr: [i32],
                       vp_top: i32, line_right: i32, line_left: i32,
                       color: i32, font: i32, scale: i32, ds: i32,
                       word_map: [WordInfo],
+                      links: [LinkInfo], link_href: str, in_chrome: bool,
                       theme: [i32],
                       tt_reg: handle, tt_mono: handle, tt_head: handle, tt_cfg: [i32]) {
     let gh: i32 = tt_glyph_h_of(scale, ds, tt_reg, tt_cfg, font);
@@ -661,6 +662,19 @@ fn! flush_pre_segment(segment_chars: [i32], x_ptr: [i32], y_ptr: [i32],
             let bg_w: i32 = line_right - bg_x;
             if bg_w > 0 { gfx_fill_rect(bg_x, draw_y, bg_w, lh, theme[T_PRE_BG]); };
             draw_text_f(x_ptr[0], draw_y, seg, color, font, scale, ds, tt_reg, tt_mono, tt_head, tt_cfg);
+            // Underline + LinkInfo when this segment was emitted inside an
+            // <a> element (RFC pages, manual pages, anything that wraps a
+            // <pre> body in inline anchors).  Without this, the verbatim
+            // path would draw the text but never make it clickable, and
+            // fragment-target self-links inside the doc would be dead.
+            if str_len(link_href) > 0 {
+                gfx_fill_rect(x_ptr[0], draw_y + gh, seg_w, 1 * ds, color);
+                let li: LinkInfo = LinkInfo {
+                    x: x_ptr[0], y: draw_y, w: seg_w, h: lh,
+                    href: link_href, label: "", chrome: in_chrome,
+                };
+                push(links, li);
+            };
             let wi: WordInfo = WordInfo { x: x_ptr[0], y: draw_y, w: seg_w, text: seg };
             push(word_map, wi);
         };
@@ -898,6 +912,32 @@ fn! collect_tr_indices(nodes: [HtmlNode], table_node: HtmlNode) -> [i32] {
     out
 }
 
+// True if `idx`'s subtree contains content the column-align text
+// flattener cannot represent: nested tables, lists, divs, paragraphs,
+// preformatted blocks, or any anchor (`<a>`).  Anchors matter because
+// the column-align path collects cells via html_get_text_content,
+// which loses LinkInfo — so a cell with links would render as
+// non-clickable text.  Sites like Hacker News and many HTML4
+// table-as-layout pages depend on this fallback for navigation.
+fn! cell_has_structured_content(nodes: [HtmlNode], idx: i32) -> bool {
+    if idx < 0 or idx >= len(nodes) { return false; };
+    let mut c: i32 = nodes[idx].first_child;
+    while c != -1 {
+        let cn: HtmlNode = nodes[c];
+        if not cn.is_text {
+            let t: str = cn.tag;
+            if str_eq(t, "table") or str_eq(t, "ul") or str_eq(t, "ol") or
+               str_eq(t, "div") or str_eq(t, "p") or str_eq(t, "pre") or
+               str_eq(t, "a") {
+                return true;
+            };
+            if cell_has_structured_content(nodes, c) { return true; };
+        };
+        c = nodes[c].next_sibling;
+    };
+    false
+}
+
 // Collect cell (<td>/<th>) indices for one <tr>.
 fn! collect_cell_indices(nodes: [HtmlNode], tr_node: HtmlNode) -> [i32] {
     let mut out: [i32] = [];
@@ -1003,10 +1043,19 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
 
     // Fragment target: record absolute y when we encounter the node whose id
     // matches.  y_ptr[0] here is pre-scroll document space — exactly what we
-    // need to set scroll_y to.
+    // need to set scroll_y to.  Also matches the legacy HTML4 `<a name="…">`
+    // anchor style (still spec-compliant in HTML5 for backward compat — W3C
+    // spec pages use it extensively).
     if not node.is_text and str_len(fragment_target) > 0 and fragment_y_out[0] < 0 {
         let nid: str = html_get_attr(node, "id");
-        if str_len(nid) > 0 and str_eq(nid, fragment_target) {
+        let mut matches: bool = str_len(nid) > 0 and str_eq(nid, fragment_target);
+        if not matches and str_eq(node.tag, "a") {
+            let nname: str = html_get_attr(node, "name");
+            if str_len(nname) > 0 and str_eq(nname, fragment_target) {
+                matches = true;
+            };
+        };
+        if matches {
             fragment_y_out[0] = y_ptr[0];
         };
     };
@@ -1044,6 +1093,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
                 if c == 10 {
                     flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
                                       line_right, line_left, color, font, scale, ds, word_map,
+                                      links, link_href, in_chrome,
                                       theme,
                                       tt_reg, tt_mono, tt_head, tt_cfg);
                     while len(segment_chars) > 0 { pop(segment_chars); };
@@ -1061,6 +1111,7 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
             };
             flush_pre_segment(segment_chars, x_ptr, y_ptr, vp_top,
                               line_right, line_left, color, font, scale, ds, word_map,
+                              links, link_href, in_chrome,
                               theme,
                               tt_reg, tt_mono, tt_head, tt_cfg);
         } else {
@@ -1387,6 +1438,63 @@ fn! render_node(nodes: [HtmlNode], idx: i32, x_ptr: [i32], y_ptr: [i32],
         // Pass 2: render each row with word-wrap; row height = max line count.
         for ri2 in 0..len(rows_cells) {
             let cells2: [i32] = rows_cells[ri2];
+
+            // Detect rows whose cells carry structured content (nested
+            // tables, lists, divs, paragraphs, code blocks).  For those
+            // rows the column-align path would flatten content to text;
+            // instead render each cell as a normal block sequence at
+            // full table width.  This is what makes sites like Hacker
+            // News — which use an outer table purely as layout
+            // scaffolding around a nested content table — render as
+            // pages instead of one blob of text.
+            let mut row_is_structured: bool = false;
+            for cis in 0..len(cells2) {
+                if cell_has_structured_content(nodes, cells2[cis]) {
+                    row_is_structured = true;
+                    break;
+                };
+            };
+
+            if row_is_structured {
+                let cell_indent: i32 = eff_indent + PAD * ds;
+                let cell_vp_width: i32 = eff_indent + PAD * ds + avail_w;
+                for cis2 in 0..len(cells2) {
+                    let cell_idx: i32 = cells2[cis2];
+                    let mut gc: i32 = nodes[cell_idx].first_child;
+                    while gc != -1 {
+                        render_node(nodes, gc, x_ptr, y_ptr, vp_top, cell_vp_width,
+                                    links, color, font, scale, ds,
+                                    is_link, link_href,
+                                    cell_indent, in_pre,
+                                    img_cache_idx, img_cache_data,
+                                    img_cache_w, img_cache_h,
+                                    base_scheme, base_host, base_port, base_path,
+                                    search_q, word_map,
+                                    strikethrough, force_underline, mark_bg,
+                                    ol_counter, clickables, styles,
+                                    trim_chrome, in_chrome,
+                                    fragment_target, fragment_y_out,
+                                    outline_idx, outline_y_out,
+                                    body_mono_font,
+                                    theme,
+                                    tt_reg, tt_mono, tt_head, tt_cfg);
+                        gc = nodes[gc].next_sibling;
+                    };
+                };
+                // End of structured row: only advance to a fresh line
+                // if the row ended mid-line (cell ended with inline
+                // content like `<a>` or `<span>`).  When a cell ends
+                // with a block element x is already at the left margin
+                // and the block already advanced y — adding another
+                // LINE_H here would produce double-spacing on sites
+                // (HN, RSS readers) that pack many short rows.
+                if x_ptr[0] > eff_indent + PAD * ds {
+                    y_ptr[0] = y_ptr[0] + LINE_H * ds;
+                    x_ptr[0] = eff_indent + PAD * ds;
+                };
+                continue;
+            };
+
             // First compute wrapped lines per cell + row max lines.
             let mut max_lines: i32 = 1;
             let mut row_any_th: bool = false;
@@ -2558,7 +2666,17 @@ fn! main() {
                         fetch_tls = str_eq(redir_u.scheme, "https");
                         current_url = resp.redirect_url;
                         redir_count += 1;
-                    } else if resp.ok {
+                    } else if resp.ok or
+                        (str_len(resp.error) == 0 and resp.status_code >= 400 and
+                         str_len(resp.body) > 0) {
+                        // Render successful responses AND 4xx/5xx responses
+                        // that came back with an HTML body — many sites use
+                        // 403 paywalls (LWN), custom 404 navigation pages
+                        // (GitHub), and 410 archives that contain valuable
+                        // content the user wants to read.  We surface the
+                        // status in status_msg so the user knows the request
+                        // wasn't a clean 200.
+                        let render_status: i32 = resp.status_code;
                         while len(dom_nodes) > 0 { pop(dom_nodes); };
                         while len(dom_styles) > 0 { pop(dom_styles); };
                         // Clear image cache for new page
@@ -2572,7 +2690,11 @@ fn! main() {
 
                         page_loaded = true;
                         scroll_y = 0;
-                        status_msg = current_url;
+                        if render_status >= 400 {
+                            status_msg = "[HTTP {render_status}] {current_url}";
+                        } else {
+                            status_msg = current_url;
+                        };
 
                         // Set DOM for JS bridge and execute <script> tags
                         // (both inline AND external <script src>).

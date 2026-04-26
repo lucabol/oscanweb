@@ -70,7 +70,10 @@ if ($Test) {
     # Extra C flags for tests that need the JS engine
     $JsBridge = Join-Path $ProjectDir 'js_bridge.c'
     $QuickJs  = Join-Path $ProjectDir 'libs' 'quickjs' 'quickjs.c'
+    $GzipBridge = Join-Path $ProjectDir 'gzip_bridge.c'
+    $Miniz    = Join-Path $ProjectDir 'libs' 'miniz' 'miniz.c'
     $hasJs    = (Test-Path $JsBridge) -and (Test-Path $QuickJs)
+    $hasGzip  = (Test-Path $GzipBridge) -and (Test-Path $Miniz)
 
     $failed = 0
     foreach ($tf in $testFiles) {
@@ -89,6 +92,9 @@ if ($Test) {
         if ($hasJs) {
             $testArgs += @('--extra-c', $JsBridge, '--extra-c', $QuickJs,
                            '--extra-cflags', "-I$ProjectDir")
+            if ($hasGzip) {
+                $testArgs += @('--extra-c', $GzipBridge, '--extra-c', $Miniz)
+            }
             if ($_isWin) {
                 $testArgs += @('--extra-cflags', '-lwinhttp')
             } elseif ($IsLinux) {
@@ -145,9 +151,14 @@ $oscanArgs = @($MainSource, '-o', $OutputBin)
 # Link QuickJS-ng JavaScript engine
 $JsBridge = Join-Path $ProjectDir 'js_bridge.c'
 $QuickJs  = Join-Path $ProjectDir 'libs' 'quickjs' 'quickjs.c'
+$GzipBridge = Join-Path $ProjectDir 'gzip_bridge.c'
+$Miniz    = Join-Path $ProjectDir 'libs' 'miniz' 'miniz.c'
 if ((Test-Path $JsBridge) -and (Test-Path $QuickJs)) {
     $oscanArgs += @('--extra-c', $JsBridge, '--extra-c', $QuickJs,
                     '--extra-cflags', "-I$ProjectDir")
+    if ((Test-Path $GzipBridge) -and (Test-Path $Miniz)) {
+        $oscanArgs += @('--extra-c', $GzipBridge, '--extra-c', $Miniz)
+    }
     if ($_isWin) {
         $oscanArgs += @('--extra-cflags', '-lwinhttp')
     } elseif ($IsLinux) {
