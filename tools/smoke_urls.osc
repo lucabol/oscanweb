@@ -1,0 +1,120 @@
+// Live network smoke runner.  NOT a unit test — this hits the public
+// internet and is therefore flaky by design.  Run manually:
+//
+//     pwsh tools/smoke.ps1
+//
+// or directly:
+//
+//     oscan tools/smoke_urls.osc -o build/smoke.exe \
+//         --extra-c js_bridge.c --extra-c libs/quickjs/quickjs.c \
+//         --extra-c gzip_bridge.c --extra-c libs/miniz/miniz.c \
+//         --extra-cflags -I. --extra-cflags -lwinhttp
+//     ./build/smoke.exe
+//
+// Exit code: 0 if every URL passes its invariant, 1 otherwise.
+
+use "../url.osc"
+use "../http.osc"
+use "../html.osc"
+
+struct UrlCase {
+    url: str,
+    min_links: i32,
+    must_contain: str,   // case-insensitive substring of body text; "" to skip
+}
+
+fn! count_links(nodes: [HtmlNode]) -> i32 {
+    let mut n: i32 = 0;
+    let mut i: i32 = 0;
+    let total: i32 = len(nodes);
+    while i < total {
+        let node: HtmlNode = nodes[i];
+        if not node.is_text and str_eq(node.tag, "a") {
+            let href: str = html_get_attr(node, "href");
+            if str_len(href) > 0 { n = n + 1; };
+        };
+        i = i + 1;
+    };
+    n
+}
+
+fn! check_one(c: UrlCase) -> bool {
+    println("---- {c.url}");
+    let u: Url = url_parse(c.url);
+    let use_tls: bool = str_eq(u.scheme, "https");
+    let resp: HttpResponse = http_get(u.host, u.port, u.path, use_tls, "");
+
+    if str_len(resp.error) > 0 {
+        println("  FAIL: transport error: {resp.error}");
+        return false;
+    };
+    let sc: i32 = resp.status_code;
+    if sc < 200 or sc >= 400 {
+        println("  FAIL: status {sc}");
+        return false;
+    };
+    let body_len: i32 = str_len(resp.body);
+    if body_len < 200 {
+        println("  FAIL: body too small ({body_len} bytes)");
+        return false;
+    };
+
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, resp.body);
+    if root < 0 {
+        println("  FAIL: parse failed");
+        return false;
+    };
+
+    let n_links: i32 = count_links(nodes);
+    if n_links < c.min_links {
+        println("  FAIL: only {n_links} links (need {c.min_links})");
+        return false;
+    };
+
+    if str_len(c.must_contain) > 0 {
+        let txt: str = str_to_lower(html_get_text_content(nodes, root));
+        let needle: str = str_to_lower(c.must_contain);
+        if not str_contains(txt, needle) {
+            println("  FAIL: body missing '{c.must_contain}'");
+            return false;
+        };
+    };
+
+    println("  PASS: status={sc} body={body_len}B links={n_links}");
+    true
+}
+
+fn! main() {
+    let cases: [UrlCase] = [
+        UrlCase { url: "http://bettermotherfuckingwebsite.com/",
+                  min_links: 1, must_contain: "motherfucker" },
+        UrlCase { url: "https://danluu.com/",
+                  min_links: 50, must_contain: "" },
+        UrlCase { url: "https://news.ycombinator.com/",
+                  min_links: 80, must_contain: "" },
+        UrlCase { url: "https://datatracker.ietf.org/doc/html/rfc1952",
+                  min_links: 20, must_contain: "" },
+        UrlCase { url: "https://www.w3.org/TR/CSS2/visudet.html",
+                  min_links: 50, must_contain: "inline" },
+        UrlCase { url: "https://en.wikipedia.org/wiki/HTML",
+                  min_links: 200, must_contain: "" },
+        UrlCase { url: "https://lwn.net/",
+                  min_links: 20, must_contain: "" },
+    ];
+
+    let mut total: i32 = 0;
+    let mut passed: i32 = 0;
+    for i in 0..len(cases) {
+        total = total + 1;
+        if check_one(cases[i]) {
+            passed = passed + 1;
+        };
+    };
+
+    println("");
+    println("=== Smoke results: {passed} / {total} passed ===");
+    if passed != total {
+        exit(1);
+    };
+}

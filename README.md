@@ -375,13 +375,36 @@ supported CSS feature.
 ## Testing
 
 ```powershell
-# Run all tests
+# Run all unit tests (offline, CI-safe)
 .\build.ps1 -Test
 
 # Run individual test suites
 oscan tests/test_url.osc --run
 oscan tests/test_html.osc --run
 ```
+
+### Real-world page regression suite
+
+`tests/test_pages.osc` parses captured HTML fixtures from sites we've
+previously hit rendering bugs on (HN, danluu.com, BMFW, RFC datatracker,
+W3C CSS2 spec, Wikipedia) and asserts page-specific invariants — each
+one corresponds to a fix we shipped. Run as part of `build.ps1 -Test`.
+
+Refresh the captured snapshots when sites change layout:
+
+```powershell
+.\tools\capture_fixtures.ps1
+```
+
+### Live network smoke (manual)
+
+```powershell
+.\tools\smoke.ps1
+```
+
+Hits the public internet to verify the full HTTP→gzip→parse pipeline
+end-to-end. Flaky by design; not part of CI. Use after touching
+`http.osc`, `gzip_bridge.c`, or TLS-related code.
 
 ## Reader Mode, Bookmarks & Zoom
 

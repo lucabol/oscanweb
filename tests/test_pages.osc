@@ -1,0 +1,263 @@
+// Tests for the full HTML pipeline against captured real-world pages.
+//
+// These are *regression* fixtures: each invariant below corresponds to a
+// rendering bug we have actually shipped a fix for.  When a fixture goes
+// stale (the upstream site changes), refresh it with
+// `tools/capture_fixtures.ps1` and re-tighten the assertion if needed ?
+// the *bug pattern*, not the byte-for-byte page, is what we are locking
+// down.
+//
+// Tests run with CWD = repo root (build.ps1 invokes the test binary from
+// there), so fixture paths are relative.  read_file returns
+// Result<str, str> ? Err on missing/permission/etc.
+//
+// Network: this test does NOT touch the network.  Use
+// tools/smoke_urls.osc + tools/smoke.ps1 for live URL verification.
+
+use "../html.osc"
+
+// Failure counter is threaded through each assert as a [i32] slot
+// (Oscan disallows module-level `let mut` and module-level array
+// constants are not visible inside functions).
+fn! assert_true(cond: bool, test_name: str, fails: [i32]) {
+    if cond {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name}");
+        fails[0] = fails[0] + 1;
+    };
+}
+
+fn! assert_ge(actual: i32, threshold: i32, test_name: str, fails: [i32]) {
+    if actual >= threshold {
+        println("PASS: {test_name} ({actual} >= {threshold})");
+    } else {
+        println("FAIL: {test_name} ({actual} < {threshold})");
+        fails[0] = fails[0] + 1;
+    };
+}
+
+// Load a fixture, parse it, and report basic stats.  Returns the parsed
+// node array plus the root index; root == -1 signals "skipped" (file
+// missing) so the caller can short-circuit without failing the whole
+// test run.
+fn! load_fixture(path: str, nodes: [HtmlNode], fails: [i32]) -> i32 {
+    let r: Result<str, str> = read_file(path);
+    let mut body: str = "";
+    match r {
+        Result::Ok(s) => { body = s; },
+        Result::Err(_e) => {
+            println("FAIL: fixture missing: {path}");
+            fails[0] = fails[0] + 1;
+            return -1;
+        },
+    };
+    if str_len(body) == 0 {
+        println("FAIL: fixture empty: {path}");
+        fails[0] = fails[0] + 1;
+        return -1;
+    };
+    html_parse(nodes, body)
+}
+
+// Count <a> elements with a non-empty href attribute (i.e. visible links).
+fn! count_links(nodes: [HtmlNode]) -> i32 {
+    let mut n: i32 = 0;
+    let mut i: i32 = 0;
+    let total: i32 = len(nodes);
+    while i < total {
+        let node: HtmlNode = nodes[i];
+        if not node.is_text and str_eq(node.tag, "a") {
+            let href: str = html_get_attr(node, "href");
+            if str_len(href) > 0 {
+                n = n + 1;
+            };
+        };
+        i = i + 1;
+    };
+    n
+}
+
+// Count <a> elements whose href starts with '#' (intra-page anchors,
+// e.g. table-of-contents fragments in long specs).
+fn! count_fragment_links(nodes: [HtmlNode]) -> i32 {
+    let mut n: i32 = 0;
+    let mut i: i32 = 0;
+    let total: i32 = len(nodes);
+    while i < total {
+        let node: HtmlNode = nodes[i];
+        if not node.is_text and str_eq(node.tag, "a") {
+            let href: str = html_get_attr(node, "href");
+            if str_len(href) > 0 {
+                let chs: [i32] = str_to_chars(href);
+                if len(chs) > 0 and chs[0] == 35 {
+                    n = n + 1;
+                };
+            };
+        };
+        i = i + 1;
+    };
+    n
+}
+
+// Has any descendant of a <pre> element an <a href=...>?  This was the
+// rfc1952/datatracker bug: <a> inside <pre> rendered as plain text.
+fn! pre_contains_link(nodes: [HtmlNode]) -> bool {
+    let total: i32 = len(nodes);
+    let mut i: i32 = 0;
+    while i < total {
+        let node: HtmlNode = nodes[i];
+        if not node.is_text and str_eq(node.tag, "pre") {
+            // Walk subtree (descendant array indices are not contiguous in
+            // the flat DOM, so use first_child / next_sibling traversal
+            // with an explicit stack).
+            let mut stack: [i32] = [];
+            push(stack, node.first_child);
+            while len(stack) > 0 {
+                let cur: i32 = stack[len(stack) - 1];
+                pop(stack);
+                if cur == -1 { continue; };
+                let cnode: HtmlNode = nodes[cur];
+                if not cnode.is_text and str_eq(cnode.tag, "a") {
+                    let href: str = html_get_attr(cnode, "href");
+                    if str_len(href) > 0 { return true; };
+                };
+                if cnode.first_child != -1 { push(stack, cnode.first_child); };
+                if cnode.next_sibling != -1 { push(stack, cnode.next_sibling); };
+            };
+        };
+        i = i + 1;
+    };
+    false
+}
+
+// Every <li> that wraps a <d> sub-element should also contain an <a>.
+// This is the danluu.com pattern: <li><d>10/24</d><a href=...>Title</a></li>.
+// Before the unquoted-slash href fix the parser ate the link, leaving
+// `<li><d>10/24</d>` followed by orphan text "Title".
+fn! all_li_with_d_have_link(nodes: [HtmlNode]) -> bool {
+    let total: i32 = len(nodes);
+    let mut i: i32 = 0;
+    while i < total {
+        let node: HtmlNode = nodes[i];
+        if not node.is_text and str_eq(node.tag, "li") {
+            // Scan direct children for <d> and <a>.
+            let mut has_d: bool = false;
+            let mut has_a: bool = false;
+            let mut c: i32 = node.first_child;
+            while c != -1 {
+                let cn: HtmlNode = nodes[c];
+                if not cn.is_text {
+                    if str_eq(cn.tag, "d") { has_d = true; };
+                    if str_eq(cn.tag, "a") {
+                        let href: str = html_get_attr(cn, "href");
+                        if str_len(href) > 0 { has_a = true; };
+                    };
+                };
+                c = cn.next_sibling;
+            };
+            if has_d and not has_a { return false; };
+        };
+        i = i + 1;
+    };
+    true
+}
+
+// Does any element have a `name="<target>"` attribute (HTML4 anchor
+// target syntax used by the W3C CSS2 spec)?
+fn! has_named_anchor(nodes: [HtmlNode], target: str) -> bool {
+    let total: i32 = len(nodes);
+    let mut i: i32 = 0;
+    while i < total {
+        let node: HtmlNode = nodes[i];
+        if not node.is_text {
+            let nm: str = html_get_attr(node, "name");
+            if str_eq(nm, target) { return true; };
+            let id: str = html_get_attr(node, "id");
+            if str_eq(id, target) { return true; };
+        };
+        i = i + 1;
+    };
+    false
+}
+
+fn! main() {
+    let fails: [i32] = [0];
+
+    // ---- danluu.com — list of articles; unquoted /-terminated href bug.
+    let mut danluu_nodes: [HtmlNode] = [];
+    let danluu_root: i32 = load_fixture("tests/fixtures/danluu.html", danluu_nodes, fails);
+    if danluu_root >= 0 {
+        assert_ge(len(danluu_nodes), 200, "danluu: parsed many nodes", fails);
+        assert_ge(count_links(danluu_nodes), 50, "danluu: link count", fails);
+        assert_true(all_li_with_d_have_link(danluu_nodes),
+                    "danluu: every <li><d>...</d> also contains <a> (unquoted slash href bug)",
+                    fails);
+    };
+
+    // ---- Hacker News — table-based front page.
+    let mut hn_nodes: [HtmlNode] = [];
+    let hn_root: i32 = load_fixture("tests/fixtures/hn.html", hn_nodes, fails);
+    if hn_root >= 0 {
+        assert_ge(len(hn_nodes), 500, "hn: parsed many nodes", fails);
+        assert_ge(count_links(hn_nodes), 100, "hn: link count", fails);
+        let body_text: str = html_get_text_content(hn_nodes, hn_root);
+        assert_true(str_contains(body_text, "comments") or str_contains(body_text, "comment"),
+                    "hn: body text contains 'comment'", fails);
+    };
+
+    // ---- BMFW — small HTTP-only page.
+    let mut bmfw_nodes: [HtmlNode] = [];
+    let bmfw_root: i32 = load_fixture("tests/fixtures/bmfw.html", bmfw_nodes, fails);
+    if bmfw_root >= 0 {
+        assert_ge(len(bmfw_nodes), 10, "bmfw: parsed nodes", fails);
+        let bmfw_text: str = html_get_text_content(bmfw_nodes, bmfw_root);
+        assert_true(str_contains(str_to_lower(bmfw_text), "motherfucker"),
+                    "bmfw: body contains expected text", fails);
+    };
+
+    // ---- RFC 1952 — long <pre> body with intra-page <a> links.
+    let mut rfc_nodes: [HtmlNode] = [];
+    let rfc_root: i32 = load_fixture("tests/fixtures/rfc1952.html", rfc_nodes, fails);
+    if rfc_root >= 0 {
+        assert_ge(len(rfc_nodes), 500, "rfc1952: parsed many nodes", fails);
+        assert_true(pre_contains_link(rfc_nodes),
+                    "rfc1952: <a href> inside <pre> (links-in-pre bug)", fails);
+        assert_ge(count_fragment_links(rfc_nodes), 5,
+                  "rfc1952: fragment #anchor links present", fails);
+    };
+
+    // ---- W3C CSS2 visudet.html — <a name="..."> fragment targets.
+    let mut visudet_nodes: [HtmlNode] = [];
+    let visudet_root: i32 = load_fixture("tests/fixtures/visudet.html", visudet_nodes, fails);
+    if visudet_root >= 0 {
+        assert_ge(len(visudet_nodes), 500, "visudet: parsed many nodes", fails);
+        assert_true(has_named_anchor(visudet_nodes, "inline-width"),
+                    "visudet: <a name=inline-width> fragment target present", fails);
+    };
+
+    // ---- LWN-style HTTP 403 paywall (synthetic small fixture).
+    let mut p403_nodes: [HtmlNode] = [];
+    let p403_root: i32 = load_fixture("tests/fixtures/http403.html", p403_nodes, fails);
+    if p403_root >= 0 {
+        let p403_text: str = html_get_text_content(p403_nodes, p403_root);
+        assert_true(str_contains(p403_text, "Subscription"),
+                    "http403: body text contains 'Subscription'", fails);
+        assert_ge(count_links(p403_nodes), 2, "http403: link count", fails);
+    };
+
+    // ---- Wikipedia — heaviest fixture (~500 KB).
+    let mut wiki_nodes: [HtmlNode] = [];
+    let wiki_root: i32 = load_fixture("tests/fixtures/wikipedia.html", wiki_nodes, fails);
+    if wiki_root >= 0 {
+        assert_ge(len(wiki_nodes), 5000, "wikipedia: parsed many nodes", fails);
+        assert_ge(count_links(wiki_nodes), 500, "wikipedia: link count", fails);
+    };
+
+    println("=== Pages Tests Complete ===");
+    if fails[0] > 0 {
+        let n: i32 = fails[0];
+        println("FAIL: {n} assertion(s) failed");
+        exit(1);
+    };
+}
