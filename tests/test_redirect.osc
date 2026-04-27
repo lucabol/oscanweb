@@ -1,0 +1,91 @@
+// Tests for http_parse_raw_response redirect detection.
+// Covers: 301/302/303/307/308 are flagged as redirects with the raw
+// Location value preserved; 200 and 4xx without Location yield no
+// redirect_url.
+
+use "../http.osc"
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! assert_eq_i32(actual: i32, expected: i32, test_name: str) {
+    if actual == expected {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected {expected}, got {actual}");
+    };
+}
+
+fn! make_resp(status_line: str, headers: str, body: str) -> str {
+    "{status_line}\r\n{headers}\r\n\r\n{body}"
+}
+
+fn! main() {
+    // 301 Moved Permanently with absolute Location.
+    let r1: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 301 Moved Permanently",
+                  "Location: https://example.com/new\r\nContent-Length: 0",
+                  ""));
+    assert_eq_i32(r1.status_code, 301, "301 status parsed");
+    assert_eq_str(r1.redirect_url, "https://example.com/new", "301 absolute Location");
+
+    // 302 Found with relative Location (Rails-style sign-in success).
+    let r2: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 302 Found",
+                  "Location: /\r\nSet-Cookie: sid=abc; path=/\r\nContent-Length: 0",
+                  ""));
+    assert_eq_i32(r2.status_code, 302, "302 status parsed");
+    assert_eq_str(r2.redirect_url, "/", "302 relative Location preserved raw");
+    assert_eq_i32(len(r2.set_cookie_lines), 1, "302 set-cookie captured");
+
+    // 303 See Other — required for sites that enforce POST-redirect-GET.
+    let r3: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 303 See Other",
+                  "Location: /dashboard\r\nContent-Length: 0",
+                  ""));
+    assert_eq_i32(r3.status_code, 303, "303 status parsed");
+    assert_eq_str(r3.redirect_url, "/dashboard", "303 flagged as redirect");
+
+    // 307 Temporary Redirect — method-preserving.
+    let r4: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 307 Temporary Redirect",
+                  "Location: https://other.test/x\r\nContent-Length: 0",
+                  ""));
+    assert_eq_i32(r4.status_code, 307, "307 status parsed");
+    assert_eq_str(r4.redirect_url, "https://other.test/x", "307 flagged");
+
+    // 308 Permanent Redirect — method-preserving, modern.
+    let r5: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 308 Permanent Redirect",
+                  "Location: /v2/login\r\nContent-Length: 0",
+                  ""));
+    assert_eq_i32(r5.status_code, 308, "308 status parsed");
+    assert_eq_str(r5.redirect_url, "/v2/login", "308 flagged");
+
+    // 200 OK with a (nonsense) Location header is NOT a redirect.
+    let r6: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 200 OK",
+                  "Content-Type: text/html\r\nLocation: /ignored",
+                  "<html></html>"));
+    assert_eq_i32(r6.status_code, 200, "200 status parsed");
+    assert_eq_str(r6.redirect_url, "", "200 never carries a redirect_url");
+
+    // 404 with Location is also not a redirect (we render the body).
+    let r7: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 404 Not Found",
+                  "Location: /elsewhere\r\nContent-Length: 0",
+                  ""));
+    assert_eq_i32(r7.status_code, 404, "404 status parsed");
+    assert_eq_str(r7.redirect_url, "", "404 never triggers redirect");
+
+    // 302 without a Location header is not actionable.
+    let r8: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 302 Found",
+                  "Content-Length: 0", ""));
+    assert_eq_str(r8.redirect_url, "", "302 without Location yields empty redirect_url");
+}

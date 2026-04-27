@@ -74,6 +74,7 @@ fn http_cache_build(body: str, content_type: str, status: i32) -> HttpResponse {
         error: "",
         ok: status >= 200 and status < 300,
         set_cookie_lines: empty,
+        cache_control: "",
     }
 }
 

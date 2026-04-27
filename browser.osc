@@ -522,9 +522,10 @@ fn! img_fetch_and_decode(src: str, base_scheme: str, base_host: str, base_port: 
         return -1;
     };
 
-    // Fetch image data. Subresources don't carry cookies in v1 — most
-    // image CDNs don't authenticate, and threading the jar through the
-    // image pipeline would materially widen this module's surface.
+    // Fetch image data. Subresources don't carry cookies in v1 — the
+    // image pipeline reaches here from inside render_node, which already
+    // takes 35+ params; threading the jar in is a separate refactor.
+    // Public CDN images work fine; private images may 401 silently.
     let resp: HttpResponse = http_get(img_host, img_port, img_path, img_tls, "");
     if not resp.ok or str_len(resp.body) == 0 {
         map_set(img_cache_idx, src, "-1");
@@ -1953,7 +1954,9 @@ fn! form_resolve_action(action: str, current_url: str) -> str {
 // The function is recursive; it walks the whole subtree rooted at `idx`.
 fn! browser_exec_scripts(ctx: handle, nodes: [HtmlNode], idx: i32,
                          fetch_host: str, fetch_port: i32, fetch_path: str,
-                         fetch_tls: bool, current_url: str) {
+                         fetch_tls: bool, current_url: str,
+                         ck_names: [str], ck_values: [str], ck_domains: [str],
+                         ck_paths: [str], ck_secure: [bool], ck_host_only: [bool]) {
     if idx < 0 { return; };
     let node: HtmlNode = nodes[idx];
     if str_eq(node.tag, "script") {
@@ -1981,7 +1984,12 @@ fn! browser_exec_scripts(ctx: handle, nodes: [HtmlNode], idx: i32,
                 sc_path = url_resolve_relative(fetch_path, src);
             };
             vlog_msg("js ext fetch", src);
-            let sresp: HttpResponse = http_get(sc_host, sc_port, sc_path, sc_tls, "");
+            let sc_ck: str = cookies_build_header(
+                ck_names, ck_values, ck_domains, ck_paths,
+                ck_secure, ck_host_only,
+                sc_host, sc_path, sc_tls);
+            let sc_extra: str = if str_len(sc_ck) > 0 { "Cookie: {sc_ck}\r\n" } else { "" };
+            let sresp: HttpResponse = http_get(sc_host, sc_port, sc_path, sc_tls, sc_extra);
             if sresp.ok and str_len(sresp.body) > 0 {
                 let _r: str = js_engine_eval(ctx, sresp.body);
             };
@@ -1996,7 +2004,8 @@ fn! browser_exec_scripts(ctx: handle, nodes: [HtmlNode], idx: i32,
     let mut child: i32 = node.first_child;
     while child != -1 {
         browser_exec_scripts(ctx, nodes, child,
-            fetch_host, fetch_port, fetch_path, fetch_tls, current_url);
+            fetch_host, fetch_port, fetch_path, fetch_tls, current_url,
+            ck_names, ck_values, ck_domains, ck_paths, ck_secure, ck_host_only);
         child = nodes[child].next_sibling;
     };
 }
@@ -2503,6 +2512,22 @@ fn! main() {
             if key == 8 and len(form_input_buf) > 0 {
                 pop(form_input_buf);
             };
+            // Ctrl+V (key 22) — paste clipboard, appending printable chars
+            if key == 22 {
+                let ff_paste: Result<str, str> = clipboard_get();
+                match ff_paste {
+                    Result::Ok(ff_clip) => {
+                        let ff_chars: [i32] = str_to_chars(str_trim(ff_clip));
+                        for ff_i in 0..len(ff_chars) {
+                            let ff_ch: i32 = ff_chars[ff_i];
+                            if ff_ch >= 32 and ff_ch <= 126 {
+                                push(form_input_buf, ff_ch);
+                            };
+                        };
+                    },
+                    Result::Err(_ff_e) => {},
+                };
+            };
         };
 
         // Main frame body (no arena block — avoids array realloc corruption)
@@ -2616,12 +2641,20 @@ fn! main() {
                     let cache_key: str = "{cache_scheme}://{fetch_host}:{fetch_port}{fetch_path}";
                     // POST requests bypass the page cache and dispatch
                     // via http_post once; any redirect switches to GET.
-                    let is_post_now: bool = nav_is_post and redir_count == 0;
+                    // nav_is_post is now persistent across the redirect loop:
+                    // 307/308 preserve the method, so we keep the body in
+                    // place and only clear it when the redirect handler
+                    // explicitly downgrades to GET (302/303 or cross-origin).
+                    let is_post_now: bool = nav_is_post;
                     let cache_hit: i32 = if is_post_now { -1 } else {
                         http_cache_lookup(page_cache_urls, cache_key)
                     };
                     let mut resp: HttpResponse = http_make_error("");
                     let mut from_cache: bool = false;
+                    // Track whether this request carried a Cookie header so
+                    // the cache-put gate below can refuse to memoize
+                    // per-user responses.
+                    let mut req_had_cookie: bool = false;
                     if cache_hit >= 0 {
                         vlog_msg("cache hit", cache_key);
                         resp = http_cache_build(page_cache_bodies[cache_hit],
@@ -2640,15 +2673,18 @@ fn! main() {
                         let mut extra: str = "";
                         if str_len(ck_hdr) > 0 {
                             extra = "Cookie: {ck_hdr}\r\n";
+                            req_had_cookie = true;
                         };
                         if is_post_now {
                             vlog_msg("POST", fetch_path);
                             resp = http_post(fetch_host, fetch_port, fetch_path,
                                              fetch_tls, nav_post_body,
-                                             "application/x-www-form-urlencoded", extra);
-                            // One-shot: clear so redirects become GETs.
-                            nav_is_post = false;
-                            nav_post_body = "";
+                                             "application/x-www-form-urlencoded", extra,
+                                             current_url);
+                            // Do NOT clear nav_is_post here: the redirect
+                            // handler below decides per-status whether to
+                            // preserve the POST body (307/308) or downgrade
+                            // to GET (301/302/303, or cross-origin).
                         } else {
                             resp = http_get(fetch_host, fetch_port, fetch_path, fetch_tls, extra);
                         };
@@ -2674,22 +2710,60 @@ fn! main() {
                     vlog_int("fetch status", resp.status_code);
                     vlog_int("fetch body_len", str_len(resp.body));
                     // Cache any successful or 3xx-redirect response (not
-                    // errors). Redirects are cheap to cache and let the
-                    // full chain short-circuit on revisit.
-                    if not from_cache and str_len(resp.error) == 0 and resp.status_code >= 200 and resp.status_code < 400 {
+                    // errors).  Skip cookie-sensitive responses so we don't
+                    // memoize per-user content under a URL key: requests
+                    // that carried a Cookie, responses that set one, POSTs,
+                    // and explicit Cache-Control: no-store / private /
+                    // max-age=0 are all kept out of the cache.  Public,
+                    // anonymous pages (the common case) cache normally.
+                    let cc_lc: str = resp.cache_control;
+                    let no_store: bool = str_find(cc_lc, "no-store") >= 0 or
+                                         str_find(cc_lc, "private") >= 0 or
+                                         str_find(cc_lc, "max-age=0") >= 0;
+                    let cookie_sensitive: bool = req_had_cookie or
+                                                 len(resp.set_cookie_lines) > 0 or
+                                                 is_post_now or
+                                                 no_store;
+                    if not from_cache and not cookie_sensitive and
+                       str_len(resp.error) == 0 and
+                       resp.status_code >= 200 and resp.status_code < 400 {
                         http_cache_put(page_cache_urls, page_cache_bodies,
                                        page_cache_cts, page_cache_status,
                                        cache_key, resp);
                     };
 
-                    if str_len(resp.redirect_url) > 0 and (resp.status_code == 301 or resp.status_code == 302 or resp.status_code == 307) {
+                    if str_len(resp.redirect_url) > 0 and
+                       (resp.status_code == 301 or resp.status_code == 302 or
+                        resp.status_code == 303 or resp.status_code == 307 or
+                        resp.status_code == 308) {
                         vlog_msg("redirect", resp.redirect_url);
-                        let redir_u: Url = url_parse(resp.redirect_url);
+                        // Resolve the (possibly relative) Location value
+                        // against the URL we just requested, not against
+                        // current_url — they can differ during a chain.
+                        let req_scheme: str = if fetch_tls { "https" } else { "http" };
+                        let req_url: str = "{req_scheme}://{fetch_host}:{fetch_port}{fetch_path}";
+                        let abs_redir: str = url_resolve_full(req_url, resp.redirect_url);
+                        let redir_u: Url = url_parse(abs_redir);
+                        let new_tls: bool = str_eq(redir_u.scheme, "https");
+                        let same_host: bool = str_eq(redir_u.host, fetch_host);
+                        let same_scheme: bool = (new_tls and fetch_tls) or
+                                                (not new_tls and not fetch_tls);
+                        let cross_origin: bool = not (same_host and same_scheme);
+                        // 307/308 preserve method+body; everything else (and
+                        // any cross-origin hop) downgrades POST to GET so
+                        // we don't replay credentials at a foreign host.
+                        let preserve_post: bool = nav_is_post and
+                            (resp.status_code == 307 or resp.status_code == 308) and
+                            not cross_origin;
+                        if not preserve_post {
+                            nav_is_post = false;
+                            nav_post_body = "";
+                        };
                         fetch_host = redir_u.host;
                         fetch_port = redir_u.port;
                         fetch_path = redir_u.path;
-                        fetch_tls = str_eq(redir_u.scheme, "https");
-                        current_url = resp.redirect_url;
+                        fetch_tls = new_tls;
+                        current_url = abs_redir;
                         redir_count += 1;
                     } else if resp.ok or
                         (str_len(resp.error) == 0 and resp.status_code >= 400 and
@@ -2727,7 +2801,9 @@ fn! main() {
                         vlog_msg("js scripts start", "");
                         browser_exec_scripts(js_ctx, dom_nodes, dom_root,
                             fetch_host, fetch_port, fetch_path, fetch_tls,
-                            current_url);
+                            current_url,
+                            ck_names, ck_values, ck_domains, ck_paths,
+                            ck_secure, ck_host_only);
                         vlog_msg("js scripts end", "");
                         if js_bridge_is_dom_dirty() > 0 {
                             js_bridge_clear_dom_dirty();
@@ -2788,7 +2864,14 @@ fn! main() {
                                     link_path = url_resolve_relative(fetch_path, href);
                                 };
                                 vlog_msg("css link fetch", href);
-                                let lresp: HttpResponse = http_get(link_host, link_port, link_path, link_tls, "");
+                                let link_ck: str = cookies_build_header(
+                                    ck_names, ck_values, ck_domains, ck_paths,
+                                    ck_secure, ck_host_only,
+                                    link_host, link_path, link_tls);
+                                let link_extra: str = if str_len(link_ck) > 0 {
+                                    "Cookie: {link_ck}\r\n"
+                                } else { "" };
+                                let lresp: HttpResponse = http_get(link_host, link_port, link_path, link_tls, link_extra);
                                 if lresp.ok and str_len(lresp.body) > 0 {
                                     css_order = css_parse(css_rules, lresp.body, css_order);
                                 };
@@ -3412,9 +3495,29 @@ fn! main() {
                         while len(form_input_buf) > 0 { pop(form_input_buf); };
 
                         if form_fill_pos >= len(form_fill_order) {
+                            // Find the first non-disabled submit-style
+                            // control in the target form so its name=value
+                            // is included (Rails apps that key off the
+                            // button name rely on this; the GET path also
+                            // gets a stable button param). -1 if none.
+                            let mut submitter_idx: i32 = -1;
+                            let nfields: i32 = len(page_fields);
+                            for sfi in 0..nfields {
+                                if submitter_idx >= 0 { continue; };
+                                let sf: FormField = page_fields[sfi];
+                                if sf.form_idx != form_fill_target { continue; };
+                                if sf.disabled { continue; };
+                                if str_eq(sf.kind, "submit") or
+                                   str_eq(sf.kind, "image") or
+                                   str_eq(sf.kind, "button") {
+                                    if str_len(sf.name) > 0 {
+                                        submitter_idx = sfi;
+                                    };
+                                };
+                            };
                             // All editable fields filled — build body and submit.
                             let body: str = forms_build_urlencoded(
-                                page_fields, form_fill_target, -1);
+                                page_fields, form_fill_target, submitter_idx);
                             let action: str = page_forms[form_fill_target].action;
                             let resolved: str = form_resolve_action(action, current_url);
                             let method: str = page_forms[form_fill_target].method;
@@ -3426,7 +3529,10 @@ fn! main() {
                                 nav_is_post = false;
                                 nav_post_body = "";
                                 let target_url: str = if str_len(body) > 0 {
-                                    str_concat(str_concat(resolved, "?"), body)
+                                    let sep: str = if str_contains(resolved, "?") {
+                                        "&"
+                                    } else { "?" };
+                                    str_concat(str_concat(resolved, sep), body)
                                 } else { resolved };
                                 nav_url = target_url;
                             };
@@ -3990,7 +4096,15 @@ fn! main() {
                 let prompt: str = "Form [{pos_disp}/{total}] {field_name}{kind_hint}: ";
                 gfx_draw_text_scaled(4 * ds, sy + 8 * ds, prompt, theme[T_FG], ds, ds, FONT_DEFAULT);
                 let prompt_w: i32 = gfx_text_width(prompt, FONT_DEFAULT) * ds;
-                let val: str = str_from_chars(form_input_buf);
+                // Mask password input so the literal value never appears on
+                // screen. The internal buffer (form_input_buf) stays clear
+                // so the eventual POST body still contains the real value.
+                let val: str = if str_eq(field_kind, "password") {
+                    let mut stars: [i32] = [];
+                    let nbuf: i32 = len(form_input_buf);
+                    for _si in 0..nbuf { push(stars, 42); };
+                    str_from_chars(stars)
+                } else { str_from_chars(form_input_buf) };
                 gfx_draw_text_scaled(4 * ds + prompt_w, sy + 8 * ds, val, theme[T_FG], ds, ds, FONT_DEFAULT);
                 // Cursor
                 gfx_fill_rect(4 * ds + prompt_w + len(form_input_buf) * FONT_W * ds,

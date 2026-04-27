@@ -49,6 +49,11 @@ struct HttpResponse {
     // collapses because its backing map dedups keys — so we extract
     // them separately in `http_extract_set_cookies` and attach here.
     set_cookie_lines: [str],
+    // Lower-cased Cache-Control header value (or "" when absent).  The
+    // browser uses this to gate the page cache: responses tagged with
+    // `no-store`, `private`, or `max-age=0` are kept out of the on-disk
+    // cache so authenticated content doesn't outlive the session.
+    cache_control: str,
 }
 
 fn! http_make_error(msg: str) -> HttpResponse {
@@ -61,6 +66,7 @@ fn! http_make_error(msg: str) -> HttpResponse {
         error: msg,
         ok: false,
         set_cookie_lines: empty,
+        cache_control: "",
     }
 }
 
@@ -278,10 +284,11 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
         error: "",
         ok: true,
         set_cookie_lines: empty,
+        cache_control: "",
     }
 }
 
-// Prime the TLS network path with a bounded TCP connect to :443.  Returns
+// Prime the TLS network path with a bounded TCP connect to :443.Returns
 // true on a successful connect, false on timeout / unreachable.  We use
 // the bounded `net_connect_timeout_ipv4` instead of the untimeoutable
 // `socket_connect` so a host that silently drops :443 (firewall, dead
@@ -373,6 +380,7 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
         error: "",
         ok: true,
         set_cookie_lines: empty,
+        cache_control: "",
     }
 }
 
@@ -505,26 +513,54 @@ fn! http_parse_raw_response(raw_response: str) -> HttpResponse {
     if map_has(headers, "content-encoding") {
         ce = str_to_lower(str_trim(map_get(headers, "content-encoding")));
     };
+    // Redirect bodies (3xx) are usually a tiny "You are being redirected"
+    // stub the user never sees, but losing them must not break the
+    // redirect chain (Set-Cookie + Location must survive). On any decode
+    // failure we drop the body and keep the headers rather than turning
+    // the whole response into an error.
+    let is_redirect_status: bool = status_code == 301 or status_code == 302 or
+        status_code == 303 or status_code == 307 or status_code == 308;
     if str_len(ce) > 0 and not str_eq(ce, "identity") {
         if str_eq(ce, "gzip") or str_eq(ce, "deflate") or str_eq(ce, "x-gzip") {
-            let decoded: str = gzip_decode(body);
-            if str_len(decoded) == 0 and str_len(body) > 0 {
-                return http_make_error("Failed to decode Content-Encoding: {ce}");
+            if is_redirect_status {
+                // Don't bother decoding — we won't render the body.
+                body = "";
+            } else {
+                let decoded: str = gzip_decode(body);
+                if str_len(decoded) == 0 and str_len(body) > 0 {
+                    // Decode failed (truncated stream, unsupported flags,
+                    // etc.) but the rest of the response is still usable
+                    // — keep status/headers/cookies, drop body.
+                    body = "";
+                } else {
+                    body = decoded;
+                };
             };
-            body = decoded;
         } else {
-            return http_make_error("Unsupported Content-Encoding: {ce} (no brotli decoder)");
+            // Unknown encoding (e.g. brotli). For redirects, follow them
+            // anyway; otherwise surface as an error.
+            if is_redirect_status {
+                body = "";
+            } else {
+                return http_make_error("Unsupported Content-Encoding: {ce} (no brotli decoder)");
+            };
         };
     };
 
     let mut redirect_url: str = "";
-    if status_code == 301 or status_code == 302 or status_code == 307 {
+    if status_code == 301 or status_code == 302 or status_code == 303 or
+       status_code == 307 or status_code == 308 {
         if map_has(headers, "location") {
             redirect_url = map_get(headers, "location");
         };
     };
 
     let is_ok: bool = status_code >= 200 and status_code < 300;
+
+    let mut cache_ctrl: str = "";
+    if map_has(headers, "cache-control") {
+        cache_ctrl = str_to_lower(map_get(headers, "cache-control"));
+    };
 
     HttpResponse {
         status_code: status_code,
@@ -534,16 +570,37 @@ fn! http_parse_raw_response(raw_response: str) -> HttpResponse {
         error: "",
         ok: is_ok,
         set_cookie_lines: set_cookies,
+        cache_control: cache_ctrl,
     }
 }
 
 // POST a request body. `body` is sent verbatim; `content_type` is the
 // Content-Type header value (e.g. "application/x-www-form-urlencoded").
-// Extra headers follow the same convention as http_get.
+// Extra headers follow the same convention as http_get.  `page_url` is
+// the URL of the page that contained the form; when non-empty we emit
+// `Origin:` and `Referer:` headers derived from it (some servers'
+// CSRF middleware checks those in addition to a token field).
 fn! http_post(host: str, port: i32, path: str, use_tls: bool,
-              body: str, content_type: str, extra_headers: str) -> HttpResponse {
+              body: str, content_type: str, extra_headers: str,
+              page_url: str) -> HttpResponse {
     let body_len: i32 = str_len(body);
-    let request: str = "POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{extra_headers}\r\n{body}";
+    let mut origin_hdr: str = "";
+    let mut referer_hdr: str = "";
+    if str_len(page_url) > 0 {
+        let pu: Url = url_parse(page_url);
+        if str_len(pu.host) > 0 and str_len(pu.scheme) > 0 {
+            // Origin is scheme + host (+ non-default port). No path.
+            let default_port: bool = (str_eq(pu.scheme, "https") and pu.port == 443) or
+                                     (str_eq(pu.scheme, "http") and pu.port == 80);
+            let port_part: str = if default_port { "" } else { ":{pu.port}" };
+            origin_hdr = "Origin: {pu.scheme}://{pu.host}{port_part}\r\n";
+            // Referer can include the path (but never the fragment, which
+            // url_parse already stripped). Skip when the page URL is
+            // suspicious (no host).
+            referer_hdr = "Referer: {page_url}\r\n";
+        };
+    };
+    let request: str = "POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{origin_hdr}{referer_hdr}{extra_headers}\r\n{body}";
 
     let mut raw_response: str = "";
     if use_tls {
