@@ -162,24 +162,22 @@ fn! http_decode_chunked(encoded: str) -> str {
     str_from_chars(out)
 }
 
-// TLS fetch in its own function so close paths are localized.
+// TLS fetch in its own function so defer tls_close is at function scope
 fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     vlog_msg("tls_connect", host);
     let conn_result: Result<i32, str> = tls_connect(host, port);
-    let mut tls_handle: i32 = 0;
+    let mut handle: i32 = 0;
     match conn_result {
-        Result::Ok(h) => { tls_handle = h; },
+        Result::Ok(h) => { handle = h; },
         Result::Err(e) => { return http_make_error("TLS connection failed: {e}"); },
     };
+    defer tls_close(handle);
     vlog_msg("tls_connected", "");
 
-    let send_result: Result<i32, str> = tls_send(tls_handle, request);
+    let send_result: Result<i32, str> = tls_send(handle, request);
     match send_result {
         Result::Ok(_n) => {},
-        Result::Err(e) => {
-            tls_close(tls_handle);
-            return http_make_error("TLS send failed: {e}");
-        },
+        Result::Err(e) => { return http_make_error("TLS send failed: {e}"); },
     };
     vlog_msg("tls_sent", "");
 
@@ -197,7 +195,7 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     let mut recv_calls: i32 = 0;
 
     while not done {
-        let chunk: str = tls_recv(tls_handle, 8192);
+        let chunk: str = tls_recv(handle, 8192);
         let chunk_len: i32 = str_len(chunk);
         recv_calls += 1;
         if recv_calls <= 3 or recv_calls % 50 == 0 {
@@ -278,7 +276,6 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     };
 
     let empty: [str] = [];
-    tls_close(tls_handle);
     HttpResponse {
         status_code: 200,
         content_type: "",
@@ -311,19 +308,18 @@ fn! http_prime_tls(host: str) -> bool {
         Result::Ok(s) => { ps = s; },
         Result::Err(_e) => { return false; },
     };
+    defer socket_close(ps);
     let _tor: i32 = net_set_recv_timeout(ps, 5000);
     let rc: i32 = net_connect_timeout_ipv4(ps, ip, 443, 5000);
     if rc == 0 {
         vlog_msg("tls prime ok", "");
-        socket_close(ps);
         return true;
     };
     vlog_int("tls prime err", rc);
-    socket_close(ps);
     false
 }
 
-// Plain TCP fetch in its own function so close paths are localized.
+// Plain TCP fetch in its own function so defer socket_close is at function scope
 fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpResponse {
     vlog_msg("plain sock_tcp", host);
     let sock_result: Result<i32, str> = socket_tcp();
@@ -332,6 +328,8 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
         Result::Ok(s) => { sock = s; },
         Result::Err(e) => { return http_make_error("Socket creation failed: {e}"); },
     };
+    defer socket_close(sock);
+
     // Apply a recv/send timeout so a dead peer can't hang us forever.
     if timeout_ms > 0 {
         let tr: i32 = net_set_recv_timeout(sock, timeout_ms);
@@ -342,20 +340,14 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
     let conn_result: Result<str, str> = socket_connect(sock, host, port);
     match conn_result {
         Result::Ok(_s) => {},
-        Result::Err(e) => {
-            socket_close(sock);
-            return http_make_error("Connection failed: {e}");
-        },
+        Result::Err(e) => { return http_make_error("Connection failed: {e}"); },
     };
     vlog_msg("plain connected", "");
 
     let send_result: Result<i32, str> = socket_send(sock, request);
     match send_result {
         Result::Ok(_n) => {},
-        Result::Err(e) => {
-            socket_close(sock);
-            return http_make_error("Send failed: {e}");
-        },
+        Result::Err(e) => { return http_make_error("Send failed: {e}"); },
     };
     vlog_msg("plain sent", "");
 
@@ -370,7 +362,6 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
             // got any data treat it as an error so the caller can fall
             // back to TLS.
             if not got_any {
-                socket_close(sock);
                 return http_make_error("recv timeout or empty response");
             };
             done = true;
@@ -381,7 +372,6 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
     };
 
     let empty: [str] = [];
-    socket_close(sock);
     HttpResponse {
         status_code: 200,
         content_type: "",

@@ -36,8 +36,8 @@ let MAX_REDIRECTS: i32 = 5;
 // Body text defaults.  Headings override scale; <pre>/<code>/<table> override
 // font to FONT_DEFAULT_L (the 12-row fixed-width variant) so mono runs keep
 // the same vertical metrics as surrounding body text.
-let BODY_FONT: i32 = 5;      // FONT_PROPORTIONAL_L
-let BODY_MONO_FONT: i32 = 4; // FONT_DEFAULT_L
+let BODY_FONT: i32 = FONT_PROPORTIONAL_L;
+let BODY_MONO_FONT: i32 = FONT_DEFAULT_L;
 
 // ─── TrueType helpers ──────────────────────────────────
 // When the UI toggles TrueType rendering on, body text (pages, link
@@ -2193,6 +2193,9 @@ fn! main() {
     tt_reg = tt_load_first(body_font_paths);
     tt_head = tt_load_first(head_font_paths);
     tt_mono = tt_load_first(mono_font_paths);
+    defer tt_free(tt_reg);
+    defer tt_free(tt_mono);
+    defer tt_free(tt_head);
 
     // Persisted TT settings: [enabled, body_px, mono_px].
     let tt_persist: [str] = storage_load_lines("font.cfg");
@@ -4308,9 +4311,6 @@ fn! main() {
     // Flush persistent HTTP cache to disk so next launch benefits.
     http_cache_save(page_cache_urls, page_cache_bodies,
                     page_cache_cts, page_cache_status);
-    tt_free(tt_reg);
-    tt_free(tt_mono);
-    tt_free(tt_head);
     js_engine_destroy(js_ctx);
     canvas_close()
 }
