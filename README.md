@@ -74,8 +74,31 @@ Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern 
 
 ## Prerequisites
 
-- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support)
+- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support). Native Windows/Linux builds require Oscan master/newer than `v0.0.33` with `--backend c|native`, `--native-target`, `--extra-obj`, and native user-extern `str` parameter/return shims.
 - **PowerShell** — for the build script
+
+## Build backends
+
+`build.ps1` selects an explicit Oscan backend instead of relying on the compiler default:
+
+| Platform | Default | Runtime | Notes |
+| --- | --- | --- | --- |
+| Windows x86-64 | `native` | hosted libc (`--libc`) | Links QuickJS, WinHTTP, Winsock, gzip bridge, and miniz. Release builds pass the Windows GUI subsystem flags. |
+| Linux x86-64 | `native` | hosted libc (`--libc`) | Avoids the known QuickJS/freestanding crash path and links gzip bridge + miniz through the native backend. |
+| macOS x86-64 | `c` | C backend | Native backend is not supported on macOS, so macOS intentionally stays on the C backend. |
+
+If your installed `oscan` predates `--backend`, `build.ps1` falls back to the legacy C backend for `-Backend auto`/`-Backend c`. Explicit `-Backend native` requires a newer compiler.
+
+```powershell
+# Default: native on supported Windows/Linux, C on macOS
+.\build.ps1
+
+# Deliberate C backend fallback
+.\build.ps1 -Backend c
+
+# Native build for an explicit target tag
+.\build.ps1 -Backend native -NativeTarget host
+```
 
 ## Quick Start
 
@@ -378,10 +401,16 @@ supported CSS feature.
 # Run all unit tests (offline, CI-safe)
 .\build.ps1 -Test
 
+# Run tests through a specific backend
+.\build.ps1 -Backend c -Test
+.\build.ps1 -Backend native -Test
+
 # Run individual test suites
 oscan tests/test_url.osc --run
 oscan tests/test_html.osc --run
 ```
+
+On Linux, `test_js.osc` is skipped only for the legacy C/freestanding path because QuickJS is known to crash there. Native Linux tests use hosted libc and should run the JS coverage once the required Oscan native extern shims are available.
 
 ### Real-world page regression suite
 

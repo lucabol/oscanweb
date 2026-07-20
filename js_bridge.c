@@ -77,6 +77,16 @@ extern osc_map *osc_map_new(void *arena);
 /* Global arena — created by Oscan-generated main */
 extern void *osc_global_arena;
 
+static osc_str osc_str_copy_to_global(const char *data, size_t len) {
+    if (!data || len == 0) return osc_str_from_cstr("");
+    if (len > (size_t)INT32_MAX) return osc_str_from_cstr("out of memory");
+
+    osc_str view;
+    view.data = data;
+    view.len = (int32_t)len;
+    return osc_str_concat(osc_global_arena, view, osc_str_from_cstr(""));
+}
+
 /* ── DOM state ───────────────────────────────────────────── */
 
 static osc_array *g_dom_nodes = NULL;
@@ -913,8 +923,11 @@ osc_str js_engine_eval(uintptr_t ctx_handle, osc_str code) {
 
     if (JS_IsException(val)) {
         JSValue exc = JS_GetException(ctx);
-        const char *msg = JS_ToCString(ctx, exc);
-        osc_str result = osc_str_from_cstr(msg ? msg : "JS Error");
+        size_t msg_len = 0;
+        const char *msg = JS_ToCStringLen(ctx, &msg_len, exc);
+        osc_str result = msg
+            ? osc_str_copy_to_global(msg, msg_len)
+            : osc_str_from_cstr("JS Error");
         if (msg) JS_FreeCString(ctx, msg);
         JS_FreeValue(ctx, exc);
         JS_FreeValue(ctx, val);
@@ -926,9 +939,10 @@ osc_str js_engine_eval(uintptr_t ctx_handle, osc_str code) {
         return osc_str_from_cstr("");
     }
 
-    const char *str = JS_ToCString(ctx, val);
-    osc_str result = osc_str_from_cstr(str ? str : "");
-    JS_FreeCString(ctx, str);
+    size_t str_len = 0;
+    const char *str = JS_ToCStringLen(ctx, &str_len, val);
+    osc_str result = str ? osc_str_copy_to_global(str, str_len) : osc_str_from_cstr("");
+    if (str) JS_FreeCString(ctx, str);
     JS_FreeValue(ctx, val);
     return result;
 }

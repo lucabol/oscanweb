@@ -61,6 +61,16 @@ fn! main() {
     let r8: str = js_engine_eval(ctx, "throw new Error('test error')");
     assert_true(str_len(r8) > 0, "eval error returns message");
 
+    // Returned strings must remain valid after QuickJS frees its temporary
+    // C string and later evals reuse engine allocations.
+    let r_life: str = js_engine_eval(ctx, "'persist-' + 'value'");
+    let _trash_life: str = js_engine_eval(ctx, "Array(4096).fill('x').join('')");
+    assert_eq_str(r_life, "persist-value", "eval result survives later eval");
+
+    let r_err_life: str = js_engine_eval(ctx, "throw new Error('persistent boom')");
+    let _trash_err_life: str = js_engine_eval(ctx, "Array(4096).fill('y').join('')");
+    assert_true(str_contains(r_err_life, "persistent boom"), "eval error survives later eval");
+
     // console.log works (output goes to stdout, we just verify no crash)
     let r9: str = js_engine_eval(ctx, "console.log('hello from JS'); 'ok'");
     assert_eq_str(r9, "ok", "console.log no crash");

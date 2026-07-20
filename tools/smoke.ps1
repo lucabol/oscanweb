@@ -14,29 +14,31 @@
 .EXAMPLE
     .\tools\smoke.ps1
 #>
+param(
+    [ValidateSet('auto', 'native', 'c')]
+    [string]$Backend = 'auto',
+    [string]$NativeTarget = 'host',
+    [switch]$CompileOnly
+)
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path (Join-Path $Root 'tools') 'build_common.ps1')
 Push-Location $Root
 try {
-    $Out = Join-Path $Root 'build\smoke.exe'
+    $isWin = Test-OscaWebWindows
+    $Out = Join-Path $Root $(if ($isWin) { 'build\smoke.exe' } else { 'build/smoke' })
     New-Item -ItemType Directory -Path (Split-Path $Out) -Force | Out-Null
 
-    $args = @(
-        'tools/smoke_urls.osc', '-o', $Out,
-        '--extra-c', 'js_bridge.c',
-        '--extra-c', 'libs/quickjs/quickjs.c',
-        '--extra-c', 'gzip_bridge.c',
-        '--extra-c', 'libs/miniz/miniz.c',
-        '--extra-cflags', "-I$Root"
-    )
-    if ($env:OS -eq 'Windows_NT') {
-        $args += @('--extra-cflags', '-lwinhttp')
-    }
+    $config = Get-OscaWebBuildConfig -Backend $Backend -NativeTarget $NativeTarget
+    $smokeArgs = @((Join-Path (Join-Path $Root 'tools') 'smoke_urls.osc'), '-o', $Out)
+    $smokeArgs = Add-OscaWebBuildArgs -InputArgs $smokeArgs -Config $config -ProjectDir $Root
 
     Write-Host '>> Compiling smoke runner' -ForegroundColor Cyan
-    & oscan @args
+    & oscan @smokeArgs
     if ($LASTEXITCODE -ne 0) { Write-Host 'compile failed' -ForegroundColor Red; exit 1 }
+
+    if ($CompileOnly) { exit 0 }
 
     Write-Host '>> Running' -ForegroundColor Cyan
     & $Out
