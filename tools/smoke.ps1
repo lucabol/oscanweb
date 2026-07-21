@@ -18,7 +18,6 @@ param(
     [ValidateSet('auto', 'native', 'c')]
     [string]$Backend = 'auto',
     [string]$NativeTarget = 'host',
-    [switch]$AllowElevatedNativeLink,
     [switch]$CompileOnly
 )
 
@@ -31,7 +30,7 @@ try {
     $Out = Join-Path $Root $(if ($isWin) { 'build\smoke.exe' } else { 'build/smoke' })
     New-Item -ItemType Directory -Path (Split-Path $Out) -Force | Out-Null
 
-    $config = Get-OscaWebBuildConfig -Backend $Backend -NativeTarget $NativeTarget -AllowElevatedNativeLink:$AllowElevatedNativeLink
+    $config = Get-OscaWebBuildConfig -Backend $Backend -NativeTarget $NativeTarget
     $smokeArgs = @((Join-Path (Join-Path $Root 'tools') 'smoke_urls.osc'), '-o', $Out)
     $smokeArgs = Add-OscaWebBuildArgs -InputArgs $smokeArgs -Config $config -ProjectDir $Root
 

@@ -74,7 +74,7 @@ Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern 
 
 ## Prerequisites
 
-- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support). Native Windows/Linux builds require Oscan `v0.0.35` or newer with `--backend c|native`, `--native-target`, `--extra-obj`, `--extra-lib`, and native user-extern `str` parameter/return shims. Trusted elevated Windows CI/release jobs also require the Oscan release containing `--allow-elevated-native-link`.
+- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support). Native Windows/Linux builds require Oscan `v0.0.35` or newer with `--backend c|native`, `--native-target`, `--extra-obj`, `--extra-lib`, and native user-extern `str` parameter/return shims.
 - **PowerShell** — for the build script
 
 ## Build backends
@@ -84,7 +84,7 @@ Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern 
 | Platform | Default | Runtime | Notes |
 | --- | --- | --- | --- |
 | Windows x86-64 | `native` | hosted libc (`--libc`) | Links QuickJS, WinHTTP, Winsock, gzip bridge, and miniz. Release builds pass the Windows GUI subsystem flags. |
-| Linux x86-64 | `native` | hosted libc (`--libc`) | Adds `-D_GNU_SOURCE` and `-pthread` for bundled QuickJS, `-static` so release/test binaries do not depend on a host musl loader, avoids the known QuickJS/freestanding crash path, and links gzip bridge + miniz through the native backend. |
+| Linux x86-64 | `native` | hosted libc (`--libc`) | Adds `-D_GNU_SOURCE` for bundled QuickJS and `-static` so release/test binaries do not depend on a host musl loader, avoids the known QuickJS/freestanding crash path, and links gzip bridge + miniz through the native backend. |
 | macOS x86-64 | `c` | C backend | Native backend is not supported on macOS, so macOS intentionally stays on the C backend. |
 
 If your installed `oscan` predates `--backend`, `build.ps1` falls back to the legacy C backend for `-Backend auto`/`-Backend c`. Explicit `-Backend native` requires a newer compiler.
@@ -99,8 +99,6 @@ If your installed `oscan` predates `--backend`, `build.ps1` falls back to the le
 # Native build for an explicit target tag
 .\build.ps1 -Backend native -NativeTarget host
 ```
-
-Trusted Windows CI/release jobs may pass `-AllowElevatedNativeLink`, which forwards Oscan's explicit `--allow-elevated-native-link` opt-in for GitHub-hosted runners that execute with an elevated token. Local builds do not pass this switch by default, so Oscan's elevated native-link protection stays visible and enforced for normal users.
 
 ## Quick Start
 

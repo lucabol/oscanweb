@@ -10,11 +10,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # Before merging, bump to the Oscan release that includes
-  # --allow-elevated-native-link.
-  OSCAN_VERSION: 0.0.35
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -29,19 +24,16 @@ jobs:
           - os: windows-latest
             name: windows-x86_64
             backend: native
-            trusted_native_link_arg: -AllowElevatedNativeLink
             oscan_archive: oscan-v{OSCAN_VER}-windows-x86_64-full.zip
             oscan_bin: oscan.exe
           - os: ubuntu-latest
             name: linux-x86_64
             backend: native
-            trusted_native_link_arg: ""
             oscan_archive: oscan-v{OSCAN_VER}-linux-x86_64-full.tar.xz
             oscan_bin: oscan
           - os: macos-15
             name: macos-x86_64
             backend: c
-            trusted_native_link_arg: ""
             oscan_archive: oscan-v{OSCAN_VER}-macos-x86_64.tar.gz
             oscan_bin: oscan
     runs-on: ${{ matrix.os }}
@@ -58,8 +50,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          OSCAN_TAG="v${OSCAN_VERSION}"
-          gh release view "$OSCAN_TAG" --repo lucabol/Oscan >/dev/null
+          OSCAN_TAG=$(gh release view --repo lucabol/Oscan --json tagName --jq .tagName)
           OSCAN_VER="${OSCAN_TAG#v}"
           echo "Installing Oscan $OSCAN_TAG"
 
@@ -98,8 +89,8 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: ./build.ps1 -Backend ${{ matrix.backend }} ${{ matrix.trusted_native_link_arg }} -V
+        run: ./build.ps1 -Backend ${{ matrix.backend }} -V
 
       - name: Tests
         shell: pwsh
-        run: ./build.ps1 -Backend ${{ matrix.backend }} ${{ matrix.trusted_native_link_arg }} -Test -V
+        run: ./build.ps1 -Backend ${{ matrix.backend }} -Test -V

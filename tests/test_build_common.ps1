@@ -65,23 +65,16 @@ function New-TestConfig {
         NativeTarget     = 'host'
         SupportsBackend  = $true
         SupportsExtraLib = $SupportsExtraLib
-        AllowElevatedNativeLink = $false
         UseHostedLibc    = $Backend -eq 'native'
     }
 }
 
 $nativeBackend = Add-OscaWebBackendArgs -InputArgs @('input.osc') -Config (New-TestConfig -Backend native)
 Assert-ContainsSequence -Name 'Native backend passes hosted native flags' -ActualArgs $nativeBackend -Sequence @('--backend', 'native', '--native-target', 'host', '--libc')
-Assert-NotContainsSequence -Name 'Native backend does not allow elevated link by default' -ActualArgs $nativeBackend -Sequence @('--allow-elevated-native-link')
-
-$trustedNativeConfig = New-TestConfig -Backend native
-$trustedNativeConfig.AllowElevatedNativeLink = $true
-$trustedNative = Add-OscaWebBackendArgs -InputArgs @('input.osc') -Config $trustedNativeConfig
-Assert-ContainsSequence -Name 'Native backend adds explicit elevated link opt-in when requested' -ActualArgs $trustedNative -Sequence @('--allow-elevated-native-link')
 
 $linuxNative = @(Add-OscaWebPlatformLinkArgs -InputArgs @('input.osc') -Config (New-TestConfig -Backend native) -Platform linux)
 Assert-ContainsSequence -Name 'Linux native adds GNU feature macro' -ActualArgs $linuxNative -Sequence @('--extra-cflags', '-D_GNU_SOURCE')
-Assert-ContainsSequence -Name 'Linux native adds pthread driver flag' -ActualArgs $linuxNative -Sequence @('--extra-cflags', '-pthread')
+Assert-NotContainsSequence -Name 'Linux native does not add pthread unless a probe requires it' -ActualArgs $linuxNative -Sequence @('--extra-cflags', '-pthread')
 Assert-ContainsSequence -Name 'Linux native statically links bundled musl runtime' -ActualArgs $linuxNative -Sequence @('--extra-cflags', '-static')
 Assert-NotContainsSequence -Name 'Linux native does not add libc as an explicit library' -ActualArgs $linuxNative -Sequence @('--extra-lib', 'c')
 

@@ -23,7 +23,6 @@ function Get-OscaWebOscanCapabilities {
         SupportsBackend      = $help -match '--backend\s+c\|native'
         SupportsNativeTarget = $help -match '--native-target'
         SupportsExtraLib     = $help -match '--extra-lib'
-        SupportsAllowElevatedNativeLink = $help -match '--allow-elevated-native-link'
     }
 }
 
@@ -37,8 +36,7 @@ function Get-OscaWebBuildConfig {
     param(
         [ValidateSet('auto', 'native', 'c')]
         [string]$Backend = 'auto',
-        [string]$NativeTarget = 'host',
-        [switch]$AllowElevatedNativeLink
+        [string]$NativeTarget = 'host'
     )
 
     $capabilities = Get-OscaWebOscanCapabilities
@@ -57,13 +55,6 @@ function Get-OscaWebBuildConfig {
         Write-Host '   oscan has no --backend flag; using the legacy C backend default' -ForegroundColor Yellow
     }
 
-    if ($AllowElevatedNativeLink -and $resolvedBackend -ne 'native') {
-        throw '-AllowElevatedNativeLink is only valid for native backend builds.'
-    }
-    if ($AllowElevatedNativeLink -and -not $capabilities.SupportsAllowElevatedNativeLink) {
-        throw 'Installed oscan does not expose --allow-elevated-native-link. Install the Oscan release containing the trusted elevated native link opt-in, then rerun.'
-    }
-
     [pscustomobject]@{
         RequestedBackend      = $Backend
         Backend               = $resolvedBackend
@@ -71,8 +62,6 @@ function Get-OscaWebBuildConfig {
         SupportsBackend       = $capabilities.SupportsBackend
         SupportsNativeTarget  = $capabilities.SupportsNativeTarget
         SupportsExtraLib      = $capabilities.SupportsExtraLib
-        SupportsAllowElevatedNativeLink = $capabilities.SupportsAllowElevatedNativeLink
-        AllowElevatedNativeLink = [bool]$AllowElevatedNativeLink
         UseHostedLibc         = $resolvedBackend -eq 'native'
     }
 }
@@ -86,9 +75,6 @@ function Add-OscaWebBackendArgs {
     $out = @($InputArgs)
     if ($Config.Backend -eq 'native') {
         $out += @('--backend', 'native', '--native-target', $Config.NativeTarget, '--libc')
-        if ($Config.AllowElevatedNativeLink) {
-            $out += @('--allow-elevated-native-link')
-        }
     } elseif ($Config.SupportsBackend) {
         $out += @('--backend', 'c')
     }
@@ -170,7 +156,6 @@ function Add-OscaWebPlatformLinkArgs {
         }
     } elseif ($Platform -eq 'linux' -and $Config.Backend -eq 'native') {
         $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-D_GNU_SOURCE'
-        $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-pthread'
         $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-static'
     } elseif ($Platform -eq 'linux' -and $Config.Backend -eq 'c') {
         $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-Wl,--allow-multiple-definition'

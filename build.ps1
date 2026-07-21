@@ -23,7 +23,6 @@ param(
     [string]$NativeTarget = 'host',
     [string]$Output,
     [switch]$WindowsGui,
-    [switch]$AllowElevatedNativeLink,
     [Alias('V')][switch]$Verbose
 )
 
@@ -55,7 +54,7 @@ if (-not (Get-Command 'oscan' -ErrorAction SilentlyContinue)) {
     Write-Fail 'oscan not found in PATH. Install from https://github.com/lucabol/Oscan'
 }
 
-$BuildConfig = Get-OscaWebBuildConfig -Backend $Backend -NativeTarget $NativeTarget -AllowElevatedNativeLink:$AllowElevatedNativeLink
+$BuildConfig = Get-OscaWebBuildConfig -Backend $Backend -NativeTarget $NativeTarget
 Write-Step "Using $($BuildConfig.Backend) backend"
 if ($BuildConfig.Backend -eq 'native') {
     Write-Host "   Native target: $($BuildConfig.NativeTarget), runtime: hosted libc" -ForegroundColor DarkGray
