@@ -13,6 +13,9 @@ on:
 permissions:
   contents: write
 
+env:
+  OSCAN_VERSION: 0.0.36
+
 jobs:
   build:
     name: Build ${{ matrix.name }}
@@ -23,24 +26,31 @@ jobs:
           - os: windows-latest
             name: windows-x86_64
             backend: native
+            trusted_native_link_arg: -AllowElevatedNativeLink
             oscan_archive: oscan-v{OSCAN_VER}-windows-x86_64-full.zip
             oscan_bin: oscan.exe
             output: oscanweb-windows-x86_64.exe
           - os: ubuntu-latest
             name: linux-x86_64
             backend: native
+            trusted_native_link_arg: ""
             oscan_archive: oscan-v{OSCAN_VER}-linux-x86_64-full.tar.xz
             oscan_bin: oscan
             output: oscanweb-linux-x86_64
           - os: macos-15
             name: macos-x86_64
             backend: c
+            trusted_native_link_arg: ""
             oscan_archive: oscan-v{OSCAN_VER}-macos-x86_64.tar.gz
             oscan_bin: oscan
             output: oscanweb-macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Build script argument tests
+        shell: pwsh
+        run: ./tests/test_build_common.ps1
 
       - name: Resolve version
         id: version
@@ -57,7 +67,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          OSCAN_TAG=$(gh release view --repo lucabol/Oscan --json tagName --jq .tagName)
+          OSCAN_TAG="v${OSCAN_VERSION}"
+          gh release view "$OSCAN_TAG" --repo lucabol/Oscan >/dev/null
           OSCAN_VER="${OSCAN_TAG#v}"
           echo "Installing Oscan $OSCAN_TAG"
 
@@ -98,11 +109,11 @@ jobs:
 
       - name: Build browser
         shell: pwsh
-        run: ./build.ps1 -Backend ${{ matrix.backend }} -Output "build/${{ matrix.output }}" -WindowsGui -V
+        run: ./build.ps1 -Backend ${{ matrix.backend }} ${{ matrix.trusted_native_link_arg }} -Output "build/${{ matrix.output }}" -WindowsGui -V
 
       - name: Run tests
         shell: pwsh
-        run: ./build.ps1 -Backend ${{ matrix.backend }} -Test -V
+        run: ./build.ps1 -Backend ${{ matrix.backend }} ${{ matrix.trusted_native_link_arg }} -Test -V
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
