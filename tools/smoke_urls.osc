@@ -8,7 +8,7 @@
 //     oscan tools/smoke_urls.osc -o build/smoke.exe \
 //         --extra-c js_bridge.c --extra-c libs/quickjs/quickjs.c \
 //         --extra-c gzip_bridge.c --extra-c libs/miniz/miniz.c \
-//         --extra-cflags -I. --extra-cflags -lwinhttp
+//         --extra-cflags -I. --extra-lib winhttp --extra-lib ws2_32
 //     ./build/smoke.exe
 //
 // Exit code: 0 if every URL passes its invariant, 1 otherwise.
