@@ -82,6 +82,7 @@ Assert-ContainsSequence -Name 'Native backend adds explicit elevated link opt-in
 $linuxNative = @(Add-OscaWebPlatformLinkArgs -InputArgs @('input.osc') -Config (New-TestConfig -Backend native) -Platform linux)
 Assert-ContainsSequence -Name 'Linux native adds GNU feature macro' -ActualArgs $linuxNative -Sequence @('--extra-cflags', '-D_GNU_SOURCE')
 Assert-ContainsSequence -Name 'Linux native adds pthread driver flag' -ActualArgs $linuxNative -Sequence @('--extra-cflags', '-pthread')
+Assert-ContainsSequence -Name 'Linux native statically links bundled musl runtime' -ActualArgs $linuxNative -Sequence @('--extra-cflags', '-static')
 Assert-NotContainsSequence -Name 'Linux native does not add libc as an explicit library' -ActualArgs $linuxNative -Sequence @('--extra-lib', 'c')
 
 $linuxC = @(Add-OscaWebPlatformLinkArgs -InputArgs @('input.osc') -Config (New-TestConfig -Backend c) -Platform linux)

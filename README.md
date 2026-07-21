@@ -84,7 +84,7 @@ Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern 
 | Platform | Default | Runtime | Notes |
 | --- | --- | --- | --- |
 | Windows x86-64 | `native` | hosted libc (`--libc`) | Links QuickJS, WinHTTP, Winsock, gzip bridge, and miniz. Release builds pass the Windows GUI subsystem flags. |
-| Linux x86-64 | `native` | hosted libc (`--libc`) | Adds `-D_GNU_SOURCE` and `-pthread` for bundled QuickJS, avoids the known QuickJS/freestanding crash path, and links gzip bridge + miniz through the native backend. |
+| Linux x86-64 | `native` | hosted libc (`--libc`) | Adds `-D_GNU_SOURCE` and `-pthread` for bundled QuickJS, `-static` so release/test binaries do not depend on a host musl loader, avoids the known QuickJS/freestanding crash path, and links gzip bridge + miniz through the native backend. |
 | macOS x86-64 | `c` | C backend | Native backend is not supported on macOS, so macOS intentionally stays on the C backend. |
 
 If your installed `oscan` predates `--backend`, `build.ps1` falls back to the legacy C backend for `-Backend auto`/`-Backend c`. Explicit `-Backend native` requires a newer compiler.

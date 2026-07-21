@@ -171,6 +171,7 @@ function Add-OscaWebPlatformLinkArgs {
     } elseif ($Platform -eq 'linux' -and $Config.Backend -eq 'native') {
         $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-D_GNU_SOURCE'
         $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-pthread'
+        $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-static'
     } elseif ($Platform -eq 'linux' -and $Config.Backend -eq 'c') {
         $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-Wl,--allow-multiple-definition'
         $out = Add-OscaWebExtraLibArg -InputArgs $out -Config $Config -Library 'c'
