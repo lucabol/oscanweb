@@ -74,7 +74,7 @@ Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern 
 
 ## Prerequisites
 
-- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support). Native Windows/Linux builds require Oscan `v0.0.35` or newer with `--backend c|native`, `--native-target`, `--extra-obj`, `--extra-lib`, and native user-extern `str` parameter/return shims.
+- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support). Native Windows/Linux builds require Oscan `v0.0.36` or newer with `--backend c|native`, `--native-target`, `--extra-obj`, `--extra-lib`, `--allow-elevated-native-link`, and native user-extern `str` parameter/return shims.
 - **PowerShell** — for the build script
 
 ## Build backends
@@ -99,6 +99,8 @@ If your installed `oscan` predates `--backend`, `build.ps1` falls back to the le
 # Native build for an explicit target tag
 .\build.ps1 -Backend native -NativeTarget host
 ```
+
+Trusted Windows CI/release jobs pass `-AllowElevatedNativeLink`, which forwards Oscan's explicit `--allow-elevated-native-link` opt-in for GitHub-hosted runners that execute with an elevated token. Local builds do not pass this switch by default, so Oscan's elevated native-link protection stays visible and enforced for normal users; the switch is rejected for the C backend.
 
 ## Quick Start
 

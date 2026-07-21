@@ -65,12 +65,19 @@ function New-TestConfig {
         NativeTarget     = 'host'
         SupportsBackend  = $true
         SupportsExtraLib = $SupportsExtraLib
+        AllowElevatedNativeLink = $false
         UseHostedLibc    = $Backend -eq 'native'
     }
 }
 
 $nativeBackend = Add-OscaWebBackendArgs -InputArgs @('input.osc') -Config (New-TestConfig -Backend native)
 Assert-ContainsSequence -Name 'Native backend passes hosted native flags' -ActualArgs $nativeBackend -Sequence @('--backend', 'native', '--native-target', 'host', '--libc')
+Assert-NotContainsSequence -Name 'Native backend does not allow elevated link by default' -ActualArgs $nativeBackend -Sequence @('--allow-elevated-native-link')
+
+$trustedNativeConfig = New-TestConfig -Backend native
+$trustedNativeConfig.AllowElevatedNativeLink = $true
+$trustedNative = Add-OscaWebBackendArgs -InputArgs @('input.osc') -Config $trustedNativeConfig
+Assert-ContainsSequence -Name 'Native backend adds explicit elevated link opt-in when requested' -ActualArgs $trustedNative -Sequence @('--allow-elevated-native-link')
 
 $linuxNative = @(Add-OscaWebPlatformLinkArgs -InputArgs @('input.osc') -Config (New-TestConfig -Backend native) -Platform linux)
 Assert-ContainsSequence -Name 'Linux native adds GNU feature macro' -ActualArgs $linuxNative -Sequence @('--extra-cflags', '-D_GNU_SOURCE')
