@@ -23,14 +23,17 @@ jobs:
         include:
           - os: windows-latest
             name: windows-x86_64
+            backend: native
             oscan_archive: oscan-v{OSCAN_VER}-windows-x86_64-full.zip
             oscan_bin: oscan.exe
           - os: ubuntu-latest
             name: linux-x86_64
+            backend: native
             oscan_archive: oscan-v{OSCAN_VER}-linux-x86_64-full.tar.xz
             oscan_bin: oscan
           - os: macos-15
             name: macos-x86_64
+            backend: c
             oscan_archive: oscan-v{OSCAN_VER}-macos-x86_64.tar.gz
             oscan_bin: oscan
     runs-on: ${{ matrix.os }}
@@ -82,8 +85,8 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: ./build.ps1 -V
+        run: ./build.ps1 -Backend ${{ matrix.backend }} -V
 
       - name: Tests
         shell: pwsh
-        run: ./build.ps1 -Test -V
+        run: ./build.ps1 -Backend ${{ matrix.backend }} -Test -V

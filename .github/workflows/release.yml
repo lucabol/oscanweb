@@ -22,16 +22,19 @@ jobs:
         include:
           - os: windows-latest
             name: windows-x86_64
+            backend: native
             oscan_archive: oscan-v{OSCAN_VER}-windows-x86_64-full.zip
             oscan_bin: oscan.exe
             output: oscanweb-windows-x86_64.exe
           - os: ubuntu-latest
             name: linux-x86_64
+            backend: native
             oscan_archive: oscan-v{OSCAN_VER}-linux-x86_64-full.tar.xz
             oscan_bin: oscan
             output: oscanweb-linux-x86_64
           - os: macos-15
             name: macos-x86_64
+            backend: c
             oscan_archive: oscan-v{OSCAN_VER}-macos-x86_64.tar.gz
             oscan_bin: oscan
             output: oscanweb-macos-x86_64
@@ -94,35 +97,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build browser
-        shell: bash
-        run: |
-          mkdir -p build
-          EXTRA=(--extra-c js_bridge.c --extra-c libs/quickjs/quickjs.c --extra-cflags -I.)
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            EXTRA+=(--extra-cflags -lwinhttp)
-            # Build as a GUI app so Windows doesn't pop a console window
-            # when launching the browser from Explorer. Also override the
-            # entry point: --subsystem=windows otherwise makes ld.lld look
-            # for WinMainCRTStartup, which Oscan's freestanding runtime
-            # does not provide (it uses mainCRTStartup).
-            EXTRA+=(--extra-cflags "-Wl,--subsystem,windows")
-            EXTRA+=(--extra-cflags "-Wl,--entry,mainCRTStartup")
-          fi
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            # Oscan's freestanding Linux toolchain (musl) doesn't auto-link
-            # libc, but js_bridge.c and libs/quickjs/quickjs.c need it.
-            # Allow duplicate definitions because Oscan's runtime already
-            # provides a handful of libc symbols (e.g. __errno_location)
-            # that would otherwise conflict with musl's libc.a.
-            EXTRA+=(--extra-cflags -Wl,--allow-multiple-definition)
-            EXTRA+=(--extra-cflags -lc)
-          fi
-          oscan browser.osc -o "build/${{ matrix.output }}" "${EXTRA[@]}"
-          ls -la "build/${{ matrix.output }}"
+        shell: pwsh
+        run: ./build.ps1 -Backend ${{ matrix.backend }} -Output "build/${{ matrix.output }}" -WindowsGui -V
 
       - name: Run tests
         shell: pwsh
-        run: ./build.ps1 -Test -V
+        run: ./build.ps1 -Backend ${{ matrix.backend }} -Test -V
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
