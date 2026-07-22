@@ -4,6 +4,7 @@
 
 extern {
     fn! vlog_enable(path: str);
+    fn! vlog_startup_error(msg: str);
     fn! vlog_msg(tag: str, msg: str);
     fn! vlog_int(tag: str, value: i32);
     fn! vlog_is_enabled() -> i32;
