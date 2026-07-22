@@ -29,23 +29,8 @@ function Get-OscaWebOscanCapabilities {
 
 function Get-OscaWebDefaultBackend {
     $platform = Get-OscaWebPlatform
-    if ($platform -eq 'linux') { return 'native' }
+    if ($platform -eq 'windows' -or $platform -eq 'linux') { return 'native' }
     return 'c'
-}
-
-function Resolve-OscaWebBuildBackend {
-    param(
-        [ValidateSet('auto', 'native', 'c')]
-        [string]$Backend = 'auto',
-        [ValidateSet('windows', 'linux', 'macos', 'other')]
-        [string]$Platform = (Get-OscaWebPlatform),
-        [switch]$WindowsGui
-    )
-
-    if ($Platform -eq 'windows' -and $WindowsGui -and $Backend -eq 'native') {
-        return 'c'
-    }
-    return $Backend
 }
 
 function Get-OscaWebBuildConfig {
