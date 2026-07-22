@@ -76,19 +76,12 @@ Assert-NotContainsSequence -Name 'Native backend does not allow elevated link by
 
 $defaultBackend = Get-OscaWebDefaultBackend
 if (Test-OscaWebWindows) {
-    Assert-Equal 'Windows defaults to C backend until native canvas is supported' 'c' $defaultBackend
+    Assert-Equal 'Windows defaults to native backend' 'native' $defaultBackend
 } elseif (Test-OscaWebLinux) {
     Assert-Equal 'Linux defaults to native backend' 'native' $defaultBackend
 } else {
     Assert-Equal 'macOS/other defaults to C backend' 'c' $defaultBackend
 }
-
-$resolvedWindowsGui = Resolve-OscaWebBuildBackend -Backend native -Platform windows -WindowsGui
-Assert-Equal 'Windows GUI native request resolves to C backend until native canvas is supported' 'c' $resolvedWindowsGui
-$resolvedWindowsConsole = Resolve-OscaWebBuildBackend -Backend native -Platform windows
-Assert-Equal 'Windows console native request remains native' 'native' $resolvedWindowsConsole
-$resolvedLinuxGui = Resolve-OscaWebBuildBackend -Backend native -Platform linux -WindowsGui
-Assert-Equal 'Linux GUI native request remains native' 'native' $resolvedLinuxGui
 
 $trustedNativeConfig = New-TestConfig -Backend native
 $trustedNativeConfig.AllowElevatedNativeLink = $true
