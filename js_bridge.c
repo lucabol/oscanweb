@@ -976,9 +976,8 @@ void js_bridge_clear_dom_dirty(void) {
  * The browser is a GUI subsystem app on Windows, so stdout is
  * not attached to any terminal.  When the user passes --verbose
  * we append diagnostic lines to browser.log (cwd) with a
- * millisecond-precision wall-clock timestamp plus a monotonic
- * delta so we can see where time is being spent (e.g. TLS
- * handshake, recv loop, parse, render).
+ * millisecond wall-clock timestamp so we can see where time is
+ * being spent (e.g. TLS handshake, recv loop, parse, render).
  */
 
 static FILE *g_log_fp = NULL;
@@ -997,11 +996,20 @@ static const char *oscanweb_default_log_path(char *buf, size_t buf_len) {
 }
 
 static long long vlog_now_ms(void) {
-    struct timespec ts;
+#ifdef _WIN32
+    FILETIME ft;
+    ULARGE_INTEGER uli;
+    GetSystemTimeAsFileTime(&ft);
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+    return (long long)((uli.QuadPart - 116444736000000000ULL) / 10000ULL);
+#else
+    struct timespec ts = {0, 0};
     if (timespec_get(&ts, TIME_UTC)) {
         return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
     }
-    return (long long)(clock() * 1000LL / CLOCKS_PER_SEC);
+    return 0;
+#endif
 }
 
 void vlog_enable(osc_str path) {

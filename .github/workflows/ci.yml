@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  OSCAN_VERSION: 0.0.36
+  OSCAN_VERSION: 0.0.37
 
 concurrency:
   group: ci-${{ github.ref }}

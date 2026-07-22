@@ -74,7 +74,7 @@ Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern 
 
 ## Prerequisites
 
-- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support). Native Windows/Linux builds require Oscan `v0.0.36` or newer with `--backend c|native`, `--native-target`, `--extra-obj`, `--extra-lib`, `--allow-elevated-native-link`, and native user-extern `str` parameter/return shims.
+- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support). Native Windows/Linux builds require Oscan `v0.0.37` or newer with `--backend c|native`, `--native-target`, `--extra-obj`, `--extra-lib`, `--allow-elevated-native-link`, native user-extern `str` parameter/return shims, and native hosted Windows canvas/gfx/clipboard/img/svg/tt runtime support.
 - **PowerShell** — for the build script
 
 ## Build backends
@@ -83,7 +83,7 @@ Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern 
 
 | Platform | Default | Runtime | Notes |
 | --- | --- | --- | --- |
-| Windows x86-64 | `native` | hosted libc (`--libc`) | Links QuickJS, WinHTTP, Winsock, gzip bridge, and miniz. Release builds pass the Windows GUI subsystem flags. |
+| Windows x86-64 | `native` | hosted libc (`--libc`) | Links QuickJS, WinHTTP, Winsock, gzip bridge, and miniz. Release builds pass the Windows GUI subsystem flag. |
 | Linux x86-64 | `native` | hosted libc (`--libc`) | Adds `-D_GNU_SOURCE` for bundled QuickJS and `-static` so release/test binaries do not depend on a host musl loader, avoids the known QuickJS/freestanding crash path, and links gzip bridge + miniz through the native backend. |
 | macOS x86-64 | `c` | C backend | Native backend is not supported on macOS, so macOS intentionally stays on the C backend. |
 

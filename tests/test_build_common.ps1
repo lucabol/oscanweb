@@ -102,7 +102,7 @@ $windowsNative = @(Add-OscaWebPlatformLinkArgs -InputArgs @('input.osc') -Config
 Assert-ContainsSequence -Name 'Windows uses extra-lib for WinHTTP when supported' -ActualArgs $windowsNative -Sequence @('--extra-lib', 'winhttp')
 Assert-ContainsSequence -Name 'Windows uses extra-lib for Winsock when supported' -ActualArgs $windowsNative -Sequence @('--extra-lib', 'ws2_32')
 Assert-ContainsSequence -Name 'Windows GUI keeps subsystem driver flag' -ActualArgs $windowsNative -Sequence @('--extra-cflags', '-Wl,--subsystem,windows')
-Assert-ContainsSequence -Name 'Windows GUI keeps mainCRTStartup driver flag' -ActualArgs $windowsNative -Sequence @('--extra-cflags', '-Wl,--entry,mainCRTStartup')
+Assert-NotContainsSequence -Name 'Windows GUI does not override CRT entrypoint' -ActualArgs $windowsNative -Sequence @('--extra-cflags', '-Wl,--entry,mainCRTStartup')
 
 $windowsLegacy = @(Add-OscaWebPlatformLinkArgs -InputArgs @('input.osc') -Config (New-TestConfig -Backend native -SupportsExtraLib $false) -Platform windows)
 Assert-ContainsSequence -Name 'Windows falls back to extra-cflags library syntax for old oscan' -ActualArgs $windowsLegacy -Sequence @('--extra-cflags', '-lwinhttp')
