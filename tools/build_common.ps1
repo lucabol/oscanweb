@@ -166,7 +166,6 @@ function Add-OscaWebPlatformLinkArgs {
         $out = Add-OscaWebExtraLibArg -InputArgs $out -Config $Config -Library 'ws2_32'
         if ($WindowsGui) {
             $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-Wl,--subsystem,windows'
-            $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-Wl,--entry,mainCRTStartup'
         }
     } elseif ($Platform -eq 'linux' -and $Config.Backend -eq 'native') {
         $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-D_GNU_SOURCE'
