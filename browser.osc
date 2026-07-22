@@ -2014,10 +2014,31 @@ fn! browser_exec_scripts(ctx: handle, nodes: [HtmlNode], idx: i32,
 // ─── Main ────────────────────────────────────────────────
 
 fn! main() {
+    // Parse startup flags before canvas_open so GUI-subsystem failures can
+    // still create diagnostics even though stdout/stderr are hidden.
+    let mut verbose: bool = false;
+    let mut url_arg: str = "";
+    for ai in 1..arg_count() {
+        let a: str = arg_get(ai);
+        if str_eq(a, "--verbose") or str_eq(a, "-v") {
+            verbose = true;
+        } else if str_len(url_arg) == 0 {
+            url_arg = a;
+        };
+    };
+    if verbose {
+        vlog_enable("");
+        vlog_msg("startup", "verbose logging enabled");
+    };
+
     let co: Result<str, str> = canvas_open(1024, 768, "OscaWeb Browser");
     match co {
         Result::Ok(_s) => {},
-        Result::Err(e) => { println("Failed to open window: {e}"); exit(1); },
+        Result::Err(e) => {
+            vlog_startup_error("Failed to open window: {e}");
+            println("Failed to open window: {e}");
+            exit(1);
+        },
     };
 
     // Device pixel scale for HiDPI.  canvas_open auto-scales by system DPI
@@ -2285,20 +2306,6 @@ fn! main() {
     let mut prev_my: i32 = -1;
 
     // Navigate to arg if provided (skipping --verbose flag)
-    let mut verbose: bool = false;
-    let mut url_arg: str = "";
-    for ai in 1..arg_count() {
-        let a: str = arg_get(ai);
-        if str_eq(a, "--verbose") or str_eq(a, "-v") {
-            verbose = true;
-        } else if str_len(url_arg) == 0 {
-            url_arg = a;
-        };
-    };
-    if verbose {
-        vlog_enable("");
-        vlog_msg("startup", "verbose logging enabled");
-    };
     if str_len(url_arg) > 0 {
         nav_url = url_arg;
         let init_chars: [i32] = str_to_chars(nav_url);

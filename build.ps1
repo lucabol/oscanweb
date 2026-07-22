@@ -55,7 +55,12 @@ if (-not (Get-Command 'oscan' -ErrorAction SilentlyContinue)) {
     Write-Fail 'oscan not found in PATH. Install from https://github.com/lucabol/Oscan'
 }
 
-$BuildConfig = Get-OscaWebBuildConfig -Backend $Backend -NativeTarget $NativeTarget -AllowElevatedNativeLink:$AllowElevatedNativeLink
+$EffectiveBackend = Resolve-OscaWebBuildBackend -Backend $Backend -WindowsGui:$WindowsGui
+if ($EffectiveBackend -ne $Backend) {
+    Write-Warning 'Windows native GUI builds are disabled because Oscan v0.0.36 native hosted runtime does not support canvas_open; using the C backend for this GUI artifact.'
+}
+$EffectiveAllowElevatedNativeLink = $AllowElevatedNativeLink -and $EffectiveBackend -eq 'native'
+$BuildConfig = Get-OscaWebBuildConfig -Backend $EffectiveBackend -NativeTarget $NativeTarget -AllowElevatedNativeLink:$EffectiveAllowElevatedNativeLink
 Write-Step "Using $($BuildConfig.Backend) backend"
 if ($BuildConfig.Backend -eq 'native') {
     Write-Host "   Native target: $($BuildConfig.NativeTarget), runtime: hosted libc" -ForegroundColor DarkGray

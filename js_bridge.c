@@ -984,6 +984,18 @@ void js_bridge_clear_dom_dirty(void) {
 static FILE *g_log_fp = NULL;
 static int   g_log_enabled = 0;
 
+static const char *oscanweb_default_log_path(char *buf, size_t buf_len) {
+#ifdef _WIN32
+    const char *tmp = getenv("TEMP");
+    if (!tmp) tmp = getenv("TMP");
+    if (!tmp) tmp = "C:\\Windows\\Temp";
+    snprintf(buf, buf_len, "%s\\oscanweb.log", tmp);
+#else
+    snprintf(buf, buf_len, "/tmp/oscanweb.log");
+#endif
+    return buf;
+}
+
 static long long vlog_now_ms(void) {
     struct timespec ts;
     if (timespec_get(&ts, TIME_UTC)) {
@@ -1001,15 +1013,7 @@ void vlog_enable(osc_str path) {
     char auto_path[1024];
     const char *p = NULL;
     if (path.len == 0) {
-#ifdef _WIN32
-        const char *tmp = getenv("TEMP");
-        if (!tmp) tmp = getenv("TMP");
-        if (!tmp) tmp = "C:\\Windows\\Temp";
-        snprintf(auto_path, sizeof(auto_path), "%s\\oscanweb.log", tmp);
-#else
-        snprintf(auto_path, sizeof(auto_path), "/tmp/oscanweb.log");
-#endif
-        p = auto_path;
+        p = oscanweb_default_log_path(auto_path, sizeof(auto_path));
     } else {
         char *cp = osc_str_to_cstr_alloc(path);
         if (!cp) return;
@@ -1027,6 +1031,22 @@ opened:
         fprintf(stderr, "[oscanweb] verbose log: %s\n", p ? p : "(caller path)");
         fflush(stderr);
     }
+}
+
+void vlog_startup_error(osc_str msg) {
+    char auto_path[1024];
+    const char *p = oscanweb_default_log_path(auto_path, sizeof(auto_path));
+    char *m = osc_str_to_cstr_alloc(msg);
+    FILE *fp = fopen(p, "w");
+    if (fp) {
+        fprintf(fp, "# OscaWeb startup diagnostic\n");
+        fprintf(fp, "ERROR startup %s\n", m ? m : "startup failed");
+        fclose(fp);
+    }
+    fprintf(stderr, "[oscanweb] startup error: %s\n", m ? m : "startup failed");
+    fprintf(stderr, "[oscanweb] diagnostic log: %s\n", p);
+    fflush(stderr);
+    free(m);
 }
 
 void vlog_msg(osc_str tag, osc_str msg) {
