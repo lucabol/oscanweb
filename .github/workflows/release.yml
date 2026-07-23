@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 env:
-  OSCAN_VERSION: 0.0.36
+  OSCAN_VERSION: 0.0.37
 
 jobs:
   build:

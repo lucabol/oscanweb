@@ -61,7 +61,7 @@ function Get-OscaWebBuildConfig {
         throw '-AllowElevatedNativeLink is only valid for native backend builds.'
     }
     if ($AllowElevatedNativeLink -and -not $capabilities.SupportsAllowElevatedNativeLink) {
-        throw 'Installed oscan does not expose --allow-elevated-native-link. Install Oscan v0.0.36 or newer, then rerun.'
+        throw 'Installed oscan does not expose --allow-elevated-native-link. Install Oscan v0.0.37 or newer, then rerun.'
     }
 
     [pscustomobject]@{
@@ -166,7 +166,6 @@ function Add-OscaWebPlatformLinkArgs {
         $out = Add-OscaWebExtraLibArg -InputArgs $out -Config $Config -Library 'ws2_32'
         if ($WindowsGui) {
             $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-Wl,--subsystem,windows'
-            $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-Wl,--entry,mainCRTStartup'
         }
     } elseif ($Platform -eq 'linux' -and $Config.Backend -eq 'native') {
         $out = Add-OscaWebExtraCFlagArg -InputArgs $out -Flag '-D_GNU_SOURCE'
