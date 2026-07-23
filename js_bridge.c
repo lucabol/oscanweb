@@ -17,6 +17,15 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <winhttp.h>
+#else
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
 #endif
 
 /* ── osc_str helpers ──────────────────────────────────────── */
@@ -1103,8 +1112,15 @@ int32_t net_set_recv_timeout(int32_t sock, int32_t ms) {
                         (const char *)&tv, sizeof(tv));
     return (int32_t)(r1 | r2);
 #else
-    (void)sock; (void)ms;
-    return -1;
+    if (ms < 0) return -1;
+    struct timeval tv;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    int r1 = setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                        (const void *)&tv, sizeof(tv));
+    int r2 = setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+                        (const void *)&tv, sizeof(tv));
+    return (int32_t)(r1 | r2);
 #endif
 }
 
@@ -1202,8 +1218,51 @@ int32_t net_connect_timeout_ipv4(int32_t sock, int32_t ip_be, int32_t port, int3
     ioctlsocket(s, FIONBIO, &nb);
     return rc;
 #else
-    (void)sock; (void)ip_be; (void)port; (void)ms;
-    return -1;
+    if (ms < 0) return -1;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    addr.sin_addr.s_addr = (in_addr_t)ip_be; /* already network byte order */
+
+    int old_flags = fcntl(sock, F_GETFL, 0);
+    if (old_flags < 0) return -1;
+    if (fcntl(sock, F_SETFL, old_flags | O_NONBLOCK) != 0) return -1;
+
+    int rc = 0;
+    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        int err = errno;
+        if (err != EINPROGRESS) {
+            rc = -2;
+        } else {
+            struct pollfd pfd;
+            memset(&pfd, 0, sizeof(pfd));
+            pfd.fd = sock;
+            pfd.events = POLLOUT;
+
+            int pr;
+            do {
+                pr = poll(&pfd, 1, ms);
+            } while (pr < 0 && errno == EINTR);
+
+            if (pr <= 0) {
+                rc = -3;
+            } else {
+                int so_error = 0;
+                socklen_t opt_len = (socklen_t)sizeof(so_error);
+                if (getsockopt(sock, SOL_SOCKET, SO_ERROR,
+                               (void *)&so_error, &opt_len) != 0) {
+                    rc = -4;
+                } else if (so_error != 0) {
+                    rc = -5;
+                }
+            }
+        }
+    }
+
+    if (fcntl(sock, F_SETFL, old_flags) != 0) return -6;
+    return rc;
 #endif
 }
 
@@ -1246,8 +1305,23 @@ int32_t net_resolve_ipv4(osc_str host) {
     freeaddrinfo(res);
     return ip;
 #else
-    (void)host;
-    return 0;
+    char *h = osc_str_to_cstr_alloc(host);
+    if (!h) return 0;
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    int r = getaddrinfo(h, NULL, &hints, &res);
+    free(h);
+    if (r != 0 || !res) return 0;
+    if (!res->ai_addr || res->ai_addrlen < (socklen_t)sizeof(struct sockaddr_in)) {
+        freeaddrinfo(res);
+        return 0;
+    }
+    struct sockaddr_in *sa = (struct sockaddr_in *)res->ai_addr;
+    int32_t ip = (int32_t)sa->sin_addr.s_addr;
+    freeaddrinfo(res);
+    return ip;
 #endif
 }
 

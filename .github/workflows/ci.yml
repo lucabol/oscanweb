@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  OSCAN_VERSION: 0.0.37
+  OSCAN_VERSION: 0.0.39
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -49,6 +49,11 @@ jobs:
       - name: Build script argument tests
         shell: pwsh
         run: ./tests/test_build_common.ps1
+
+      - name: POSIX net bridge tests
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash ./tests/test_posix_net_bridge.sh
 
       - name: Install Oscan
         shell: bash

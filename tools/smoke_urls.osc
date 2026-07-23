@@ -23,6 +23,34 @@ struct UrlCase {
     must_contain: str,   // case-insensitive substring of body text; "" to skip
 }
 
+fn! fetch_follow_redirects(start_url: str) -> HttpResponse {
+    let mut current: str = start_url;
+    let mut redirects: i32 = 0;
+    let mut resp: HttpResponse = http_make_error("not fetched");
+    let mut done: bool = false;
+    while not done and redirects < 5 {
+        let u: Url = url_parse(current);
+        let use_tls: bool = str_eq(u.scheme, "https");
+        resp = http_get(u.host, u.port, u.path, use_tls, "");
+        if str_len(resp.error) > 0 {
+            done = true;
+        } else if str_len(resp.redirect_url) > 0 and
+                  (resp.status_code == 301 or resp.status_code == 302 or
+                   resp.status_code == 303 or resp.status_code == 307 or
+                   resp.status_code == 308) {
+            current = url_resolve_full(current, resp.redirect_url);
+            redirects = redirects + 1;
+            println("  redirect -> {current}");
+        } else {
+            done = true;
+        };
+    };
+    if redirects >= 5 and str_len(resp.redirect_url) > 0 {
+        return http_make_error("too many redirects");
+    };
+    resp
+}
+
 fn! count_links(nodes: [HtmlNode]) -> i32 {
     let mut n: i32 = 0;
     let mut i: i32 = 0;
@@ -40,9 +68,7 @@ fn! count_links(nodes: [HtmlNode]) -> i32 {
 
 fn! check_one(c: UrlCase) -> bool {
     println("---- {c.url}");
-    let u: Url = url_parse(c.url);
-    let use_tls: bool = str_eq(u.scheme, "https");
-    let resp: HttpResponse = http_get(u.host, u.port, u.path, use_tls, "");
+    let resp: HttpResponse = fetch_follow_redirects(c.url);
 
     if str_len(resp.error) > 0 {
         println("  FAIL: transport error: {resp.error}");
@@ -101,6 +127,8 @@ fn! main() {
                   min_links: 200, must_contain: "" },
         UrlCase { url: "https://lwn.net/",
                   min_links: 20, must_contain: "" },
+        UrlCase { url: "https://www.lucabol.com/posts/2026-03-27-notes-the-metamorphosis-franz-kafka",
+                  min_links: 4, must_contain: "Gregor" },
     ];
 
     let mut total: i32 = 0;

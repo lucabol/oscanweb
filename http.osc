@@ -70,6 +70,39 @@ fn! http_make_error(msg: str) -> HttpResponse {
     }
 }
 
+fn! http_host_header(host: str, port: i32, use_tls: bool) -> str {
+    let is_default_port: bool =
+        (use_tls and port == 443) or
+        (not use_tls and port == 80);
+    if is_default_port { host } else { "{host}:{port}" }
+}
+
+fn! http_build_get_request(host: str, port: i32, path: str, use_tls: bool,
+                           extra_headers: str) -> str {
+    let host_header: str = http_host_header(host, port, use_tls);
+    "GET {path} HTTP/1.1\r\nHost: {host_header}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip\r\n{extra_headers}\r\n"
+}
+
+fn! http_build_post_request(host: str, port: i32, path: str, use_tls: bool,
+                            body: str, content_type: str, extra_headers: str,
+                            page_url: str) -> str {
+    let body_len: i32 = str_len(body);
+    let host_header: str = http_host_header(host, port, use_tls);
+    let mut origin_hdr: str = "";
+    let mut referer_hdr: str = "";
+    if str_len(page_url) > 0 {
+        let pu: Url = url_parse(page_url);
+        if str_len(pu.host) > 0 and str_len(pu.scheme) > 0 {
+            let default_port: bool = (str_eq(pu.scheme, "https") and pu.port == 443) or
+                                     (str_eq(pu.scheme, "http") and pu.port == 80);
+            let port_part: str = if default_port { "" } else { ":{pu.port}" };
+            origin_hdr = "Origin: {pu.scheme}://{pu.host}{port_part}\r\n";
+            referer_hdr = "Referer: {page_url}\r\n";
+        };
+    };
+    "POST {path} HTTP/1.1\r\nHost: {host_header}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{origin_hdr}{referer_hdr}{extra_headers}\r\n{body}"
+}
+
 // Collect every `Set-Cookie:` header value (without the key prefix)
 // from a CRLF-separated header block. Case-insensitive on the key.
 // Kept separate from http_parse_headers because a map collapses the
@@ -169,7 +202,7 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     let mut handle: i32 = 0;
     match conn_result {
         Result::Ok(h) => { handle = h; },
-        Result::Err(e) => { return http_make_error("TLS connection failed: {e}"); },
+        Result::Err(e) => { return http_make_error("TLS connection to {host}:{port} failed: {e}"); },
     };
     defer tls_close(handle);
     vlog_msg("tls_connected", "");
@@ -177,7 +210,7 @@ fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
     let send_result: Result<i32, str> = tls_send(handle, request);
     match send_result {
         Result::Ok(_n) => {},
-        Result::Err(e) => { return http_make_error("TLS send failed: {e}"); },
+        Result::Err(e) => { return http_make_error("TLS send to {host}:{port} failed: {e}"); },
     };
     vlog_msg("tls_sent", "");
 
@@ -326,7 +359,7 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
     let mut sock: i32 = 0;
     match sock_result {
         Result::Ok(s) => { sock = s; },
-        Result::Err(e) => { return http_make_error("Socket creation failed: {e}"); },
+        Result::Err(e) => { return http_make_error("Socket creation for {host}:{port} failed: {e}"); },
     };
     defer socket_close(sock);
 
@@ -340,14 +373,14 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
     let conn_result: Result<str, str> = socket_connect(sock, host, port);
     match conn_result {
         Result::Ok(_s) => {},
-        Result::Err(e) => { return http_make_error("Connection failed: {e}"); },
+        Result::Err(e) => { return http_make_error("Connection to {host}:{port} failed: {e}"); },
     };
     vlog_msg("plain connected", "");
 
     let send_result: Result<i32, str> = socket_send(sock, request);
     match send_result {
         Result::Ok(_n) => {},
-        Result::Err(e) => { return http_make_error("Send failed: {e}"); },
+        Result::Err(e) => { return http_make_error("Send to {host}:{port} failed: {e}"); },
     };
     vlog_msg("plain sent", "");
 
@@ -362,7 +395,7 @@ fn! http_get_plain(host: str, port: i32, request: str, timeout_ms: i32) -> HttpR
             // got any data treat it as an error so the caller can fall
             // back to TLS.
             if not got_any {
-                return http_make_error("recv timeout or empty response");
+                return http_make_error("Receive from {host}:{port} timed out or returned empty response");
             };
             done = true;
         } else {
@@ -396,7 +429,7 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool, extra_headers: str)
     // HTTP/1.1 + Connection: close — we advertise 1.1 so servers unlock
     // chunked transfer-encoding and modern header behaviour, but we still
     // close the socket after one response (no keep-alive pipelining).
-    let request: str = "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip\r\n{extra_headers}\r\n";
+    let request: str = http_build_get_request(host, port, path, use_tls, extra_headers);
 
     let mut raw_response: str = "";
 
@@ -442,7 +475,7 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool, extra_headers: str)
     };
 
     if str_len(raw_response) == 0 {
-        return http_make_error("Empty response");
+        return http_make_error("Empty response from {host}:{port}");
     };
 
     http_parse_raw_response(raw_response)
@@ -583,24 +616,8 @@ fn! http_parse_raw_response(raw_response: str) -> HttpResponse {
 fn! http_post(host: str, port: i32, path: str, use_tls: bool,
               body: str, content_type: str, extra_headers: str,
               page_url: str) -> HttpResponse {
-    let body_len: i32 = str_len(body);
-    let mut origin_hdr: str = "";
-    let mut referer_hdr: str = "";
-    if str_len(page_url) > 0 {
-        let pu: Url = url_parse(page_url);
-        if str_len(pu.host) > 0 and str_len(pu.scheme) > 0 {
-            // Origin is scheme + host (+ non-default port). No path.
-            let default_port: bool = (str_eq(pu.scheme, "https") and pu.port == 443) or
-                                     (str_eq(pu.scheme, "http") and pu.port == 80);
-            let port_part: str = if default_port { "" } else { ":{pu.port}" };
-            origin_hdr = "Origin: {pu.scheme}://{pu.host}{port_part}\r\n";
-            // Referer can include the path (but never the fragment, which
-            // url_parse already stripped). Skip when the page URL is
-            // suspicious (no host).
-            referer_hdr = "Referer: {page_url}\r\n";
-        };
-    };
-    let request: str = "POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscaWeb/0.1\r\nAccept: text/html,application/xhtml+xml,image/*,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n{origin_hdr}{referer_hdr}{extra_headers}\r\n{body}";
+    let request: str = http_build_post_request(host, port, path, use_tls,
+        body, content_type, extra_headers, page_url);
 
     let mut raw_response: str = "";
     if use_tls {
@@ -623,7 +640,7 @@ fn! http_post(host: str, port: i32, path: str, use_tls: bool,
     };
 
     if str_len(raw_response) == 0 {
-        return http_make_error("Empty response");
+        return http_make_error("Empty response from {host}:{port}");
     };
 
     http_parse_raw_response(raw_response)
