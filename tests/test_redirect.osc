@@ -88,4 +88,21 @@ fn! main() {
         make_resp("HTTP/1.1 302 Found",
                   "Content-Length: 0", ""));
     assert_eq_str(r8.redirect_url, "", "302 without Location yields empty redirect_url");
+
+    // Unknown encodings on redirects should not block the redirect chain.
+    let r9: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 302 Found",
+                  "Location: /compressed\r\nContent-Encoding: br",
+                  "ignored"));
+    assert_eq_str(r9.error, "", "302 unknown encoding does not error");
+    assert_eq_str(r9.redirect_url, "/compressed", "302 unknown encoding keeps Location");
+    assert_eq_str(r9.body, "", "302 unknown encoding drops unused body");
+
+    // Unknown encodings on renderable responses are surfaced as errors.
+    let r10: HttpResponse = http_parse_raw_response(
+        make_resp("HTTP/1.1 200 OK",
+                  "Content-Encoding: br",
+                  "compressed"));
+    assert_eq_str(r10.error, "Unsupported Content-Encoding: br (no brotli decoder)",
+                  "200 unknown encoding surfaces error");
 }

@@ -14,6 +14,18 @@ end-to-end. All can be run against a local Python server
 Wikipedia streams responses as `Transfer-Encoding: chunked` without
 `Content-Length`.
 
+## 1a. Native hosted HTTPS smoke
+
+```powershell
+.\tools\smoke.ps1 -Backend native
+```
+
+**Expect:** the public live-smoke URLs pass, including
+`https://www.lucabol.com/posts/2026-03-27-notes-the-metamorphosis-franz-kafka`.
+That URL should connect with SNI `www.lucabol.com`, send `Host:
+www.lucabol.com`, request the `/posts/...` path, receive a `Content-Length`
+response, and render text containing `Gregor`.
+
 ## 2. External `<script src>`
 
 Create `tests/scratch_script.html`:

@@ -61,7 +61,7 @@ function Get-OscaWebBuildConfig {
         throw '-AllowElevatedNativeLink is only valid for native backend builds.'
     }
     if ($AllowElevatedNativeLink -and -not $capabilities.SupportsAllowElevatedNativeLink) {
-        throw 'Installed oscan does not expose --allow-elevated-native-link. Install Oscan v0.0.37 or newer, then rerun.'
+        throw 'Installed oscan does not expose --allow-elevated-native-link. Install Oscan v0.0.39 or newer, then rerun.'
     }
 
     [pscustomobject]@{

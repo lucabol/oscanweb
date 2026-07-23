@@ -74,7 +74,7 @@ Switch to a TrueType font (`TT`) and bump the size (`16pt`) for a clean, modern 
 
 ## Prerequisites
 
-- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support). Native Windows/Linux builds require Oscan `v0.0.37` or newer with `--backend c|native`, `--native-target`, `--extra-obj`, `--extra-lib`, `--allow-elevated-native-link`, native user-extern `str` parameter/return shims, and native hosted Windows canvas/gfx/clipboard/img/svg/tt runtime support.
+- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required (includes TLS support). Native Windows/Linux builds require Oscan `v0.0.39` or newer with `--backend c|native`, `--native-target`, `--extra-obj`, `--extra-lib`, `--allow-elevated-native-link`, native user-extern `str` parameter/return shims, and native hosted Windows/Linux TLS plus Windows canvas/gfx/clipboard/img/svg/tt runtime support.
 - **PowerShell** — for the build script
 
 ## Build backends
@@ -382,7 +382,7 @@ supported CSS feature.
   do one request per socket, but servers that don't send a
   `Content-Length` and instead stream chunked responses now work)
 - **TLS built-in** — SChannel on Windows, BearSSL on Linux (zero external dependencies)
-- **Redirects** — automatic follow of 301/302/307/308 (up to 5 hops)
+- **Redirects** — automatic follow of 301/302/303/307/308 (up to 5 hops)
 - **Default ports** — 80 for HTTP, 443 for HTTPS
 - **Persistent HTTP cache** — text responses (HTML, CSS, JS, JSON, XML)
   survive browser restarts; saved to
@@ -433,9 +433,14 @@ Refresh the captured snapshots when sites change layout:
 .\tools\smoke.ps1
 ```
 
-Hits the public internet to verify the full HTTP→gzip→parse pipeline
-end-to-end. Flaky by design; not part of CI. Use after touching
-`http.osc`, `gzip_bridge.c`, or TLS-related code.
+Hits the public internet to verify HTTPS/TLS, SNI hostname handling,
+redirects, `Host` header construction, gzip/chunked/content-length body
+handling, and HTML parsing end-to-end, including the lucabol.com regression
+URL. Flaky by design; not part of CI. A self-signed local TLS fixture would
+require disabling certificate validation or changing host trust stores, so
+offline tests keep coverage to deterministic request construction and
+response parsing. Use after touching `http.osc`, `gzip_bridge.c`, or
+TLS-related code.
 
 ## Reader Mode, Bookmarks & Zoom
 

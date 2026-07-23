@@ -1,0 +1,89 @@
+// Tests for HTTP request construction. These are deterministic and avoid
+// the network; live TLS/runtime coverage lives in tools/smoke_urls.osc.
+
+use "../http.osc"
+
+fn! assert_true(cond: bool, test_name: str) {
+    if cond {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name}");
+    };
+}
+
+fn! assert_eq_str(actual: str, expected: str, test_name: str) {
+    if str_eq(actual, expected) {
+        println("PASS: {test_name}");
+    } else {
+        println("FAIL: {test_name} - expected '{expected}', got '{actual}'");
+    };
+}
+
+fn! assert_contains(haystack: str, needle: str, test_name: str) {
+    assert_true(str_contains(haystack, needle), test_name);
+}
+
+fn! assert_not_contains(haystack: str, needle: str, test_name: str) {
+    assert_true(not str_contains(haystack, needle), test_name);
+}
+
+fn! main() {
+    assert_eq_str(http_host_header("www.lucabol.com", 443, true),
+                  "www.lucabol.com",
+                  "default HTTPS Host omits port");
+    assert_eq_str(http_host_header("example.test", 8443, true),
+                  "example.test:8443",
+                  "non-default HTTPS Host includes port");
+    assert_eq_str(http_host_header("example.test", 80, false),
+                  "example.test",
+                  "default HTTP Host omits port");
+    assert_eq_str(http_host_header("example.test", 8080, false),
+                  "example.test:8080",
+                  "non-default HTTP Host includes port");
+
+    let supplied_path: str = "/posts/2026-03-27-notes-the-metamorphosis-franz-kafka";
+    let get_req: str = http_build_get_request(
+        "www.lucabol.com", 443, supplied_path, true, "Cookie: sid=abc\r\n");
+    assert_contains(get_req,
+                    "GET /posts/2026-03-27-notes-the-metamorphosis-franz-kafka HTTP/1.1\r\n",
+                    "GET uses origin-form request target");
+    assert_contains(get_req, "Host: www.lucabol.com\r\n",
+                    "GET sends Host header");
+    assert_not_contains(get_req, "Host: www.lucabol.com:443\r\n",
+                        "GET does not include default HTTPS port in Host");
+    assert_contains(get_req, "Connection: close\r\n",
+                    "GET asks server to close connection");
+    assert_contains(get_req, "Accept-Encoding: gzip\r\n",
+                    "GET advertises gzip only");
+    assert_contains(get_req, "Cookie: sid=abc\r\n",
+                    "GET preserves extra headers");
+    assert_true(str_ends_with(get_req, "\r\n\r\n"),
+                "GET terminates headers with blank line");
+    assert_not_contains(get_req, "https://www.lucabol.com",
+                        "GET request target does not include scheme or host");
+
+    let get_port_req: str = http_build_get_request(
+        "localhost", 9443, "/tls-fixture?chunked=1", true, "");
+    assert_contains(get_port_req, "Host: localhost:9443\r\n",
+                    "GET includes non-default TLS port in Host");
+    assert_not_contains(get_port_req, "Host: localhost:443\r\n",
+                        "GET does not confuse SNI host with Host port");
+
+    let post_req: str = http_build_post_request(
+        "example.test", 8443, "/submit", true,
+        "a=1&b=two", "application/x-www-form-urlencoded",
+        "Cookie: form=1\r\n",
+        "https://example.test:8443/form");
+    assert_contains(post_req, "POST /submit HTTP/1.1\r\n",
+                    "POST uses origin-form request target");
+    assert_contains(post_req, "Host: example.test:8443\r\n",
+                    "POST Host includes non-default HTTPS port");
+    assert_contains(post_req, "Origin: https://example.test:8443\r\n",
+                    "POST Origin includes non-default port");
+    assert_contains(post_req, "Referer: https://example.test:8443/form\r\n",
+                    "POST includes Referer");
+    assert_contains(post_req, "Content-Length: 9\r\n",
+                    "POST Content-Length matches body");
+    assert_true(str_ends_with(post_req, "\r\na=1&b=two"),
+                "POST appends body after header terminator");
+}
